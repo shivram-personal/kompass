@@ -827,6 +827,16 @@ export type WorkloadLogEventType =
   | 'end'
   | 'error'
 
+// Workload revision (for rollback)
+export interface WorkloadRevision {
+  number: number
+  createdAt: string
+  image: string
+  isCurrent: boolean
+  replicas: number
+  template?: string // Pod template spec as YAML (for revision diff)
+}
+
 // Workload log stream event data
 export interface WorkloadLogStreamEvent {
   event: WorkloadLogEventType

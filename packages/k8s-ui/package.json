@@ -27,14 +27,17 @@
   },
   "peerDependencies": {
     "clsx": ">=2.0.0",
+    "diff": ">=5.0.0",
     "lucide-react": ">=0.400.0",
     "react": ">=18.0.0",
     "react-dom": ">=18.0.0",
     "yaml": ">=2.0.0"
   },
   "devDependencies": {
+    "@types/diff": "^7.0.2",
     "@types/react-dom": "^19.2.3",
     "clsx": "^2.1.1",
+    "diff": "^8.0.3",
     "lucide-react": "^0.575.0",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
