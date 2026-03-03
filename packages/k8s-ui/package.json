@@ -12,11 +12,18 @@
     "./components/ui/*": "./src/components/ui/*.tsx",
     "./hooks/*": "./src/hooks/*.ts",
     "./resources": "./src/components/resources/index.ts",
+    "./logs": "./src/components/logs/index.ts",
+    "./timeline": "./src/components/timeline/index.ts",
     "./theme": "./src/theme/index.css"
   },
   "scripts": {
     "tsc": "tsc --noEmit",
     "format": "prettier --write \"src/**/*.{ts,tsx}\""
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "react-virtuoso": "^4.18.1",
+    "shiki": "^4.0.0"
   },
   "peerDependencies": {
     "clsx": ">=2.0.0",
