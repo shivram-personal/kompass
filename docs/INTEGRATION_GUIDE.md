@@ -86,7 +86,7 @@ Add your kinds to `buildNodeID` and `normalizeKind` maps.
 
 ### 4. Frontend: Group Name Mapping
 
-**File:** `web/src/api/apiResources.ts`
+**File:** `packages/k8s-ui/src/utils/api-resources.ts`
 
 Map API group to display group name:
 ```typescript
@@ -96,7 +96,7 @@ Map API group to display group name:
 
 ### 5. Frontend: Resource Utils
 
-**Create:** `web/src/components/resources/resource-utils-{integration}.ts`
+**Create:** `packages/k8s-ui/src/components/resources/resource-utils-{integration}.ts`
 
 Status extraction functions. Most CRDs use the standard `status.conditions` pattern:
 ```typescript
@@ -109,7 +109,7 @@ export function getMyResourceStatus(data: any): { text: string; color: string } 
 
 ### 6. Frontend: Table Columns
 
-**File:** `web/src/components/resources/ResourcesView.tsx` — `KNOWN_COLUMNS`
+**File:** `packages/k8s-ui/src/components/resources/ResourcesView.tsx` — `KNOWN_COLUMNS`
 
 Add column definitions. The key is the **lowercase plural** of the kind.
 
@@ -125,11 +125,11 @@ Also verify `normalizeKindToPlural()` handles your kind correctly (watch out for
 
 ### 7. Frontend: Cell Renderers
 
-**Create:** `web/src/components/resources/renderers/{integration}-cells.tsx`
+**Create:** `packages/k8s-ui/src/components/resources/renderers/{integration}-cells.tsx`
 
 Cell components that render rich table cells (status badges, links, etc.).
 
-**File:** `web/src/components/resources/ResourcesView.tsx` — `renderCellContent()`
+**File:** `packages/k8s-ui/src/components/resources/ResourcesView.tsx` — `renderCellContent()`
 
 Add cases for your kinds.
 - ** Collision:** Use `apiVersion` checks:
@@ -141,11 +141,11 @@ Add cases for your kinds.
 
 ### 8. Frontend: Detail Renderers
 
-**Create:** `web/src/components/resources/renderers/{ResourceName}Renderer.tsx`
+**Create:** `packages/k8s-ui/src/components/resources/renderers/{ResourceName}Renderer.tsx`
 
 Follow existing patterns: `AlertBanner` for problems, `Section` components, `PropertyList`, `ConditionsSection`.
 
-**File:** `web/src/components/resources/renderers/index.ts` — export new renderers
+**File:** `packages/k8s-ui/src/components/resources/renderers/index.ts` — export new renderers
 
 **File:** `web/src/components/resources/ResourceDetailDrawer.tsx`
 
@@ -190,12 +190,12 @@ Update these files to support new topology node kinds:
 |------|-------------|
 | `web/src/types.ts` | Kind to `CoreNodeKind` type union + `displayKind` map |
 | `web/src/App.tsx` | Kind to `ALL_NODE_KINDS` array |
-| `web/src/utils/resource-icons.ts` | Icon mapping |
-| `web/src/utils/badge-colors.ts` | Badge CSS class |
+| `packages/k8s-ui/src/utils/resource-icons.ts` | Icon mapping |
+| `packages/k8s-ui/src/utils/badge-colors.ts` | Badge CSS class |
 | `web/src/components/topology/TopologyFilterSidebar.tsx` | Filter sidebar entry |
 | `web/src/components/topology/K8sResourceNode.tsx` | Node dimensions |
 | `web/src/components/topology/layout.ts` | `kindPriority` entry |
-| `web/src/utils/resource-hierarchy.ts` | `appLabelEligibleKinds` (if groupable by app label) |
+| `packages/k8s-ui/src/utils/resource-hierarchy.ts` | `appLabelEligibleKinds` (if groupable by app label) |
 | `web/src/index.css` | `.topology-icon-{kind}` CSS class with color |
 
 ### 10. Documentation

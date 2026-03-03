@@ -102,6 +102,20 @@ radar/
 │   └── version/               # Version information
 ├── pkg/
 │   └── k8score/               # Shared K8s caching layer (informers, listers, transforms)
+├── packages/
+│   └── k8s-ui/                # Shared UI package (@skyhook/k8s-ui)
+│       └── src/
+│           ├── components/
+│           │   ├── resources/  # ResourcesView, resource-utils, renderers
+│           │   ├── shared/     # ResourceRendererDispatch, ResourceActionsBar, EditableYamlView
+│           │   ├── gitops/     # ArgoCD/FluxCD panels
+│           │   ├── workload/   # WorkloadView
+│           │   ├── timeline/   # Timeline shared components
+│           │   ├── logs/       # Log viewer core
+│           │   └── ui/         # Shared UI primitives (Toast, CodeViewer, etc.)
+│           ├── hooks/          # useKeyboardShortcuts, useRefreshAnimation
+│           ├── types/          # Shared TypeScript types
+│           └── utils/          # Pure utilities (api-resources, format, icons, etc.)
 ├── web/                       # React frontend (embedded at build)
 │   ├── src/
 │   │   ├── api/               # API client + SSE hooks
@@ -114,7 +128,7 @@ radar/
 │   │   │   ├── portforward/   # Port forward manager
 │   │   │   ├── resource/      # Single resource detail page
 │   │   │   ├── resource-drawer/ # Resource drawer overlay
-│   │   │   ├── resources/     # Resource list panels
+│   │   │   ├── resources/     # Resource list panels (thin wrappers over @skyhook/k8s-ui)
 │   │   │   ├── timeline/      # Timeline view (activity & changes)
 │   │   │   ├── topology/      # Graph visualization
 │   │   │   ├── traffic/       # Traffic flow visualization
@@ -554,10 +568,18 @@ useMutation({
 
 Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 
+### Shared UI Package (@skyhook/k8s-ui)
+- Located at `packages/k8s-ui/` — shared presentation components decoupled from data fetching
+- Components in the package are pure: data fetching hooks live in `web/`, injected via props/callbacks
+- `web/src/components/resources/ResourcesView.tsx` is a thin wrapper that instantiates hooks and passes data to the package's `ResourcesView`
+- Linked via npm workspaces; Vite aliases `@skyhook/k8s-ui` to `../packages/k8s-ui/src` (source-level, no build step)
+- Key exports: `ResourcesView`, `ResourceRendererDispatch`, `ResourceActionsBar`, `EditableYamlView`, all renderers, resource-utils, `categorizeResources`, `getKindLabel`, `getKindPlural`
+
 ### Resource Renderers
 - **Adding a new CRD integration? See [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md)** for the full step-by-step checklist with all files, patterns, and collision gotchas.
+- Renderers, resource-utils, and table column config live in `packages/k8s-ui/src/components/resources/`
 - Sections with data should use `defaultExpanded` (true) — only collapse empty or low-priority sections
-- Register in: `renderers/index.ts` (export), `ResourceDetailDrawer.tsx` (import + knownKinds + render line + `getResourceStatus()`)
+- Register in: `packages/k8s-ui/src/components/resources/renderers/index.ts` (export), `web/src/components/resources/ResourceDetailDrawer.tsx` (import + knownKinds + render line + `getResourceStatus()`)
 - Use `AlertBanner` for problem detection, `ConditionsSection` for K8s conditions
 - Long text in alerts/banners needs `break-all` class for CSS word breaking
 - **Kind collision rule:** When a CRD kind collides with a core K8s kind (e.g., Knative Service vs core Service), you must guard THREE places in `ResourceDetailDrawer.tsx`: (1) the core renderer line, (2) `getResourceStatus()`, (3) action buttons (Port Forward, etc.). Use `data?.apiVersion?.includes('group.name')` checks. Missing any one causes dual rendering bugs.
