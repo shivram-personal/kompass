@@ -56,7 +56,7 @@ radar/
 │   │   ├── inspector.go       # Image filesystem extraction and caching
 │   │   └── types.go           # Image metadata and filesystem types
 │   ├── k8s/
-│   │   ├── cache.go           # Typed informer caching
+│   │   ├── cache.go           # Singleton wrapper over pkg/k8score + Radar-specific extensions
 │   │   ├── capabilities.go    # Cluster capability detection
 │   │   ├── client.go          # K8s client initialization
 │   │   ├── cluster_detection.go # GKE/EKS/AKS platform detection
@@ -100,6 +100,8 @@ radar/
 │   ├── traffic/               # Service mesh traffic analysis
 │   ├── updater/               # Binary self-update logic
 │   └── version/               # Version information
+├── pkg/
+│   └── k8score/               # Shared K8s caching layer (informers, listers, transforms)
 ├── web/                       # React frontend (embedded at build)
 │   ├── src/
 │   │   ├── api/               # API client + SSE hooks
@@ -419,10 +421,14 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 ## Key Patterns
 
 ### K8s Caching
+- Core informer logic lives in `pkg/k8score` — a shared package with no internal/ imports, designed for reuse
+- `internal/k8s/cache.go` wraps it as a singleton and wires Radar-specific callbacks (timeline recording, noisy filtering, diff computation)
 - Uses SharedInformers for watch-based caching of typed resources
+- Two-phase sync: critical informers block startup, deferred informers (events, secrets, configmaps, etc.) sync in background
 - Dynamic caching for CRDs and custom resource types via API discovery
 - Memory-efficient with field stripping (removes managed fields, last-applied annotations)
 - Change notifications via channel for real-time SSE updates
+- Application-specific behavior injected via `CacheConfig` callbacks: `OnChange`, `OnEventChange`, `OnReceived`, `OnDrop`, `ComputeDiff`, `IsNoisyResource`
 - Supports: Pods, Services, Deployments, DaemonSets, StatefulSets, ReplicaSets, Ingresses, ConfigMaps, Secrets, Events, Jobs, CronJobs, HorizontalPodAutoscalers, PersistentVolumeClaims, PersistentVolumes, StorageClasses, PodDisruptionBudgets, Nodes, Namespaces
 
 ### Server-Sent Events (SSE)
