@@ -22,5 +22,8 @@ export * from './components/logs'
 // Timeline
 export * from './components/timeline'
 
-// Shared components (ResourceRendererDispatch, EditableYamlView)
+// Shared components (ResourceRendererDispatch, EditableYamlView, ResourceActionsBar)
 export * from './components/shared'
+
+// Workload components (WorkloadView, ResourceDetailDrawer)
+export * from './components/workload'

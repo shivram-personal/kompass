@@ -1,6 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
-import { TRANSITION_DRAWER } from '../../utils/animation'
-import { clsx } from 'clsx'
+import { ResourceDetailDrawer as BaseResourceDetailDrawer } from '@skyhook/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { WorkloadView } from '../workload/WorkloadView'
 
@@ -22,126 +20,24 @@ interface ResourceDetailDrawerProps {
   onNavigateToResource?: (resource: SelectedResource) => void
 }
 
-const MIN_WIDTH = 400
-const MAX_WIDTH_PERCENT = 0.7
-const DEFAULT_WIDTH = 550
-const WIDE_WIDTH = 750
-
-const WIDE_KINDS = new Set([
-  'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
-  'rbacassessmentreports', 'clusterrbacassessmentreports', 'clustercompliancereports',
-  'sbomreports', 'clustersbomreports', 'policyreports', 'clusterpolicyreports',
-])
-
-function getDefaultWidth(kind: string): number {
-  return WIDE_KINDS.has(kind.toLowerCase()) ? WIDE_WIDTH : DEFAULT_WIDTH
-}
-
-export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, onNavigateToResource }: ResourceDetailDrawerProps) {
-  const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
-  const [isResizing, setIsResizing] = useState(false)
-  const resizeStartX = useRef(0)
-  const resizeStartWidth = useRef(getDefaultWidth(resource.kind))
-
-  // Detect collapse direction: was expanded last render, now not.
-  // Width snaps instantly on collapse (0ms) so content and size match.
-  // Expand keeps the nice 300ms width animation via TRANSITION_DRAWER.
-  const wasExpanded = useRef(!!expanded)
-  const isCollapsing = wasExpanded.current && !expanded
-  wasExpanded.current = !!expanded
-
-  // Reset drawer width when resource kind changes
-  useEffect(() => {
-    const w = getDefaultWidth(resource.kind)
-    setDrawerWidth(w)
-    resizeStartWidth.current = w
-  }, [resource.kind])
-
-  // Resize handlers (disabled when expanded)
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    if (expanded) return
-    e.preventDefault()
-    setIsResizing(true)
-    resizeStartX.current = e.clientX
-    resizeStartWidth.current = drawerWidth
-  }, [drawerWidth, expanded])
-
-  useEffect(() => {
-    if (!isResizing) return
-    document.body.style.cursor = 'ew-resize'
-    document.body.style.userSelect = 'none'
-    const maxWidth = window.innerWidth * MAX_WIDTH_PERCENT
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaX = resizeStartX.current - e.clientX
-      const newWidth = resizeStartWidth.current + deltaX
-      setDrawerWidth(Math.max(MIN_WIDTH, Math.min(newWidth, maxWidth)))
-    }
-    const handleMouseUp = () => setIsResizing(false)
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-    return () => {
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isResizing])
-
-  // Route navigation based on expanded state
-  const handleNavigate = useCallback((res: SelectedResource) => {
-    if (expanded) {
-      onNavigateToResource?.(res)
-    } else {
-      onNavigate?.(res)
-    }
-  }, [expanded, onNavigateToResource, onNavigate])
-
-  const headerHeight = 49
-
+export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
   return (
-    <div
-      className={clsx(
-        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40',
-        TRANSITION_DRAWER,
-        isOpen
-          ? 'translate-x-0 opacity-100'
-          : 'translate-x-full opacity-0',
-        expanded && 'bg-theme-base !border-l-0',
-      )}
-      style={{
-        width: expanded ? '100vw' : drawerWidth,
-        top: headerHeight,
-        height: `calc(100vh - ${headerHeight}px)`,
-        // Collapse is instant — no animation, content and width snap together.
-        // Expand + slide-in/out animate via TRANSITION_DRAWER class.
-        ...(isCollapsing && { transition: 'none' }),
-      }}
-    >
-      {/* Resize handle — hidden when expanded or on mobile */}
-      {!expanded && (
-        <div
-          onMouseDown={handleResizeStart}
-          className={clsx(
-            'absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 hover:bg-blue-500/50 transition-colors',
-            'hidden sm:block',
-            isResizing && 'bg-blue-500/50'
-          )}
+    <BaseResourceDetailDrawer {...props}>
+      {({ resource, expanded, initialTab, onClose, onExpand, onBack, onNavigateToResource, onCollapseToDrawer }) => (
+        <WorkloadView
+          kind={resource.kind}
+          namespace={resource.namespace}
+          name={resource.name}
+          group={resource.group}
+          expanded={expanded}
+          initialTab={initialTab}
+          onClose={onClose}
+          onExpand={onExpand}
+          onBack={onBack ?? (() => {})}
+          onNavigateToResource={onNavigateToResource}
+          onCollapseToDrawer={onCollapseToDrawer}
         />
       )}
-
-      <WorkloadView
-        kind={resource.kind}
-        namespace={resource.namespace}
-        name={resource.name}
-        group={resource.group}
-        expanded={expanded}
-        initialTab={initialTab}
-        onClose={onClose}
-        onExpand={() => onExpand?.(resource)}
-        onBack={() => onCollapse?.()}
-        onNavigateToResource={handleNavigate}
-        onCollapseToDrawer={() => onCollapse?.()}
-      />
-    </div>
+    </BaseResourceDetailDrawer>
   )
 }
