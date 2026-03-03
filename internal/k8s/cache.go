@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -14,24 +13,14 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	policyv1 "k8s.io/api/policy/v1"
-	storagev1 "k8s.io/api/storage/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/client-go/informers"
-	listersappsv1 "k8s.io/client-go/listers/apps/v1"
-	listersautoscalingv2 "k8s.io/client-go/listers/autoscaling/v2"
-	listersbatchv1 "k8s.io/client-go/listers/batch/v1"
-	listerscorev1 "k8s.io/client-go/listers/core/v1"
-	listersnetworkingv1 "k8s.io/client-go/listers/networking/v1"
-	listerspolicyv1 "k8s.io/client-go/listers/policy/v1"
-	listersstoragev1 "k8s.io/client-go/listers/storage/v1"
-	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // DebugEvents enables verbose event debugging when true (set via --debug-events flag)
@@ -58,8 +47,6 @@ var initialSyncComplete bool
 // deferredResources lists informer keys that are NOT required for the initial
 // topology/dashboard render. These sync in the background after the critical
 // informers complete, so the UI can render immediately with core resources.
-// Their lister accessors return nil until sync completes, at which point
-// an SSE topology update fills in the missing edges/counts.
 var deferredResources = map[string]bool{
 	"secrets":                true,
 	"events":                 true,
@@ -70,28 +57,16 @@ var deferredResources = map[string]bool{
 	"poddisruptionbudgets":   true,
 }
 
-// ResourceCache provides fast, eventually-consistent access to K8s resources
-// using SharedInformers. Optimized for small-mid sized clusters.
-type ResourceCache struct {
-	factory          informers.SharedInformerFactory
-	changes          chan ResourceChange
-	stopCh           chan struct{}
-	stopOnce         sync.Once
-	secretsEnabled   bool            // Whether secrets informer is running (requires RBAC)
-	enabledResources map[string]bool // Which resource types have informers running
-	deferredSynced   map[string]bool // Tracks which deferred resources have completed sync
-	deferredMu       sync.RWMutex    // Protects deferredSynced
-	deferredDone     chan struct{}   // Closed when ALL deferred informers have synced
-}
+// ResourceChange is a type alias for the canonical definition in pkg/k8score.
+type ResourceChange = k8score.ResourceChange
 
-// ResourceChange represents a resource change event
-type ResourceChange struct {
-	Kind      string // "Service", "Deployment", "Pod", etc.
-	Namespace string
-	Name      string
-	UID       string
-	Operation string    // "add", "update", "delete"
-	Diff      *DiffInfo // Diff details for updates (from history)
+// ResourceCache provides fast, eventually-consistent access to K8s resources
+// using SharedInformers. It embeds *k8score.ResourceCache for the shared
+// informer logic and adds Radar-specific extensions (dynamic cache, resource
+// status, pod workload lookup, timeline integration).
+type ResourceCache struct {
+	*k8score.ResourceCache
+	secretsEnabled bool // Whether secrets informer is running (requires RBAC)
 }
 
 var (
@@ -100,75 +75,22 @@ var (
 	cacheMu       sync.Mutex
 )
 
-// dropManagedFields reduces memory usage by removing heavy metadata
-func dropManagedFields(obj any) (any, error) {
-	if meta, ok := obj.(metav1.Object); ok {
-		meta.SetManagedFields(nil)
-	}
-
-	// Special handling for Events - aggressively strip to essentials
-	if event, ok := obj.(*corev1.Event); ok {
-		return &corev1.Event{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:              event.Name,
-				Namespace:         event.Namespace,
-				UID:               event.UID,
-				ResourceVersion:   event.ResourceVersion,
-				CreationTimestamp: event.CreationTimestamp,
-			},
-			InvolvedObject: event.InvolvedObject,
-			Reason:         event.Reason,
-			Message:        event.Message,
-			Type:           event.Type,
-			Count:          event.Count,
-			FirstTimestamp: event.FirstTimestamp,
-			LastTimestamp:  event.LastTimestamp,
-		}, nil
-	}
-
-	// Drop heavy annotations from common resources
-	switch obj.(type) {
-	case *corev1.Pod, *corev1.Service, *corev1.Node, *corev1.Namespace,
-		*corev1.PersistentVolumeClaim, *corev1.PersistentVolume, *corev1.ConfigMap, *corev1.Secret,
-		*appsv1.Deployment, *appsv1.DaemonSet, *appsv1.StatefulSet, *appsv1.ReplicaSet,
-		*networkingv1.Ingress,
-		*batchv1.Job, *batchv1.CronJob,
-		*policyv1.PodDisruptionBudget, *storagev1.StorageClass:
-		if meta, ok := obj.(metav1.Object); ok && meta.GetAnnotations() != nil {
-			delete(meta.GetAnnotations(), "kubectl.kubernetes.io/last-applied-configuration")
-		}
-	}
-
-	return obj, nil
-}
-
-// InitResourceCache initializes the resource cache
+// InitResourceCache initializes the resource cache with timeline-wired callbacks.
 func InitResourceCache(ctx context.Context) error {
 	var initErr error
-	// cacheOnce is a *sync.Once (heap-allocated pointer). ResetResourceCache
-	// can safely replace it with a new instance even if Do() is still running
-	// on the old one — each instance has its own internal mutex.
 	cacheOnce.Do(func() {
 		if k8sClient == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
 
-		stopCh := make(chan struct{})
-		changes := make(chan ResourceChange, 10000)
-
 		// Check RBAC permissions for all resource types before creating informers.
-		// This is the slow path when exec credential plugins are broken (each call
-		// serializes through the plugin). No lock is held here so that context
-		// switches can proceed via ResetResourceCache without blocking.
 		rbacStart := time.Now()
 		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		permResult := CheckResourcePermissions(rbacCtx)
 		cancel()
 		logTiming("    RBAC permission checks: %v", time.Since(rbacStart))
 
-		// Bail if context was canceled during RBAC checks (e.g., version check
-		// failed while we were waiting for serialized exec plugin calls).
 		if ctx.Err() != nil {
 			initErr = ctx.Err()
 			return
@@ -176,22 +98,6 @@ func InitResourceCache(ctx context.Context) error {
 
 		perms := permResult.Perms
 
-		// Create factory — namespace-scoped if user only has namespace-level access
-		factoryOpts := []informers.SharedInformerOption{
-			informers.WithTransform(dropManagedFields),
-		}
-		if permResult.NamespaceScoped && permResult.Namespace != "" {
-			factoryOpts = append(factoryOpts, informers.WithNamespace(permResult.Namespace))
-			log.Printf("Using namespace-scoped informers for namespace %q", permResult.Namespace)
-		}
-
-		factory := informers.NewSharedInformerFactoryWithOptions(
-			k8sClient,
-			0, // no resync - updates come via watch
-			factoryOpts...,
-		)
-
-		// Build map of enabled resources
 		enabled := map[string]bool{
 			"pods":                     perms.Pods,
 			"services":                 perms.Services,
@@ -214,215 +120,63 @@ func InitResourceCache(ctx context.Context) error {
 			"poddisruptionbudgets":     perms.PodDisruptionBudgets,
 		}
 
-		type informerSetup struct {
-			key     string
-			kind    string
-			setup   func() cache.SharedIndexInformer
-			isEvent bool // Uses special K8s event handler
+		cfg := k8score.CacheConfig{
+			Client:          k8sClient,
+			ResourceTypes:   enabled,
+			DeferredTypes:   deferredResources,
+			NamespaceScoped: permResult.NamespaceScoped,
+			Namespace:       permResult.Namespace,
+			DebugEvents:     DebugEvents,
+			TimingLogger:    logTiming,
+
+			OnChange: func(change k8score.ResourceChange, obj, oldObj any) {
+				// Track event received
+				timeline.IncrementReceived(change.Kind)
+
+				if DebugEvents && change.Operation == "add" &&
+					(change.Kind == "Pod" || change.Kind == "Deployment" || change.Kind == "Service") {
+					log.Printf("[DEBUG] enqueueChange: %s add %s/%s", change.Kind, change.Namespace, change.Name)
+				}
+
+				// Record to timeline store
+				recordToTimelineStore(change.Kind, change.Namespace, change.Name, change.UID, change.Operation, oldObj, obj)
+			},
+
+			OnEventChange: func(obj any, op string) {
+				recordK8sEventToTimeline(obj)
+			},
+
+			OnDrop: func(kind, ns, name, reason, op string) {
+				timeline.RecordDrop(kind, ns, name, reason, op)
+				if DebugEvents {
+					log.Printf("[DEBUG] Change dropped: %s/%s/%s reason=%s op=%s", kind, ns, name, reason, op)
+				}
+			},
+
+			ComputeDiff: func(kind string, oldObj, newObj any) *k8score.DiffInfo {
+				return ComputeDiff(kind, oldObj, newObj)
+			},
+
+			IsNoisyResource: isNoisyResource,
 		}
 
-		setups := []informerSetup{
-			{"services", "Service", func() cache.SharedIndexInformer { return factory.Core().V1().Services().Informer() }, false},
-			{"pods", "Pod", func() cache.SharedIndexInformer { return factory.Core().V1().Pods().Informer() }, false},
-			{"nodes", "Node", func() cache.SharedIndexInformer { return factory.Core().V1().Nodes().Informer() }, false},
-			{"namespaces", "Namespace", func() cache.SharedIndexInformer { return factory.Core().V1().Namespaces().Informer() }, false},
-			{"configmaps", "ConfigMap", func() cache.SharedIndexInformer { return factory.Core().V1().ConfigMaps().Informer() }, false},
-			{"secrets", "Secret", func() cache.SharedIndexInformer { return factory.Core().V1().Secrets().Informer() }, false},
-			{"events", "Event", func() cache.SharedIndexInformer { return factory.Core().V1().Events().Informer() }, true},
-			{"persistentvolumeclaims", "PersistentVolumeClaim", func() cache.SharedIndexInformer { return factory.Core().V1().PersistentVolumeClaims().Informer() }, false},
-			{"deployments", "Deployment", func() cache.SharedIndexInformer { return factory.Apps().V1().Deployments().Informer() }, false},
-			{"daemonsets", "DaemonSet", func() cache.SharedIndexInformer { return factory.Apps().V1().DaemonSets().Informer() }, false},
-			{"statefulsets", "StatefulSet", func() cache.SharedIndexInformer { return factory.Apps().V1().StatefulSets().Informer() }, false},
-			{"replicasets", "ReplicaSet", func() cache.SharedIndexInformer { return factory.Apps().V1().ReplicaSets().Informer() }, false},
-			{"ingresses", "Ingress", func() cache.SharedIndexInformer { return factory.Networking().V1().Ingresses().Informer() }, false},
-			{"jobs", "Job", func() cache.SharedIndexInformer { return factory.Batch().V1().Jobs().Informer() }, false},
-			{"cronjobs", "CronJob", func() cache.SharedIndexInformer { return factory.Batch().V1().CronJobs().Informer() }, false},
-			{"horizontalpodautoscalers", "HorizontalPodAutoscaler", func() cache.SharedIndexInformer {
-				return factory.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
-			}, false},
-			{"persistentvolumes", "PersistentVolume", func() cache.SharedIndexInformer {
-				return factory.Core().V1().PersistentVolumes().Informer()
-			}, false},
-			{"storageclasses", "StorageClass", func() cache.SharedIndexInformer {
-				return factory.Storage().V1().StorageClasses().Informer()
-			}, false},
-			{"poddisruptionbudgets", "PodDisruptionBudget", func() cache.SharedIndexInformer {
-				return factory.Policy().V1().PodDisruptionBudgets().Informer()
-			}, false},
-		}
-
-		// Split informers into critical (block startup) and deferred (background sync).
-		// Critical informers are needed for the initial topology/dashboard render.
-		// Deferred informers (secrets, events, configmaps, pvcs, pvs, storageclasses, pdbs)
-		// only add supplementary data (config edges, counts, cert health) — the UI
-		// gracefully handles their listers being nil until sync completes.
-		var criticalSyncFuncs []cache.InformerSynced
-		var deferredSyncFuncs []cache.InformerSynced
-		var deferredKeys []string
-		var handlerErrors []error
-		enabledCount := 0
-
-		for _, s := range setups {
-			if !enabled[s.key] {
-				continue
-			}
-			enabledCount++
-			inf := s.setup()
-			if s.isEvent {
-				handlerErrors = append(handlerErrors, addK8sEventHandlers(inf, changes))
-			} else {
-				handlerErrors = append(handlerErrors, addChangeHandlers(inf, s.kind, changes))
-			}
-			if deferredResources[s.key] {
-				deferredSyncFuncs = append(deferredSyncFuncs, inf.HasSynced)
-				deferredKeys = append(deferredKeys, s.key)
-			} else {
-				criticalSyncFuncs = append(criticalSyncFuncs, inf.HasSynced)
-			}
-		}
-
-		for _, err := range handlerErrors {
-			if err != nil {
-				initErr = fmt.Errorf("failed to register event handlers: %w", err)
-				return
-			}
-		}
-
-		if enabledCount == 0 {
-			log.Printf("Warning: No resource types are accessible (all RBAC checks failed)")
-			// Still create a valid but empty cache so the server can run
-			resourceCache = &ResourceCache{
-				factory:          factory,
-				changes:          changes,
-				stopCh:           stopCh,
-				secretsEnabled:   false,
-				enabledResources: enabled,
-				deferredSynced:   make(map[string]bool),
-				deferredDone:     make(chan struct{}),
-			}
-			close(resourceCache.deferredDone)
-			initialSyncComplete = true
+		core, err := k8score.NewResourceCache(cfg)
+		if err != nil {
+			initErr = err
 			return
 		}
 
-		// Start all informers (each runs LIST+WATCH in its own goroutine)
-		factory.Start(stopCh)
-
-		log.Printf("Starting resource cache: %d critical + %d deferred informers (%d/%d total)",
-			len(criticalSyncFuncs), len(deferredSyncFuncs), enabledCount, len(setups))
-		syncStart := time.Now()
-
-		// Track per-informer sync times
-		for _, s := range setups {
-			if !enabled[s.key] {
-				continue
-			}
-			kind := s.kind
-			key := s.key
-			isDeferred := deferredResources[key]
-			// Find matching HasSynced func
-			var fn cache.InformerSynced
-			if isDeferred {
-				for i, dk := range deferredKeys {
-					if dk == key {
-						fn = deferredSyncFuncs[i]
-						break
-					}
-				}
-			} else {
-				idx := 0
-				for _, ss := range setups {
-					if !enabled[ss.key] || deferredResources[ss.key] {
-						continue
-					}
-					if ss.key == key {
-						fn = criticalSyncFuncs[idx]
-						break
-					}
-					idx++
-				}
-			}
-			if fn != nil {
-				tag := "critical"
-				if isDeferred {
-					tag = "deferred"
-				}
-				go func() {
-					t := time.Now()
-					for !fn() {
-						select {
-						case <-stopCh:
-							return
-						default:
-						}
-						time.Sleep(10 * time.Millisecond)
-					}
-					logTiming("    Informer synced: %-28s %v (%s)", kind, time.Since(t), tag)
-				}()
-			}
-		}
-
-		// Phase 1: Wait only for critical informers — these drive the first render
-		if len(criticalSyncFuncs) > 0 {
-			if !cache.WaitForCacheSync(stopCh, criticalSyncFuncs...) {
-				close(stopCh)
-				initErr = fmt.Errorf("failed to sync critical resource caches")
-				return
-			}
-		}
-		logTiming("    Phase 1 sync (%d critical informers): %v", len(criticalSyncFuncs), time.Since(syncStart))
-		log.Printf("Critical resource caches synced in %v — UI can render", time.Since(syncStart))
-
-		// Mark initial sync as complete for critical resources.
-		// "Add" events for deferred resources during their sync will be recorded,
-		// but that's fine — they'll just trigger topology updates.
-		initialSyncComplete = true
-
-		// Build deferred tracking state
-		deferredSynced := make(map[string]bool, len(deferredKeys))
-		for _, k := range deferredKeys {
-			deferredSynced[k] = false
-		}
-		deferredDone := make(chan struct{})
+		initialSyncComplete = core.IsSyncComplete()
 
 		resourceCache = &ResourceCache{
-			factory:          factory,
-			changes:          changes,
-			stopCh:           stopCh,
-			secretsEnabled:   enabled["secrets"],
-			enabledResources: enabled,
-			deferredSynced:   deferredSynced,
-			deferredDone:     deferredDone,
-		}
-
-		// Phase 2: Wait for deferred informers in background
-		rc := resourceCache // capture local — avoid reading package var in goroutine
-		if len(deferredSyncFuncs) > 0 {
-			go func() {
-				deferredStart := time.Now()
-				if cache.WaitForCacheSync(stopCh, deferredSyncFuncs...) {
-					// Mark all deferred as synced
-					rc.deferredMu.Lock()
-					for _, k := range deferredKeys {
-						rc.deferredSynced[k] = true
-					}
-					rc.deferredMu.Unlock()
-					close(deferredDone)
-					logTiming("    Phase 2 sync (%d deferred informers): %v", len(deferredSyncFuncs), time.Since(deferredStart))
-					log.Printf("Deferred resource caches synced in %v (total: %v)", time.Since(deferredStart), time.Since(syncStart))
-				} else {
-					log.Printf("ERROR: Deferred resource cache sync failed after %v — events, secrets, configmaps, PVCs, PVs, storage classes, and PDBs will be unavailable", time.Since(deferredStart))
-					close(deferredDone) // Unblock waiters so they don't hang forever
-				}
-			}()
-		} else {
-			close(deferredDone)
+			ResourceCache:  core,
+			secretsEnabled: enabled["secrets"],
 		}
 	})
 	return initErr
 }
 
-// GetResourceCache returns the singleton cache instance
+// GetResourceCache returns the singleton cache instance.
 func GetResourceCache() *ResourceCache {
 	return resourceCache
 }
@@ -441,124 +195,6 @@ func ResetResourceCache() {
 	initialSyncComplete = false
 }
 
-// addChangeHandlers registers event handlers for change notifications
-// Returns an error if handler registration fails (rare, but indicates a broken informer)
-func addChangeHandlers(inf cache.SharedIndexInformer, kind string, ch chan<- ResourceChange) error {
-	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj any) {
-			enqueueChange(ch, kind, obj, nil, "add")
-		},
-		UpdateFunc: func(oldObj, newObj any) {
-			enqueueChange(ch, kind, newObj, oldObj, "update")
-		},
-		DeleteFunc: func(obj any) {
-			enqueueChange(ch, kind, obj, nil, "delete")
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to register %s event handler: %w", kind, err)
-	}
-	return nil
-}
-
-// addK8sEventHandlers registers special handlers for K8s Events
-// K8s Events are stored in the timeline store as "k8s_event" source type
-// Returns an error if handler registration fails
-func addK8sEventHandlers(inf cache.SharedIndexInformer, ch chan<- ResourceChange) error {
-	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj any) {
-			// Still send to the change channel for SSE broadcasting
-			meta, ok := obj.(metav1.Object)
-			if !ok {
-				return
-			}
-			change := ResourceChange{
-				Kind:      "Event",
-				Namespace: meta.GetNamespace(),
-				Name:      meta.GetName(),
-				UID:       string(meta.GetUID()),
-				Operation: "add",
-			}
-			select {
-			case ch <- change:
-			default:
-				// Channel full, drop event
-				timeline.RecordDrop("Event", meta.GetNamespace(), meta.GetName(),
-					timeline.DropReasonChannelFull, "add")
-				if DebugEvents {
-					log.Printf("[DEBUG] K8s Event channel full, dropped: Event/%s/%s", meta.GetNamespace(), meta.GetName())
-				}
-			}
-
-			// Record K8s Event to timeline store
-			recordK8sEventToTimeline(obj)
-		},
-		UpdateFunc: func(oldObj, newObj any) {
-			// K8s Events update when count changes - record to timeline
-			meta, ok := newObj.(metav1.Object)
-			if !ok {
-				return
-			}
-			change := ResourceChange{
-				Kind:      "Event",
-				Namespace: meta.GetNamespace(),
-				Name:      meta.GetName(),
-				UID:       string(meta.GetUID()),
-				Operation: "update",
-			}
-			select {
-			case ch <- change:
-			default:
-				// Channel full, drop event
-				timeline.RecordDrop("Event", meta.GetNamespace(), meta.GetName(),
-					timeline.DropReasonChannelFull, "update")
-				if DebugEvents {
-					log.Printf("[DEBUG] K8s Event channel full, dropped: Event/%s/%s op=update", meta.GetNamespace(), meta.GetName())
-				}
-			}
-
-			// Update K8s Event in timeline store (with new count)
-			recordK8sEventToTimeline(newObj)
-		},
-		DeleteFunc: func(obj any) {
-			meta, ok := obj.(metav1.Object)
-			if !ok {
-				if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-					meta, ok = tombstone.Obj.(metav1.Object)
-					if !ok {
-						return
-					}
-				} else {
-					return
-				}
-			}
-			change := ResourceChange{
-				Kind:      "Event",
-				Namespace: meta.GetNamespace(),
-				Name:      meta.GetName(),
-				UID:       string(meta.GetUID()),
-				Operation: "delete",
-			}
-			select {
-			case ch <- change:
-			default:
-				// Channel full, drop event
-				timeline.RecordDrop("Event", meta.GetNamespace(), meta.GetName(),
-					timeline.DropReasonChannelFull, "delete")
-				if DebugEvents {
-					log.Printf("[DEBUG] K8s Event channel full, dropped: Event/%s/%s op=delete", meta.GetNamespace(), meta.GetName())
-				}
-			}
-			// Note: We don't need to delete K8s events from timeline store
-			// as they represent things that happened and should remain in history
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to register Event handler: %w", err)
-	}
-	return nil
-}
-
 // recordK8sEventToTimeline records a K8s Event to the timeline store
 func recordK8sEventToTimeline(obj any) {
 	event, ok := obj.(*corev1.Event)
@@ -571,12 +207,10 @@ func recordK8sEventToTimeline(obj any) {
 		return
 	}
 
-	// Track K8s Event recording in metrics when debug mode is enabled
 	if DebugEvents {
 		timeline.IncrementReceived("K8sEvent:" + event.InvolvedObject.Kind)
 	}
 
-	// Lookup owner reference for the involved object
 	var owner *timeline.OwnerInfo
 	cache := GetResourceCache()
 	if cache != nil {
@@ -601,10 +235,8 @@ func recordK8sEventToTimeline(obj any) {
 		}
 	}
 
-	// Create timeline event using the converter
 	timelineEvent := timeline.NewK8sEventTimelineEvent(event, owner)
 
-	// Record to store with broadcast to SSE subscribers
 	ctx := context.Background()
 	if err := timeline.RecordEventWithBroadcast(ctx, timelineEvent); err != nil {
 		log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
@@ -614,20 +246,16 @@ func recordK8sEventToTimeline(obj any) {
 }
 
 // isNoisyResource returns true if this resource generates constant updates that aren't interesting
-// This prevents the history buffer from being flooded with lease renewals, heartbeats, etc.
 func isNoisyResource(kind, name, op string) bool {
-	// Only filter updates - adds and deletes are always interesting
 	if op != "update" {
 		return false
 	}
 
-	// Noisy resource kinds (constant background updates)
 	switch kind {
 	case "Lease", "Endpoints", "EndpointSlice", "Event":
 		return true
 	}
 
-	// Noisy ConfigMaps (leader election, heartbeats, status tracking)
 	if kind == "ConfigMap" {
 		noisyPatterns := []string{
 			"-lock", "-lease", "-leader-election", "-heartbeat",
@@ -642,7 +270,6 @@ func isNoisyResource(kind, name, op string) bool {
 		}
 	}
 
-	// Noisy Secrets (token rotation)
 	if kind == "Secret" {
 		if strings.HasSuffix(name, "-token") || strings.Contains(name, "leader-election") {
 			return true
@@ -652,72 +279,6 @@ func isNoisyResource(kind, name, op string) bool {
 	return false
 }
 
-// enqueueChange sends a change notification and records to both legacy history and timeline store
-func enqueueChange(ch chan<- ResourceChange, kind string, obj any, oldObj any, op string) {
-	meta, ok := obj.(metav1.Object)
-	if !ok {
-		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-			meta, ok = tombstone.Obj.(metav1.Object)
-			if !ok {
-				return
-			}
-			obj = tombstone.Obj
-		} else {
-			return
-		}
-	}
-
-	// Track event received
-	timeline.IncrementReceived(kind)
-
-	// Debug: log adds for core workload resources
-	if DebugEvents && op == "add" && (kind == "Pod" || kind == "Deployment" || kind == "Service") {
-		log.Printf("[DEBUG] enqueueChange: %s add %s/%s", kind, meta.GetNamespace(), meta.GetName())
-	}
-
-	// Skip recording noisy resources to preserve history buffer for interesting events
-	skipHistory := isNoisyResource(kind, meta.GetName(), op)
-	if skipHistory {
-		timeline.RecordDrop(kind, meta.GetNamespace(), meta.GetName(),
-			timeline.DropReasonNoisyFilter, op)
-		if DebugEvents {
-			log.Printf("[DEBUG] Filtered noisy resource: %s/%s/%s op=%s", kind, meta.GetNamespace(), meta.GetName(), op)
-		}
-	}
-
-	// Record to timeline store
-	if !skipHistory {
-		recordToTimelineStore(kind, meta.GetNamespace(), meta.GetName(), string(meta.GetUID()), op, oldObj, obj)
-	}
-
-	// Compute diff for updates
-	var diff *DiffInfo
-	if op == "update" && oldObj != nil && obj != nil {
-		diff = ComputeDiff(kind, oldObj, obj)
-	}
-
-	change := ResourceChange{
-		Kind:      kind,
-		Namespace: meta.GetNamespace(),
-		Name:      meta.GetName(),
-		UID:       string(meta.GetUID()),
-		Operation: op,
-		Diff:      diff,
-	}
-
-	// Non-blocking send
-	select {
-	case ch <- change:
-	default:
-		// Channel full, drop event
-		timeline.RecordDrop(kind, meta.GetNamespace(), meta.GetName(),
-			timeline.DropReasonChannelFull, op)
-		if DebugEvents {
-			log.Printf("[DEBUG] Change channel full, dropped: %s/%s/%s op=%s", kind, meta.GetNamespace(), meta.GetName(), op)
-		}
-	}
-}
-
 // recordToTimelineStore records an event to the timeline store
 func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj any) {
 	store := timeline.GetStore()
@@ -725,9 +286,6 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		return
 	}
 
-	// Check if we've already seen this resource (for dedup on restart)
-	// For "add", we check if seen and skip if so. We mark as seen AFTER successful append
-	// to avoid the race where a failed append leaves the resource marked as seen.
 	if op == "add" {
 		if store.IsResourceSeen(kind, namespace, name) {
 			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op)
@@ -736,28 +294,19 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 			}
 			return
 		}
-		// Don't mark as seen yet - do it after successful append
 	} else if op == "delete" {
 		store.ClearResourceSeen(kind, namespace, name)
 	}
-	// For "update", we don't need to track seen state - updates are always recorded
 
-	// Determine the object to analyze
 	obj := newObj
 	if obj == nil {
 		obj = oldObj
 	}
 
-	// Extract owner reference
 	owner := timeline.ExtractOwner(obj)
-
-	// Extract labels for grouping
 	labels := timeline.ExtractLabels(obj)
-
-	// Determine health state
 	healthState := timeline.DetermineHealthState(kind, obj)
 
-	// Extract creationTimestamp from resource metadata
 	var createdAt *time.Time
 	if obj != nil {
 		if meta, ok := obj.(metav1.Object); ok {
@@ -768,7 +317,6 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		}
 	}
 
-	// Compute diff for updates
 	var diff *timeline.DiffInfo
 	if op == "update" && oldObj != nil && newObj != nil {
 		if localDiff := ComputeDiff(kind, oldObj, newObj); localDiff != nil {
@@ -786,7 +334,6 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		}
 	}
 
-	// Create the timeline event
 	event := timeline.NewInformerEvent(
 		kind, namespace, name, uid,
 		timeline.OperationToEventType(op),
@@ -797,32 +344,23 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		createdAt,
 	)
 
-	// For "add" operations, also extract historical events from resource status
-	// and record them to the timeline store
 	var events []timeline.TimelineEvent
 	if op == "add" && newObj != nil {
 		historicalEvents := extractTimelineHistoricalEvents(kind, namespace, name, newObj, owner, labels)
 		events = append(events, historicalEvents...)
 	}
 
-	// Skip recording the "add" event if it's just a sync (resource already existed).
-	// We detect this by comparing the resource's creationTimestamp with current time.
-	// If the resource is older than 30 seconds, it's a sync event, not a real create.
-	// We still record historical events extracted from status (PodScheduled, ContainersReady, etc.)
 	if op == "add" {
 		isSyncEvent := false
 
-		// Method 1: Check initialSyncComplete flag (fast path during startup)
 		if !initialSyncComplete {
 			isSyncEvent = true
 		}
 
-		// Method 2: Check creationTimestamp (handles race conditions and context switches)
 		if !isSyncEvent && obj != nil {
 			if meta, ok := obj.(metav1.Object); ok {
 				creationTime := meta.GetCreationTimestamp().Time
 				age := time.Since(creationTime)
-				// If resource is older than 30 seconds, it's a sync, not a real create
 				if age > 30*time.Second {
 					isSyncEvent = true
 					if DebugEvents {
@@ -836,7 +374,6 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 			if DebugEvents {
 				log.Printf("[DEBUG] Skipping sync add event: %s/%s/%s (extracted %d historical events)", kind, namespace, name, len(events))
 			}
-			// Only record historical events, not the add event
 			if len(events) > 0 {
 				ctx := context.Background()
 				if err := timeline.RecordEventsWithBroadcast(ctx, events); err != nil {
@@ -849,7 +386,6 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 
 	events = append(events, event)
 
-	// Record all events to the store with broadcast to SSE subscribers
 	ctx := context.Background()
 	if err := timeline.RecordEventsWithBroadcast(ctx, events); err != nil {
 		log.Printf("Warning: failed to record to timeline store: %v", err)
@@ -857,34 +393,28 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		return
 	}
 
-	// Track successful recording
 	timeline.IncrementRecorded(kind)
 
-	// Mark resource as seen AFTER successful append to avoid race condition
-	// where a failed append leaves the resource marked as seen
 	if op == "add" {
 		store.MarkResourceSeen(kind, namespace, name)
 	}
 }
 
-// extractTimelineHistoricalEvents extracts historical events from resource metadata/status for the timeline store
+// extractTimelineHistoricalEvents extracts historical events from resource metadata/status
 func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owner *timeline.OwnerInfo, labels map[string]string) []timeline.TimelineEvent {
 	var events []timeline.TimelineEvent
 
 	switch kind {
 	case "Pod":
 		if pod, ok := obj.(*corev1.Pod); ok {
-			// Pod creation
 			if !pod.CreationTimestamp.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
 					pod.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
-			// Pod started
 			if pod.Status.StartTime != nil && !pod.Status.StartTime.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
 					pod.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner, labels))
 			}
-			// Check conditions
 			for _, cond := range pod.Status.Conditions {
 				if cond.LastTransitionTime.IsZero() {
 					continue
@@ -906,7 +436,6 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
 					deploy.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
-			// Check conditions
 			for _, cond := range deploy.Status.Conditions {
 				if cond.LastTransitionTime.IsZero() {
 					continue
@@ -1003,8 +532,6 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 		}
 
 	default:
-		// For unstructured CRD resources (Gateway, HTTPRoute, etc.),
-		// extract at least a "created" event from the creation timestamp
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			ct := u.GetCreationTimestamp()
 			if !ct.IsZero() {
@@ -1015,300 +542,6 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	}
 
 	return events
-}
-
-// Listers
-
-func (c *ResourceCache) isEnabled(key string) bool {
-	if c == nil || c.enabledResources == nil {
-		return false
-	}
-	return c.enabledResources[key]
-}
-
-// isReady returns true if the resource is enabled and, if it's a deferred
-// resource, its informer has finished syncing. Critical resources are always
-// ready once the cache exists (they block startup).
-func (c *ResourceCache) isReady(key string) bool {
-	if !c.isEnabled(key) {
-		return false
-	}
-	if !deferredResources[key] {
-		return true // critical resource — synced before cache was published
-	}
-	c.deferredMu.RLock()
-	defer c.deferredMu.RUnlock()
-	return c.deferredSynced[key]
-}
-
-// IsDeferredSynced returns true when all deferred informers have completed sync.
-func (c *ResourceCache) IsDeferredSynced() bool {
-	if c == nil {
-		return false
-	}
-	select {
-	case <-c.deferredDone:
-		return true
-	default:
-		return false
-	}
-}
-
-// DeferredDone returns a channel that is closed when all deferred informers
-// have completed their initial sync. Use this to trigger topology refreshes.
-func (c *ResourceCache) DeferredDone() <-chan struct{} {
-	if c == nil {
-		return nil
-	}
-	return c.deferredDone
-}
-
-func (c *ResourceCache) Services() listerscorev1.ServiceLister {
-	if c == nil || !c.isEnabled("services") {
-		return nil
-	}
-	return c.factory.Core().V1().Services().Lister()
-}
-
-func (c *ResourceCache) Pods() listerscorev1.PodLister {
-	if c == nil || !c.isEnabled("pods") {
-		return nil
-	}
-	return c.factory.Core().V1().Pods().Lister()
-}
-
-func (c *ResourceCache) Nodes() listerscorev1.NodeLister {
-	if c == nil || !c.isEnabled("nodes") {
-		return nil
-	}
-	return c.factory.Core().V1().Nodes().Lister()
-}
-
-func (c *ResourceCache) Namespaces() listerscorev1.NamespaceLister {
-	if c == nil || !c.isEnabled("namespaces") {
-		return nil
-	}
-	return c.factory.Core().V1().Namespaces().Lister()
-}
-
-func (c *ResourceCache) ConfigMaps() listerscorev1.ConfigMapLister {
-	if c == nil || !c.isReady("configmaps") {
-		return nil
-	}
-	return c.factory.Core().V1().ConfigMaps().Lister()
-}
-
-func (c *ResourceCache) Secrets() listerscorev1.SecretLister {
-	if c == nil || !c.isReady("secrets") {
-		return nil
-	}
-	return c.factory.Core().V1().Secrets().Lister()
-}
-
-func (c *ResourceCache) Events() listerscorev1.EventLister {
-	if c == nil || !c.isReady("events") {
-		return nil
-	}
-	return c.factory.Core().V1().Events().Lister()
-}
-
-func (c *ResourceCache) PersistentVolumeClaims() listerscorev1.PersistentVolumeClaimLister {
-	if c == nil || !c.isReady("persistentvolumeclaims") {
-		return nil
-	}
-	return c.factory.Core().V1().PersistentVolumeClaims().Lister()
-}
-
-func (c *ResourceCache) Deployments() listersappsv1.DeploymentLister {
-	if c == nil || !c.isEnabled("deployments") {
-		return nil
-	}
-	return c.factory.Apps().V1().Deployments().Lister()
-}
-
-func (c *ResourceCache) DaemonSets() listersappsv1.DaemonSetLister {
-	if c == nil || !c.isEnabled("daemonsets") {
-		return nil
-	}
-	return c.factory.Apps().V1().DaemonSets().Lister()
-}
-
-func (c *ResourceCache) StatefulSets() listersappsv1.StatefulSetLister {
-	if c == nil || !c.isEnabled("statefulsets") {
-		return nil
-	}
-	return c.factory.Apps().V1().StatefulSets().Lister()
-}
-
-func (c *ResourceCache) ReplicaSets() listersappsv1.ReplicaSetLister {
-	if c == nil || !c.isEnabled("replicasets") {
-		return nil
-	}
-	return c.factory.Apps().V1().ReplicaSets().Lister()
-}
-
-func (c *ResourceCache) Ingresses() listersnetworkingv1.IngressLister {
-	if c == nil || !c.isEnabled("ingresses") {
-		return nil
-	}
-	return c.factory.Networking().V1().Ingresses().Lister()
-}
-
-func (c *ResourceCache) Jobs() listersbatchv1.JobLister {
-	if c == nil || !c.isEnabled("jobs") {
-		return nil
-	}
-	return c.factory.Batch().V1().Jobs().Lister()
-}
-
-func (c *ResourceCache) CronJobs() listersbatchv1.CronJobLister {
-	if c == nil || !c.isEnabled("cronjobs") {
-		return nil
-	}
-	return c.factory.Batch().V1().CronJobs().Lister()
-}
-
-func (c *ResourceCache) HorizontalPodAutoscalers() listersautoscalingv2.HorizontalPodAutoscalerLister {
-	if c == nil || !c.isEnabled("horizontalpodautoscalers") {
-		return nil
-	}
-	return c.factory.Autoscaling().V2().HorizontalPodAutoscalers().Lister()
-}
-
-func (c *ResourceCache) PersistentVolumes() listerscorev1.PersistentVolumeLister {
-	if c == nil || !c.isReady("persistentvolumes") {
-		return nil
-	}
-	return c.factory.Core().V1().PersistentVolumes().Lister()
-}
-
-func (c *ResourceCache) StorageClasses() listersstoragev1.StorageClassLister {
-	if c == nil || !c.isReady("storageclasses") {
-		return nil
-	}
-	return c.factory.Storage().V1().StorageClasses().Lister()
-}
-
-func (c *ResourceCache) PodDisruptionBudgets() listerspolicyv1.PodDisruptionBudgetLister {
-	if c == nil || !c.isReady("poddisruptionbudgets") {
-		return nil
-	}
-	return c.factory.Policy().V1().PodDisruptionBudgets().Lister()
-}
-
-// GetEnabledResources returns the map of which resource types have informers running
-func (c *ResourceCache) GetEnabledResources() map[string]bool {
-	if c == nil {
-		return nil
-	}
-	// Return a copy
-	result := make(map[string]bool, len(c.enabledResources))
-	maps.Copy(result, c.enabledResources)
-	return result
-}
-
-// Changes returns the channel for resource change notifications
-func (c *ResourceCache) Changes() <-chan ResourceChange {
-	if c == nil {
-		return nil
-	}
-	return c.changes
-}
-
-// ChangesRaw returns the bidirectional channel for internal use (e.g., sharing with dynamic cache)
-func (c *ResourceCache) ChangesRaw() chan ResourceChange {
-	if c == nil {
-		return nil
-	}
-	return c.changes
-}
-
-// Stop initiates a non-blocking shutdown of the cache.
-// It closes the stopCh to signal informer goroutines and runs
-// factory.Shutdown() in the background. The changes channel is
-// abandoned (not closed) so background informers draining can
-// still send without panicking; it will be GC'd.
-func (c *ResourceCache) Stop() {
-	if c == nil {
-		return
-	}
-
-	c.stopOnce.Do(func() {
-		log.Println("Stopping resource cache")
-		close(c.stopCh)
-
-		// Run factory.Shutdown() in background — it blocks until all
-		// informer goroutines exit, which can take a long time when
-		// exec credential plugins are stuck in HTTP calls.
-		go func() {
-			done := make(chan struct{})
-			go func() {
-				c.factory.Shutdown()
-				close(done)
-			}()
-			select {
-			case <-done:
-				log.Println("Resource cache factory shutdown complete")
-			case <-time.After(5 * time.Second):
-				log.Println("Resource cache factory shutdown taking >5s, abandoning (goroutine will finish on its own)")
-			}
-		}()
-	})
-}
-
-// GetResourceCount returns total cached resources
-func (c *ResourceCache) GetResourceCount() int {
-	if c == nil {
-		return 0
-	}
-
-	count := 0
-	if lister := c.Services(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.Pods(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.Nodes(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.Namespaces(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.Deployments(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.DaemonSets(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.StatefulSets(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.ReplicaSets(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	if lister := c.Ingresses(); lister != nil {
-		if items, err := lister.List(labels.Everything()); err == nil {
-			count += len(items)
-		}
-	}
-	return count
 }
 
 // knownKinds maps lowercase kind names to whether they're handled by the typed cache
@@ -1340,14 +573,11 @@ func IsKnownKind(kind string) bool {
 }
 
 // ListDynamic returns resources of any type using the dynamic cache
-// Falls back to typed cache for known resources
 func (c *ResourceCache) ListDynamic(ctx context.Context, kind string, namespace string) ([]*unstructured.Unstructured, error) {
 	return c.ListDynamicWithGroup(ctx, kind, namespace, "")
 }
 
 // ListDynamicWithGroup returns resources, using the group to disambiguate
-// when multiple API groups have resources with the same kind name
-// (e.g., Application in argoproj.io vs app.k8s.io)
 func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, namespace string, group string) ([]*unstructured.Unstructured, error) {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
@@ -1384,7 +614,6 @@ func (c *ResourceCache) GetDynamic(ctx context.Context, kind string, namespace s
 }
 
 // GetDynamicWithGroup returns a single resource, using the group to disambiguate
-// when multiple API groups have resources with similar names
 func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
@@ -1417,7 +646,6 @@ func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, na
 		return nil, err
 	}
 
-	// Ensure apiVersion and kind are set (informers may not populate these)
 	if u.GetAPIVersion() == "" || u.GetKind() == "" {
 		apiVersion := gvr.Version
 		if gvr.Group != "" {
@@ -1434,11 +662,11 @@ func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, na
 
 // ResourceStatus holds status information for a resource
 type ResourceStatus struct {
-	Status  string // Running, Pending, Failed, Succeeded, Active, etc.
-	Ready   string // e.g., "3/3" for deployments
-	Message string // Status message or reason
-	Summary string // Brief human-readable status like "3/5 ready" or "0/3 OOMKilled"
-	Issue   string // Primary issue if unhealthy (e.g., "OOMKilled", "CrashLoopBackOff")
+	Status  string
+	Ready   string
+	Message string
+	Summary string
+	Issue   string
 }
 
 // GetResourceStatus looks up a resource and returns its status
@@ -1495,7 +723,6 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 			Summary: ready + " ready",
 		}
 
-		// Check pod-level issues for unhealthy deployments
 		if dep.Status.ReadyReplicas < dep.Status.Replicas && dep.Status.Replicas > 0 {
 			pods := c.GetPodsForWorkload(namespace, dep.Spec.Selector)
 			if len(pods) > 0 {
@@ -1536,7 +763,6 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 			Summary: ready + " ready",
 		}
 
-		// Check pod-level issues for unhealthy statefulsets
 		if sts.Status.ReadyReplicas < replicas && replicas > 0 {
 			pods := c.GetPodsForWorkload(namespace, sts.Spec.Selector)
 			if len(pods) > 0 {
@@ -1565,14 +791,12 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 			status = "Running"
 		}
 
-		// Check pod-level issues for better status reporting
 		result := &ResourceStatus{
 			Status:  status,
 			Ready:   ready,
 			Summary: ready + " ready",
 		}
 
-		// Get pods owned by this DaemonSet
 		if ds.Status.NumberReady < ds.Status.DesiredNumberScheduled {
 			pods := c.GetPodsForWorkload(namespace, ds.Spec.Selector)
 			if len(pods) > 0 {
@@ -1674,7 +898,6 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		} else if job.Status.Failed > 0 {
 			status = "Failed"
 		}
-		// Completions defaults to 1 when nil
 		completions := int32(1)
 		if job.Spec.Completions != nil {
 			completions = *job.Spec.Completions
@@ -1762,9 +985,64 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		}
 
 	default:
-		// For unknown types, return nil (no status available)
 		return nil
 	}
+}
+
+// GetResourceCount shadows the embedded method to include dynamic cache resources.
+func (c *ResourceCache) GetResourceCount() int {
+	if c == nil {
+		return 0
+	}
+
+	count := 0
+	if lister := c.Services(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.Pods(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.Nodes(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.Namespaces(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.Deployments(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.DaemonSets(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.StatefulSets(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.ReplicaSets(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+	if lister := c.Ingresses(); lister != nil {
+		if items, err := lister.List(labels.Everything()); err == nil {
+			count += len(items)
+		}
+	}
+
+	return count
 }
 
 // getPodReadyCount returns the ready container count as "ready/total"
@@ -1781,7 +1059,6 @@ func getPodReadyCount(pod *corev1.Pod) string {
 
 // getPodStatusMessage returns a brief status message for a pod
 func getPodStatusMessage(pod *corev1.Pod) string {
-	// Check for waiting containers
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
 			return cs.State.Waiting.Reason
@@ -1790,7 +1067,6 @@ func getPodStatusMessage(pod *corev1.Pod) string {
 			return cs.State.Terminated.Reason
 		}
 	}
-	// Check conditions
 	for _, cond := range pod.Status.Conditions {
 		if cond.Status == corev1.ConditionFalse && cond.Message != "" {
 			return cond.Message
@@ -1800,25 +1076,21 @@ func getPodStatusMessage(pod *corev1.Pod) string {
 }
 
 // getPodIssue returns the primary issue affecting a pod (if any)
-// Returns empty string if pod is healthy
 func getPodIssue(pod *corev1.Pod) string {
-	// Check init containers first
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if issue := getContainerIssue(&cs); issue != "" {
 			return issue
 		}
 	}
-	// Check main containers
 	for _, cs := range pod.Status.ContainerStatuses {
 		if issue := getContainerIssue(&cs); issue != "" {
 			return issue
 		}
 	}
-	// Check pod conditions
 	for _, cond := range pod.Status.Conditions {
 		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
 			if cond.Reason != "" {
-				return cond.Reason // e.g., "Unschedulable"
+				return cond.Reason
 			}
 		}
 	}
@@ -1827,19 +1099,17 @@ func getPodIssue(pod *corev1.Pod) string {
 
 // getContainerIssue extracts the issue from a container status
 func getContainerIssue(cs *corev1.ContainerStatus) string {
-	// Check current state first
 	if cs.State.Waiting != nil {
 		reason := cs.State.Waiting.Reason
 		if reason != "" && reason != "PodInitializing" && reason != "ContainerCreating" {
-			return reason // CrashLoopBackOff, ImagePullBackOff, etc.
+			return reason
 		}
 	}
 	if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
 		if cs.State.Terminated.Reason != "" {
-			return cs.State.Terminated.Reason // OOMKilled, Error, etc.
+			return cs.State.Terminated.Reason
 		}
 	}
-	// Check last state for recent failures
 	if cs.LastTerminationState.Terminated != nil {
 		if cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
 			return "OOMKilled"
@@ -1852,9 +1122,9 @@ func getContainerIssue(cs *corev1.ContainerStatus) string {
 type PodIssueSummary struct {
 	Total    int
 	Ready    int
-	Issues   map[string]int // issue -> count (e.g., "OOMKilled" -> 3)
-	TopIssue string         // Most common issue
-	TopCount int            // Count of most common issue
+	Issues   map[string]int
+	TopIssue string
+	TopCount int
 }
 
 // getPodsIssueSummary analyzes a list of pods and returns issue summary
@@ -1865,7 +1135,6 @@ func getPodsIssueSummary(pods []*corev1.Pod) *PodIssueSummary {
 	}
 
 	for _, pod := range pods {
-		// Count ready pods
 		if pod.Status.Phase == corev1.PodRunning {
 			allReady := true
 			for _, cs := range pod.Status.ContainerStatuses {
@@ -1879,7 +1148,6 @@ func getPodsIssueSummary(pods []*corev1.Pod) *PodIssueSummary {
 			}
 		}
 
-		// Track issues
 		if issue := getPodIssue(pod); issue != "" {
 			summary.Issues[issue]++
 			if summary.Issues[issue] > summary.TopCount {
@@ -1917,7 +1185,6 @@ func (c *ResourceCache) GetPodsForWorkload(namespace string, selector *metav1.La
 		return nil
 	}
 
-	// Convert LabelSelector to Selector
 	labelSelector, err := metav1.LabelSelectorAsSelector(selector)
 	if err != nil {
 		return nil

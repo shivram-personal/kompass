@@ -3,7 +3,7 @@ package k8s
 import (
 	"sync"
 
-	"k8s.io/client-go/informers"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -15,13 +15,6 @@ import (
 func InitTestResourceCache(client kubernetes.Interface) error {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
-
-	factory := informers.NewSharedInformerFactoryWithOptions(client, 0,
-		informers.WithTransform(dropManagedFields),
-	)
-
-	stopCh := make(chan struct{})
-	changes := make(chan ResourceChange, 10000)
 
 	enabled := map[string]bool{
 		"pods":                     true,
@@ -45,47 +38,23 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		"poddisruptionbudgets":     true,
 	}
 
-	// Touch every informer so the factory creates them before Start.
-	factory.Core().V1().Pods().Informer()
-	factory.Core().V1().Services().Informer()
-	factory.Core().V1().Nodes().Informer()
-	factory.Core().V1().Namespaces().Informer()
-	factory.Core().V1().ConfigMaps().Informer()
-	factory.Core().V1().Secrets().Informer()
-	factory.Core().V1().Events().Informer()
-	factory.Core().V1().PersistentVolumeClaims().Informer()
-	factory.Core().V1().PersistentVolumes().Informer()
-	factory.Apps().V1().Deployments().Informer()
-	factory.Apps().V1().DaemonSets().Informer()
-	factory.Apps().V1().StatefulSets().Informer()
-	factory.Apps().V1().ReplicaSets().Informer()
-	factory.Networking().V1().Ingresses().Informer()
-	factory.Batch().V1().Jobs().Informer()
-	factory.Batch().V1().CronJobs().Informer()
-	factory.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
-	factory.Storage().V1().StorageClasses().Informer()
-	factory.Policy().V1().PodDisruptionBudgets().Informer()
+	cfg := k8score.CacheConfig{
+		Client:        client,
+		ResourceTypes: enabled,
+		// No deferred types for tests — all sync immediately
+		DeferredTypes: map[string]bool{},
+	}
 
-	factory.Start(stopCh)
-	factory.WaitForCacheSync(stopCh)
+	core, err := k8score.NewResourceCache(cfg)
+	if err != nil {
+		return err
+	}
 
 	initialSyncComplete = true
 
-	deferredSynced := make(map[string]bool)
-	for k := range deferredResources {
-		deferredSynced[k] = true
-	}
-	deferredDone := make(chan struct{})
-	close(deferredDone)
-
 	resourceCache = &ResourceCache{
-		factory:          factory,
-		changes:          changes,
-		stopCh:           stopCh,
-		secretsEnabled:   true,
-		enabledResources: enabled,
-		deferredSynced:   deferredSynced,
-		deferredDone:     deferredDone,
+		ResourceCache:  core,
+		secretsEnabled: true,
 	}
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.

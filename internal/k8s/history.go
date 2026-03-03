@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -14,10 +14,10 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-// Type aliases - these types are defined in the timeline package
-type OwnerInfo = timeline.OwnerInfo
-type DiffInfo = timeline.DiffInfo
-type FieldChange = timeline.FieldChange
+// Type aliases — canonical definitions live in pkg/k8score.
+type OwnerInfo = k8score.OwnerInfo
+type DiffInfo = k8score.DiffInfo
+type FieldChange = k8score.FieldChange
 
 // ComputeDiff computes the diff between old and new objects based on kind
 // Returns nil if no meaningful changes detected or kind not supported

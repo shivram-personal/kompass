@@ -5,7 +5,14 @@ package timeline
 
 import (
 	"time"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
+
+// Type aliases — canonical definitions live in pkg/k8score.
+type OwnerInfo = k8score.OwnerInfo
+type DiffInfo = k8score.DiffInfo
+type FieldChange = k8score.FieldChange
 
 // EventSource identifies where an event originated
 type EventSource string
@@ -96,24 +103,7 @@ type TimelineEvent struct {
 	CorrelationID string `json:"correlationId,omitempty"`
 }
 
-// OwnerInfo represents the owner/controller of a resource
-type OwnerInfo struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-}
-
-// DiffInfo contains the diff details for an update operation
-type DiffInfo struct {
-	Fields  []FieldChange `json:"fields"`
-	Summary string        `json:"summary"`
-}
-
-// FieldChange represents a single field that changed
-type FieldChange struct {
-	Path     string `json:"path"`
-	OldValue any    `json:"oldValue"`
-	NewValue any    `json:"newValue"`
-}
+// OwnerInfo, DiffInfo, FieldChange are type aliases defined above — see pkg/k8score.
 
 // IsManaged returns true if this resource is managed by another (RS, Pod, Event)
 func (e *TimelineEvent) IsManaged() bool {
