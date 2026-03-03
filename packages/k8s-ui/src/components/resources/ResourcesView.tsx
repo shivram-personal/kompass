@@ -1966,7 +1966,7 @@ export function ResourcesView({
     isSyncingFromURL.current = true
 
     // Re-read URL params and update state
-    const newKind = getInitialKindFromURL()
+    const newKind = getInitialKindFromURL(basePath)
     const newFilters = getInitialFiltersFromURL()
 
     // Update kind if it changed
