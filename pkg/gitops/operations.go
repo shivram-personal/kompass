@@ -23,8 +23,8 @@ const (
 	ArgoSuspendedSelfHealAnnotation = "skyhook.io/suspended-selfheal"
 )
 
-// ArgoAppGVR is the GVR for ArgoCD Application resources.
-var ArgoAppGVR = schema.GroupVersionResource{
+// argoAppGVR is the GVR for ArgoCD Application resources.
+var argoAppGVR = schema.GroupVersionResource{
 	Group:    "argoproj.io",
 	Version:  "v1alpha1",
 	Resource: "applications",
@@ -36,8 +36,8 @@ type FluxKindEntry struct {
 	Kind string // e.g. "GitRepository"
 }
 
-// FluxKinds is the authoritative map of supported FluxCD resource kinds.
-var FluxKinds = map[string]FluxKindEntry{
+// fluxKinds is the authoritative map of supported FluxCD resource kinds.
+var fluxKinds = map[string]FluxKindEntry{
 	"gitrepository":  {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "gitrepositories"}, Kind: "GitRepository"},
 	"ocirepository":  {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "ocirepositories"}, Kind: "OCIRepository"},
 	"helmrepository": {GVR: schema.GroupVersionResource{Group: "source.toolkit.fluxcd.io", Version: "v1", Resource: "helmrepositories"}, Kind: "HelmRepository"},
@@ -51,19 +51,19 @@ func ResolveFluxKind(kind string) (FluxKindEntry, error) {
 	k := strings.ToLower(kind)
 
 	// Direct match on singular key
-	if entry, ok := FluxKinds[k]; ok {
+	if entry, ok := fluxKinds[k]; ok {
 		return entry, nil
 	}
 
 	// Match on plural resource name or canonical Kind (case-insensitive)
-	for _, entry := range FluxKinds {
+	for _, entry := range fluxKinds {
 		if strings.ToLower(entry.GVR.Resource) == k || strings.ToLower(entry.Kind) == k {
 			return entry, nil
 		}
 	}
 
-	supported := make([]string, 0, len(FluxKinds))
-	for k := range FluxKinds {
+	supported := make([]string, 0, len(fluxKinds))
+	for k := range fluxKinds {
 		supported = append(supported, k)
 	}
 	return FluxKindEntry{}, fmt.Errorf("unknown FluxCD kind %q: supported kinds are %s", kind, strings.Join(supported, ", "))
@@ -92,7 +92,7 @@ type SourceRef struct {
 
 // SyncArgoApp triggers a sync operation on an ArgoCD Application.
 func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (OperationResult, error) {
-	app, err := dynClient.Resource(ArgoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
@@ -123,7 +123,7 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 		},
 	}
 
-	if err := mergePatch(ctx, dynClient, ArgoAppGVR, namespace, name, patch); err != nil {
+	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
 		return OperationResult{}, fmt.Errorf("failed to sync Application %s/%s: %w", namespace, name, err)
 	}
 
@@ -140,7 +140,7 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 
 // SetArgoAutoSync enables or disables automated sync on an ArgoCD Application.
 func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace, name string, enable bool) (OperationResult, error) {
-	app, err := dynClient.Resource(ArgoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
@@ -213,7 +213,7 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 		}
 	}
 
-	if err := mergePatch(ctx, dynClient, ArgoAppGVR, namespace, name, patch); err != nil {
+	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
 		return OperationResult{}, fmt.Errorf("failed to %s Application %s/%s: %w", operation, namespace, name, err)
 	}
 
@@ -238,7 +238,7 @@ func RefreshArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace,
 		},
 	}
 
-	if err := mergePatch(ctx, dynClient, ArgoAppGVR, namespace, name, patch); err != nil {
+	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
 		}
@@ -258,7 +258,7 @@ func RefreshArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace,
 
 // TerminateArgoSync terminates an ongoing sync operation on an ArgoCD Application.
 func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (OperationResult, error) {
-	app, err := dynClient.Resource(ArgoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
@@ -272,7 +272,7 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	}
 
 	patchBytes := []byte(`[{"op": "remove", "path": "/operation"}]`)
-	_, err = dynClient.Resource(ArgoAppGVR).Namespace(namespace).Patch(
+	_, err = dynClient.Resource(argoAppGVR).Namespace(namespace).Patch(
 		ctx, name, types.JSONPatchType, patchBytes, metav1.PatchOptions{},
 	)
 	if err != nil {

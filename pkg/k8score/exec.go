@@ -14,6 +14,9 @@ import (
 // NewPodExecExecutor creates an SPDY executor for running commands in a pod container.
 // The caller uses the returned Executor to call StreamWithContext.
 func NewPodExecExecutor(client kubernetes.Interface, config *rest.Config, namespace, podName, containerName string, command []string, tty bool) (remotecommand.Executor, error) {
+	if client == nil {
+		return nil, fmt.Errorf("kubernetes client not initialized")
+	}
 	req := client.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).

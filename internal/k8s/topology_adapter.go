@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -159,17 +160,7 @@ func (a *topologyResourceProvider) Nodes() ([]*corev1.Node, error) {
 }
 
 func (a *topologyResourceProvider) GetResourceStatus(kind, namespace, name string) *topology.ResourceStatus {
-	rs := a.cache.GetResourceStatus(kind, namespace, name)
-	if rs == nil {
-		return nil
-	}
-	return &topology.ResourceStatus{
-		Status:  rs.Status,
-		Ready:   rs.Ready,
-		Message: rs.Message,
-		Summary: rs.Summary,
-		Issue:   rs.Issue,
-	}
+	return a.cache.GetResourceStatus(kind, namespace, name)
 }
 
 // topologyDynamicProvider adapts *DynamicResourceCache + *ResourceDiscovery to topology.DynamicProvider.
@@ -198,8 +189,8 @@ func (a *topologyDynamicProvider) GetWatchedResources() []schema.GroupVersionRes
 	return a.dynCache.GetWatchedResources()
 }
 
-func (a *topologyDynamicProvider) GetDiscoveryStatus() string {
-	return string(a.dynCache.GetDiscoveryStatus())
+func (a *topologyDynamicProvider) GetDiscoveryStatus() k8score.CRDDiscoveryStatus {
+	return a.dynCache.GetDiscoveryStatus()
 }
 
 func (a *topologyDynamicProvider) GetGVR(kindOrName string) (schema.GroupVersionResource, bool) {

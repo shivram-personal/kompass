@@ -11,6 +11,8 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // NodeKind represents the type of a topology node
@@ -290,7 +292,7 @@ type DynamicProvider interface {
 	List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
 	Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
 	GetWatchedResources() []schema.GroupVersionResource
-	GetDiscoveryStatus() string
+	GetDiscoveryStatus() k8score.CRDDiscoveryStatus
 	GetGVR(kindOrName string) (schema.GroupVersionResource, bool)
 	GetGVRWithGroup(kindOrName, group string) (schema.GroupVersionResource, bool)
 	GetKindForGVR(gvr schema.GroupVersionResource) string

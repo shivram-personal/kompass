@@ -2,8 +2,9 @@ package timeline
 
 import "sort"
 
-// groupEvents groups events according to the specified mode.
-func groupEvents(events []TimelineEvent, mode GroupingMode) []EventGroup {
+// GroupEvents groups events according to the specified mode.
+// Exported so pkg consumers (e.g. SQLite store) can share the same grouping logic.
+func GroupEvents(events []TimelineEvent, mode GroupingMode) []EventGroup {
 	switch mode {
 	case GroupByOwner:
 		return groupByOwner(events)

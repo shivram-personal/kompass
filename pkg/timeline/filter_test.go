@@ -404,7 +404,7 @@ func TestGroupEvents_ByNamespace(t *testing.T) {
 		{ID: "3", Kind: "Deployment", Namespace: "default", Name: "deploy-3", Timestamp: time.Now()},
 	}
 
-	groups := groupEvents(events, GroupByNamespace)
+	groups := GroupEvents(events, GroupByNamespace)
 
 	if len(groups) != 2 {
 		t.Errorf("Expected 2 groups, got %d", len(groups))
@@ -435,7 +435,7 @@ func TestGroupEvents_ByApp(t *testing.T) {
 		{ID: "4", Kind: "ConfigMap", Namespace: "default", Name: "config-1", Timestamp: time.Now()}, // no app label
 	}
 
-	groups := groupEvents(events, GroupByApp)
+	groups := GroupEvents(events, GroupByApp)
 
 	if len(groups) != 3 {
 		t.Errorf("Expected 3 groups, got %d", len(groups))

@@ -21,6 +21,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/topology"
 )
 
 // DebugEvents enables verbose event debugging when true (set via --debug-events flag)
@@ -666,14 +667,8 @@ func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, na
 	return u, nil
 }
 
-// ResourceStatus holds status information for a resource
-type ResourceStatus struct {
-	Status  string
-	Ready   string
-	Message string
-	Summary string
-	Issue   string
-}
+// ResourceStatus is an alias for topology.ResourceStatus so both packages share one definition.
+type ResourceStatus = topology.ResourceStatus
 
 // GetResourceStatus looks up a resource and returns its status
 func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *ResourceStatus {

@@ -24,6 +24,9 @@ type EphemeralContainerOptions struct {
 
 // CreateEphemeralContainer adds an ephemeral debug container to a pod.
 func CreateEphemeralContainer(ctx context.Context, client kubernetes.Interface, opts EphemeralContainerOptions) (*corev1.EphemeralContainer, error) {
+	if client == nil {
+		return nil, fmt.Errorf("kubernetes client not initialized")
+	}
 	if opts.Image == "" {
 		opts.Image = DefaultDebugImage
 	}
@@ -65,6 +68,9 @@ func CreateEphemeralContainer(ctx context.Context, client kubernetes.Interface, 
 
 // WaitForEphemeralContainer polls until an ephemeral container reaches Running state or timeout.
 func WaitForEphemeralContainer(ctx context.Context, client kubernetes.Interface, namespace, podName, containerName string, timeout time.Duration) error {
+	if client == nil {
+		return fmt.Errorf("kubernetes client not initialized")
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		pod, err := client.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})

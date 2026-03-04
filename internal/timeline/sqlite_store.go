@@ -13,6 +13,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
+
+	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 )
 
 // SQLiteStore is a persistent implementation of EventStore using SQLite.
@@ -352,8 +354,8 @@ func (s *SQLiteStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*Tim
 		}, nil
 	}
 
-	// Group events
-	groups := groupEvents(events, opts.GroupBy)
+	// Group events using shared implementation from pkg/timeline
+	groups := pkgtimeline.GroupEvents(events, opts.GroupBy)
 
 	limit := opts.Limit
 	if limit <= 0 {

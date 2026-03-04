@@ -105,9 +105,10 @@ type MetricsHistoryStore struct {
 	lastPodError                 string
 	lastNodeError                string
 
-	stopCh   chan struct{}
-	stopOnce sync.Once
-	wg       sync.WaitGroup
+	stopCh    chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
+	wg        sync.WaitGroup
 }
 
 type podMetricsBuffer struct {
@@ -168,11 +169,13 @@ func NewMetricsHistoryStore(client dynamic.Interface) *MetricsHistoryStore {
 	}
 }
 
-// Start begins background polling. Safe to call only once.
+// Start begins background polling. Idempotent: subsequent calls are no-ops.
 func (s *MetricsHistoryStore) Start() {
-	s.wg.Add(1)
-	go s.pollLoop()
-	log.Println("Metrics history collection started")
+	s.startOnce.Do(func() {
+		s.wg.Add(1)
+		go s.pollLoop()
+		log.Println("Metrics history collection started")
+	})
 }
 
 // Stop halts background polling and waits for the goroutine to exit.

@@ -151,7 +151,7 @@ func (m *MemoryStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*Tim
 	}
 
 	// Group events using shared function
-	groups := groupEvents(events, opts.GroupBy)
+	groups := GroupEvents(events, opts.GroupBy)
 
 	// Apply limit to groups
 	limit := opts.Limit

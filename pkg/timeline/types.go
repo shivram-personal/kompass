@@ -161,8 +161,7 @@ type TimelineMeta struct {
 	TotalEvents int    `json:"totalEvents"`
 	GroupCount  int    `json:"groupCount"`
 	QueryTimeMs int64  `json:"queryTimeMs"`
-	HasMore     bool   `json:"hasMore"` // For pagination
-	NextCursor  string `json:"nextCursor,omitempty"`
+	HasMore bool `json:"hasMore"` // For pagination
 }
 
 // FilterPreset defines a named filter configuration

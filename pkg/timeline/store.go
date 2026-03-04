@@ -56,9 +56,8 @@ type QueryOptions struct {
 	FilterPreset string
 
 	// Pagination
-	Limit  int    // Max results (default 200, max 1000)
-	Offset int    // Skip first N results
-	Cursor string // Cursor for keyset pagination (more efficient than offset)
+	Limit  int // Max results (default 200, max 1000)
+	Offset int // Skip first N results
 
 	// Grouping
 	GroupBy GroupingMode // How to group results

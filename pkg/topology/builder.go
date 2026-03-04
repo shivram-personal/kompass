@@ -3482,7 +3482,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// Add CRD discovery status
 	if b.dynamic != nil {
-		topo.CRDDiscoveryStatus = b.dynamic.GetDiscoveryStatus()
+		topo.CRDDiscoveryStatus = string(b.dynamic.GetDiscoveryStatus())
 	}
 
 	return truncateTopologyIfNeeded(topo, opts), nil
@@ -4265,7 +4265,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 
 	// Add CRD discovery status
 	if b.dynamic != nil {
-		topo.CRDDiscoveryStatus = b.dynamic.GetDiscoveryStatus()
+		topo.CRDDiscoveryStatus = string(b.dynamic.GetDiscoveryStatus())
 	}
 
 	return truncateTopologyIfNeeded(topo, opts), nil

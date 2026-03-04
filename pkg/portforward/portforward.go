@@ -58,7 +58,11 @@ func FindPodForService(ctx context.Context, client kubernetes.Interface, namespa
 		return "", fmt.Errorf("failed to get service: %w", err)
 	}
 
-	if svc.Spec.Selector == nil || len(svc.Spec.Selector) == 0 {
+	if svc.Spec.ClusterIP == "None" || svc.Spec.ClusterIP == "" {
+		if len(svc.Spec.Selector) == 0 {
+			return "", fmt.Errorf("headless service %s has no selector", serviceName)
+		}
+	} else if len(svc.Spec.Selector) == 0 {
 		return "", fmt.Errorf("service %s has no selector", serviceName)
 	}
 

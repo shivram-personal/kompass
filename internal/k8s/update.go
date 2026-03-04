@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"log"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -17,6 +18,8 @@ func getWorkloadManager() *k8score.WorkloadManager {
 	var disc *k8score.ResourceDiscovery
 	if d := GetResourceDiscovery(); d != nil {
 		disc = d.ResourceDiscovery
+	} else {
+		log.Printf("[k8s] Warning: resource discovery not initialized; workload operations will fail until cluster is ready")
 	}
 	return k8score.NewWorkloadManager(GetDynamicClient(), disc)
 }

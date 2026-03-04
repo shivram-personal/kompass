@@ -178,8 +178,11 @@ func (m *WorkloadManager) TriggerCronJob(ctx context.Context, namespace, name st
 	}
 
 	jobTemplate, found, err := unstructured.NestedMap(cronJob.Object, "spec", "jobTemplate")
-	if err != nil || !found {
-		return nil, fmt.Errorf("failed to get job template from cronjob: %w", err)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get job template from cronjob %s/%s: %w", namespace, name, err)
+	}
+	if !found {
+		return nil, fmt.Errorf("cronjob %s/%s has no spec.jobTemplate", namespace, name)
 	}
 
 	jobName := fmt.Sprintf("%s-manual-%d", name, time.Now().Unix())
@@ -292,7 +295,7 @@ func (m *WorkloadManager) ScaleWorkload(ctx context.Context, kind, namespace, na
 		return fmt.Errorf("resource discovery not initialized")
 	}
 
-	normalizedKind := NormalizeKind(kind)
+	normalizedKind := NormalizeWorkloadKind(kind)
 	if normalizedKind != "deployments" && normalizedKind != "statefulsets" {
 		return fmt.Errorf("scaling not supported for %s (only deployments and statefulsets)", kind)
 	}
@@ -322,7 +325,7 @@ func (m *WorkloadManager) ListWorkloadRevisions(ctx context.Context, kind, names
 		return nil, fmt.Errorf("resource discovery not initialized")
 	}
 
-	normalizedKind := NormalizeKind(kind)
+	normalizedKind := NormalizeWorkloadKind(kind)
 
 	workloadGVR, ok := m.discovery.GetGVR(normalizedKind)
 	if !ok {
@@ -492,7 +495,7 @@ func (m *WorkloadManager) RollbackWorkload(ctx context.Context, kind, namespace,
 		return fmt.Errorf("resource discovery not initialized")
 	}
 
-	normalizedKind := NormalizeKind(kind)
+	normalizedKind := NormalizeWorkloadKind(kind)
 
 	workloadGVR, ok := m.discovery.GetGVR(normalizedKind)
 	if !ok {
@@ -648,8 +651,8 @@ func (m *WorkloadManager) rollbackControllerRevision(ctx context.Context, normal
 	return nil
 }
 
-// NormalizeKind converts various kind formats to the plural lowercase form.
-func NormalizeKind(kind string) string {
+// NormalizeWorkloadKind converts various kind formats to the plural lowercase form.
+func NormalizeWorkloadKind(kind string) string {
 	switch kind {
 	case "Deployment", "deployment", "deployments":
 		return "deployments"
