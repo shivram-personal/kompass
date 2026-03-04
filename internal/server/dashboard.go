@@ -16,7 +16,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/topology"
+	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
@@ -876,7 +876,7 @@ func (s *Server) getDashboardTopologySummary(namespaces []string) DashboardTopol
 	// Build topology with the requested namespace filter
 	opts := topology.DefaultBuildOptions()
 	opts.Namespaces = namespaces
-	builder := topology.NewBuilder()
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	topo, err := builder.Build(opts)
 	if err != nil {
 		return DashboardTopologySummary{}

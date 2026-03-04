@@ -5,30 +5,115 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+
+	pkgtimeline "github.com/skyhook-io/radar/pkg/timeline"
 )
 
-// StoreType identifies the storage backend
-type StoreType string
+// Re-export types from pkg/timeline so callers don't need to change imports.
+type (
+	// Core types
+	EventSource      = pkgtimeline.EventSource
+	EventType        = pkgtimeline.EventType
+	HealthState      = pkgtimeline.HealthState
+	GroupingMode     = pkgtimeline.GroupingMode
+	TimelineEvent    = pkgtimeline.TimelineEvent
+	EventGroup       = pkgtimeline.EventGroup
+	TimelineResponse = pkgtimeline.TimelineResponse
+	TimelineMeta     = pkgtimeline.TimelineMeta
+	FilterPreset     = pkgtimeline.FilterPreset
 
+	// Store types
+	EventStore     = pkgtimeline.EventStore
+	QueryOptions   = pkgtimeline.QueryOptions
+	StoreStats     = pkgtimeline.StoreStats
+	CompiledFilter = pkgtimeline.CompiledFilter
+
+	// Config types
+	StoreType   = pkgtimeline.StoreType
+	StoreConfig = pkgtimeline.StoreConfig
+
+	// k8score alias chain
+	OwnerInfo   = pkgtimeline.OwnerInfo
+	DiffInfo    = pkgtimeline.DiffInfo
+	FieldChange = pkgtimeline.FieldChange
+)
+
+// Re-export constants from pkg/timeline.
 const (
-	StoreTypeMemory StoreType = "memory"
-	StoreTypeSQLite StoreType = "sqlite"
+	// EventSource constants
+	SourceInformer  = pkgtimeline.SourceInformer
+	SourceK8sEvent  = pkgtimeline.SourceK8sEvent
+	SourceHistorical = pkgtimeline.SourceHistorical
+
+	// EventType constants
+	EventTypeAdd     = pkgtimeline.EventTypeAdd
+	EventTypeUpdate  = pkgtimeline.EventTypeUpdate
+	EventTypeDelete  = pkgtimeline.EventTypeDelete
+	EventTypeNormal  = pkgtimeline.EventTypeNormal
+	EventTypeWarning = pkgtimeline.EventTypeWarning
+
+	// HealthState constants
+	HealthHealthy   = pkgtimeline.HealthHealthy
+	HealthDegraded  = pkgtimeline.HealthDegraded
+	HealthUnhealthy = pkgtimeline.HealthUnhealthy
+	HealthUnknown   = pkgtimeline.HealthUnknown
+
+	// GroupingMode constants
+	GroupByNone      = pkgtimeline.GroupByNone
+	GroupByOwner     = pkgtimeline.GroupByOwner
+	GroupByApp       = pkgtimeline.GroupByApp
+	GroupByNamespace = pkgtimeline.GroupByNamespace
+
+	// StoreType constants
+	StoreTypeMemory = pkgtimeline.StoreTypeMemory
+	StoreTypeSQLite = pkgtimeline.StoreTypeSQLite
 )
 
-// StoreConfig holds configuration for the event store
-type StoreConfig struct {
-	Type    StoreType
-	Path    string // For SQLite: database file path
-	MaxSize int    // For Memory: ring buffer size
+// Re-export functions from pkg/timeline.
+
+func DefaultFilterPresets() map[string]FilterPreset { return pkgtimeline.DefaultFilterPresets() }
+func DefaultQueryOptions() QueryOptions             { return pkgtimeline.DefaultQueryOptions() }
+func DefaultStoreConfig() StoreConfig               { return pkgtimeline.DefaultStoreConfig() }
+func CompileFilter(preset *FilterPreset) (*CompiledFilter, error) {
+	return pkgtimeline.CompileFilter(preset)
+}
+func ResourceKey(kind, namespace, name string) string {
+	return pkgtimeline.ResourceKey(kind, namespace, name)
 }
 
-// DefaultStoreConfig returns sensible defaults
-func DefaultStoreConfig() StoreConfig {
-	return StoreConfig{
-		Type:    StoreTypeMemory,
-		MaxSize: 1000,
-	}
+// Converter functions.
+func NewInformerEvent(kind, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
+	return pkgtimeline.NewInformerEvent(kind, namespace, name, uid, operation, healthState, diff, owner, labels, createdAt)
 }
+func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
+	return pkgtimeline.NewK8sEventTimelineEvent(event, owner)
+}
+func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
+	return pkgtimeline.NewHistoricalEvent(kind, namespace, name, ts, reason, message, healthState, owner, labels)
+}
+func ExtractOwner(obj any) *OwnerInfo       { return pkgtimeline.ExtractOwner(obj) }
+func ExtractLabels(obj any) map[string]string { return pkgtimeline.ExtractLabels(obj) }
+func DetermineHealthState(kind string, obj any) HealthState {
+	return pkgtimeline.DetermineHealthState(kind, obj)
+}
+func OperationToEventType(op string) EventType   { return pkgtimeline.OperationToEventType(op) }
+func EventTypeToOperation(et EventType) string   { return pkgtimeline.EventTypeToOperation(et) }
+func HealthStateToString(hs HealthState) string  { return pkgtimeline.HealthStateToString(hs) }
+func StringToHealthState(s string) HealthState   { return pkgtimeline.StringToHealthState(s) }
+func ToLegacyDiffInfo(d *DiffInfo) *DiffInfo     { return pkgtimeline.ToLegacyDiffInfo(d) }
+
+// Store constructors.
+func NewMemoryStore(maxSize int) *pkgtimeline.MemoryStore { return pkgtimeline.NewMemoryStore(maxSize) }
+func NewSQLiteStore(dbPath string) (*pkgtimeline.SQLiteStore, error) {
+	return pkgtimeline.NewSQLiteStore(dbPath)
+}
+
+// ---------------------------------------------------------------------------
+// Global store singleton
+// ---------------------------------------------------------------------------
 
 var (
 	globalStore     EventStore
@@ -80,8 +165,8 @@ func GetStore() EventStore {
 	return globalStore
 }
 
-// ResetStore stops and clears the event store
-// This must be called before reinitializing when switching contexts
+// ResetStore stops and clears the event store.
+// This must be called before reinitializing when switching contexts.
 func ResetStore() {
 	globalStoreMu.Lock()
 	defer globalStoreMu.Unlock()
@@ -95,8 +180,8 @@ func ResetStore() {
 	globalStoreOnce = sync.Once{}
 }
 
-// ReinitStore reinitializes the event store after a context switch
-// Must call ResetStore first
+// ReinitStore reinitializes the event store after a context switch.
+// Must call ResetStore first.
 func ReinitStore(cfg StoreConfig) error {
 	return InitStore(cfg)
 }

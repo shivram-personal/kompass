@@ -5,8 +5,6 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-
-	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // PodGroup represents a collection of pods grouped by app label or owner
@@ -148,14 +146,14 @@ func ComputePodRestarts(pod *corev1.Pod) int32 {
 }
 
 // CreatePodNode creates a Node for a single pod
-func CreatePodNode(pod *corev1.Pod, cache *k8s.ResourceCache, includeNodeName bool) Node {
+func CreatePodNode(pod *corev1.Pod, provider ResourceProvider, includeNodeName bool) Node {
 	podID := fmt.Sprintf("pod/%s/%s", pod.Namespace, pod.Name)
 	restarts := ComputePodRestarts(pod)
 
-	// Get status issue from cache
+	// Get status issue from provider
 	statusIssue := ""
-	if cache != nil {
-		if resourceStatus := cache.GetResourceStatus("Pod", pod.Namespace, pod.Name); resourceStatus != nil {
+	if provider != nil {
+		if resourceStatus := provider.GetResourceStatus("Pod", pod.Namespace, pod.Name); resourceStatus != nil {
 			statusIssue = resourceStatus.Issue
 		}
 	}
@@ -194,7 +192,7 @@ type PodDetail struct {
 }
 
 // CreatePodGroupNode creates a Node for a group of pods
-func CreatePodGroupNode(group *PodGroup, cache *k8s.ResourceCache) Node {
+func CreatePodGroupNode(group *PodGroup, provider ResourceProvider) Node {
 	podGroupID := fmt.Sprintf("podgroup-%s", strings.ReplaceAll(group.Key, "/", "-"))
 
 	// Determine display name
@@ -214,8 +212,8 @@ func CreatePodGroupNode(group *PodGroup, cache *k8s.ResourceCache) Node {
 
 		// Get pod issue
 		podIssue := ""
-		if cache != nil {
-			if resourceStatus := cache.GetResourceStatus("Pod", pod.Namespace, pod.Name); resourceStatus != nil {
+		if provider != nil {
+			if resourceStatus := provider.GetResourceStatus("Pod", pod.Namespace, pod.Name); resourceStatus != nil {
 				podIssue = resourceStatus.Issue
 				// Use first issue found as group issue
 				if groupStatusIssue == "" && podIssue != "" {

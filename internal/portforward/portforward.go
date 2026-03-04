@@ -1,25 +1,23 @@
 // Package portforward provides shared metrics port-forwarding infrastructure.
 // It is used by both the traffic package (for Caretta/Hubble) and the prometheus
 // package (for resource metrics), breaking what would otherwise be an import cycle.
+//
+// The low-level SPDY primitives (RunPortForward, FindPodForService, FindFreePort)
+// live in pkg/portforward. This package manages the singleton lifecycle and
+// Radar-specific context tracking on top of those primitives.
 package portforward
 
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
-	"net"
-	"net/http"
 	"sync"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
+
+	pfpkg "github.com/skyhook-io/radar/pkg/portforward"
 )
 
 // MetricsPortForward manages port-forwarding to metrics services
@@ -256,91 +254,15 @@ func IsConnectedForContext(contextName string) bool {
 	return metricsPortForward.active && metricsPortForward.contextName == contextName
 }
 
-// runPortForward runs the actual port-forward
 func runPortForward(ctx context.Context, client kubernetes.Interface, config *rest.Config,
 	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{}) error {
-
-	req := client.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(podName).
-		Namespace(namespace).
-		SubResource("portforward").
-		VersionedParams(&corev1.PodPortForwardOptions{
-			Ports: []int32{int32(targetPort)},
-		}, scheme.ParameterCodec)
-
-	transport, upgrader, err := spdy.RoundTripperFor(config)
-	if err != nil {
-		return fmt.Errorf("failed to create round tripper: %w", err)
-	}
-
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", req.URL())
-
-	ports := []string{fmt.Sprintf("%d:%d", localPort, targetPort)}
-
-	pf, err := portforward.New(dialer, ports, stopCh, readyCh, io.Discard, io.Discard)
-	if err != nil {
-		return fmt.Errorf("failed to create port forwarder: %w", err)
-	}
-
-	return pf.ForwardPorts()
+	return pfpkg.RunPortForward(ctx, client, config, namespace, podName, localPort, targetPort, stopCh, readyCh)
 }
 
-// findPodForService finds a running pod backing the given service
 func findPodForService(ctx context.Context, client kubernetes.Interface, namespace, serviceName string) (string, error) {
-	svc, err := client.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("failed to get service: %w", err)
-	}
-
-	if svc.Spec.ClusterIP == "None" || svc.Spec.ClusterIP == "" {
-		if svc.Spec.Selector == nil || len(svc.Spec.Selector) == 0 {
-			return "", fmt.Errorf("headless service has no selector")
-		}
-	} else if svc.Spec.Selector == nil || len(svc.Spec.Selector) == 0 {
-		return "", fmt.Errorf("service has no selector")
-	}
-
-	var selector string
-	for k, v := range svc.Spec.Selector {
-		if selector != "" {
-			selector += ","
-		}
-		selector += k + "=" + v
-	}
-
-	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: selector,
-	})
-	if err != nil {
-		return "", fmt.Errorf("failed to list pods: %w", err)
-	}
-
-	if len(pods.Items) == 0 {
-		return "", fmt.Errorf("no pods found matching selector")
-	}
-
-	for _, pod := range pods.Items {
-		if pod.Status.Phase == corev1.PodRunning {
-			return pod.Name, nil
-		}
-	}
-
-	return "", fmt.Errorf("no running pod found for service %s", serviceName)
+	return pfpkg.FindPodForService(ctx, client, namespace, serviceName)
 }
 
-// findFreePort finds an available local port
 func findFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
-	if err != nil {
-		return 0, err
-	}
-
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
-	}
-	defer l.Close()
-
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return pfpkg.FindFreePort()
 }

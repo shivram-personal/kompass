@@ -1,6 +1,17 @@
 package topology
 
-import "slices"
+import (
+	"slices"
+
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
 
 // NodeKind represents the type of a topology node
 //
@@ -222,4 +233,49 @@ type ResourceWithRelationships struct {
 	// Typed as any to avoid an import cycle (actual type: *server.SecretCertificateInfo).
 	// Only populated for kubernetes.io/tls secrets with valid PEM certificate data.
 	CertificateInfo any `json:"certificateInfo,omitempty"`
+}
+
+// ResourceStatus holds computed status for a resource.
+type ResourceStatus struct {
+	Status  string
+	Ready   string
+	Message string
+	Summary string
+	Issue   string
+}
+
+// ResourceProvider is the data source for the topology builder.
+// internal/k8s.ResourceCache implements this via topologyAdapter.
+type ResourceProvider interface {
+	Pods() ([]*corev1.Pod, error)
+	Services() ([]*corev1.Service, error)
+	Deployments() ([]*appsv1.Deployment, error)
+	DaemonSets() ([]*appsv1.DaemonSet, error)
+	StatefulSets() ([]*appsv1.StatefulSet, error)
+	ReplicaSets() ([]*appsv1.ReplicaSet, error)
+	Jobs() ([]*batchv1.Job, error)
+	CronJobs() ([]*batchv1.CronJob, error)
+	Ingresses() ([]*networkingv1.Ingress, error)
+	ConfigMaps() ([]*corev1.ConfigMap, error)
+	Secrets() ([]*corev1.Secret, error)
+	PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error)
+	PersistentVolumes() ([]*corev1.PersistentVolume, error)
+	HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error)
+	PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error)
+	Nodes() ([]*corev1.Node, error)
+	// GetResourceStatus returns health status for a resource; nil if unknown.
+	GetResourceStatus(kind, namespace, name string) *ResourceStatus
+}
+
+// DynamicProvider adds CRD/dynamic resource support (pass nil to skip CRD nodes).
+// It combines DynamicResourceCache + ResourceDiscovery methods.
+type DynamicProvider interface {
+	List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
+	Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error)
+	GetWatchedResources() []schema.GroupVersionResource
+	GetDiscoveryStatus() string
+	GetGVR(kindOrName string) (schema.GroupVersionResource, bool)
+	GetGVRWithGroup(kindOrName, group string) (schema.GroupVersionResource, bool)
+	GetKindForGVR(gvr schema.GroupVersionResource) string
+	IsCRD(kind string) bool
 }

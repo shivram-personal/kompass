@@ -8,9 +8,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	aicontext "github.com/skyhook-io/radar/internal/ai/context"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/topology"
+	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
 func registerResources(server *mcp.Server) {
@@ -59,7 +59,7 @@ func handleResourceHealth(ctx context.Context, req *mcp.ReadResourceRequest) (*m
 
 func handleResourceTopology(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	opts := topology.DefaultBuildOptions()
-	builder := topology.NewBuilder()
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	topo, err := builder.Build(opts)
 	if err != nil {
 		return textResource("cluster://topology", `{"error":"`+err.Error()+`"}`), nil

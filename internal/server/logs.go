@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	corev1 "k8s.io/api/core/v1"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // LogsResponse is the response for non-streaming logs
@@ -138,21 +138,13 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Build log options
-	opts := &corev1.PodLogOptions{
-		Container:  container,
-		Follow:     true,
-		TailLines:  &tailLines,
-		Previous:   previous,
-		Timestamps: true,
-	}
-	if sinceSeconds != nil {
-		opts.SinceSeconds = sinceSeconds
-	}
-
-	// Get log stream
-	req := client.CoreV1().Pods(namespace).GetLogs(podName, opts)
-	stream, err := req.Stream(r.Context())
+	stream, err := k8score.GetContainerLogs(r.Context(), client, namespace, podName, container, k8score.LogOptions{
+		TailLines:    &tailLines,
+		SinceSeconds: sinceSeconds,
+		Previous:     previous,
+		Timestamps:   true,
+		Follow:       true,
+	})
 	if err != nil {
 		sendSSEError(w, flusher, fmt.Sprintf("Failed to open log stream: %v", err))
 		return
@@ -212,18 +204,12 @@ func (s *Server) fetchContainerLogs(ctx context.Context, namespace, podName, con
 		return "", fmt.Errorf("kubernetes client not available")
 	}
 
-	opts := &corev1.PodLogOptions{
-		Container:  container,
-		TailLines:  &tailLines,
-		Previous:   previous,
-		Timestamps: true,
-	}
-	if sinceSeconds != nil {
-		opts.SinceSeconds = sinceSeconds
-	}
-
-	req := client.CoreV1().Pods(namespace).GetLogs(podName, opts)
-	stream, err := req.Stream(ctx)
+	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, container, k8score.LogOptions{
+		TailLines:    &tailLines,
+		SinceSeconds: sinceSeconds,
+		Previous:     previous,
+		Timestamps:   true,
+	})
 	if err != nil {
 		return "", err
 	}

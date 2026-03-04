@@ -7,8 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	authv1 "k8s.io/api/authorization/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // clusterScopedResources are K8s resources that exist at cluster scope (not namespaced).
@@ -184,46 +183,13 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 }
 
 // canI checks if the current user/service account can perform an action.
-// The group parameter specifies the API group (empty string for core resources like pods, secrets).
-// Returns (allowed, apiErr) where apiErr=true means the API call itself failed
-// (distinct from RBAC denial where allowed=false, apiErr=false).
+// Returns (allowed, apiErr) — wraps k8score.CanI with the singleton client.
 func canI(ctx context.Context, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
-	// Fast path: bail if context already canceled. This prevents queued
-	// goroutines from starting new (serialized) exec plugin invocations
-	// after the parent context is canceled.
 	if ctx.Err() != nil {
 		logTiming("   [caps] canI(%s %s) skipped: context canceled", verb, resource)
 		return false, true
 	}
-
-	k8sClient := GetClient()
-	if k8sClient == nil {
-		log.Printf("Warning: K8s client nil in canI check for %s %s", verb, resource)
-		return false, true
-	}
-
-	review := &authv1.SelfSubjectAccessReview{
-		Spec: authv1.SelfSubjectAccessReviewSpec{
-			ResourceAttributes: &authv1.ResourceAttributes{
-				Namespace: namespace, // Empty = cluster-wide
-				Group:     group,     // API group (empty = core)
-				Verb:      verb,
-				Resource:  resource,
-			},
-		},
-	}
-
-	result, err := k8sClient.AuthorizationV1().SelfSubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
-	if err != nil {
-		// Don't log warnings when the context was canceled (e.g., shutdown or
-		// failed connectivity check) — these aren't real RBAC failures.
-		if ctx.Err() == nil {
-			log.Printf("Warning: SelfSubjectAccessReview failed for %s %s: %v", verb, resource, err)
-		}
-		return false, true
-	}
-
-	return result.Status.Allowed, false
+	return k8score.CanI(ctx, GetClient(), namespace, group, resource, verb)
 }
 
 // GetCachedCapabilities returns the cached capabilities without triggering

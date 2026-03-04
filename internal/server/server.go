@@ -30,7 +30,7 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/topology"
+	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
 )
@@ -509,7 +509,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		opts.ViewMode = topology.ViewModeTraffic
 	}
 
-	builder := topology.NewBuilder()
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	topo, err := builder.Build(opts)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
@@ -921,7 +921,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		// Get relationships from cached topology
 		var relationships *topology.Relationships
 		if cachedTopo := s.broadcaster.GetCachedTopology(); cachedTopo != nil {
-			relationships = topology.GetRelationships(kind, namespace, name, cachedTopo)
+			relationships = topology.GetRelationships(kind, namespace, name, cachedTopo, nil, nil)
 		}
 
 		s.writeJSON(w, topology.ResourceWithRelationships{
@@ -1077,7 +1077,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// Get relationships from cached topology
 	var relationships *topology.Relationships
 	if cachedTopo := s.broadcaster.GetCachedTopology(); cachedTopo != nil {
-		relationships = topology.GetRelationships(kind, namespace, name, cachedTopo)
+		relationships = topology.GetRelationships(kind, namespace, name, cachedTopo, nil, nil)
 	}
 
 	// Return resource with relationships

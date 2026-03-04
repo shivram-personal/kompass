@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // WorkloadPodInfo contains basic info about a pod for the UI
@@ -271,18 +272,12 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 
 // streamPodLogs streams logs from a single pod/container to the log channel
 func streamPodLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, logCh chan<- workloadLogEntry) {
-	opts := &corev1.PodLogOptions{
-		Container:  containerName,
-		Follow:     true,
-		TailLines:  &tailLines,
-		Timestamps: true,
-	}
-	if sinceSeconds != nil {
-		opts.SinceSeconds = sinceSeconds
-	}
-
-	req := client.CoreV1().Pods(namespace).GetLogs(podName, opts)
-	stream, err := req.Stream(ctx)
+	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
+		TailLines:    &tailLines,
+		SinceSeconds: sinceSeconds,
+		Timestamps:   true,
+		Follow:       true,
+	})
 	if err != nil {
 		log.Printf("[workload-logs] Failed to stream logs for %s/%s: %v", podName, containerName, err)
 		return
@@ -458,17 +453,11 @@ func collectLogsFromPods(ctx context.Context, client *kubernetes.Clientset, name
 
 // fetchPodContainerLogs fetches logs for a single pod/container
 func fetchPodContainerLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64) []workloadLogEntry {
-	opts := &corev1.PodLogOptions{
-		Container:  containerName,
-		TailLines:  &tailLines,
-		Timestamps: true,
-	}
-	if sinceSeconds != nil {
-		opts.SinceSeconds = sinceSeconds
-	}
-
-	req := client.CoreV1().Pods(namespace).GetLogs(podName, opts)
-	stream, err := req.Stream(ctx)
+	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, containerName, k8score.LogOptions{
+		TailLines:    &tailLines,
+		SinceSeconds: sinceSeconds,
+		Timestamps:   true,
+	})
 	if err != nil {
 		log.Printf("[workload-logs] Failed to get logs for %s/%s: %v", podName, containerName, err)
 		return nil

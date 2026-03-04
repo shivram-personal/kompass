@@ -4,19 +4,15 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/labels"
-
-	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // resolveAPIGroup returns the API group for a resource kind using resource discovery.
 // Returns empty string for core K8s types (pods, services, etc.).
-func resolveAPIGroup(kind string) string {
-	discovery := k8s.GetResourceDiscovery()
-	if discovery == nil {
+func resolveAPIGroup(kind string, dp DynamicProvider) string {
+	if dp == nil {
 		return ""
 	}
-	gvr, ok := discovery.GetGVR(strings.ToLower(kind))
+	gvr, ok := dp.GetGVR(strings.ToLower(kind))
 	if !ok {
 		return ""
 	}
@@ -24,11 +20,11 @@ func resolveAPIGroup(kind string) string {
 }
 
 // enrichRef sets the API group on a ResourceRef for CRD types.
-func enrichRef(ref *ResourceRef) {
+func enrichRef(ref *ResourceRef, dp DynamicProvider) {
 	if ref == nil {
 		return
 	}
-	ref.Group = resolveAPIGroup(ref.Kind)
+	ref.Group = resolveAPIGroup(ref.Kind, dp)
 }
 
 // isRouteKind returns true if the kind is a Gateway API route type.
@@ -44,24 +40,24 @@ func isRouteKind(kindLower string) bool {
 // GetRelationships computes relationships for a specific resource
 // by finding all edges in the topology that involve this resource.
 // The topology should be pre-built and cached for performance.
-func GetRelationships(kind, namespace, name string, topo *Topology) *Relationships {
+func GetRelationships(kind, namespace, name string, topo *Topology, provider ResourceProvider, dp DynamicProvider) *Relationships {
 	if topo == nil {
 		return nil
 	}
 
 	// Build the node ID for this resource (matches format used in builder.go)
-	nodeID := buildNodeID(kind, namespace, name)
+	nodeID := buildNodeID(kind, namespace, name, dp)
 
 	rel := &Relationships{}
 
 	for _, edge := range topo.Edges {
 		if edge.Source == nodeID {
 			// This resource points TO something (outgoing edge)
-			ref := parseNodeID(edge.Target)
+			ref := parseNodeID(edge.Target, dp)
 			if ref == nil {
 				continue
 			}
-			enrichRef(ref)
+			enrichRef(ref, dp)
 
 			switch edge.Type {
 			case EdgeManages:
@@ -103,11 +99,11 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 
 		if edge.Target == nodeID {
 			// Something points TO this resource (incoming edge)
-			ref := parseNodeID(edge.Source)
+			ref := parseNodeID(edge.Source, dp)
 			if ref == nil {
 				continue
 			}
-			enrichRef(ref)
+			enrichRef(ref, dp)
 
 			switch edge.Type {
 			case EdgeManages:
@@ -148,12 +144,12 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 	if kindLower == "deployments" || kindLower == "deployment" {
 		for _, child := range rel.Children {
 			if strings.EqualFold(child.Kind, "ReplicaSet") {
-				childID := buildNodeID(child.Kind, child.Namespace, child.Name)
+				childID := buildNodeID(child.Kind, child.Namespace, child.Name, dp)
 				for _, edge := range topo.Edges {
 					if edge.Source == childID && edge.Type == EdgeManages {
-						podRef := parseNodeID(edge.Target)
+						podRef := parseNodeID(edge.Target, dp)
 						if podRef != nil && strings.EqualFold(podRef.Kind, "Pod") {
-							enrichRef(podRef)
+							enrichRef(podRef, dp)
 							rel.Pods = append(rel.Pods, *podRef)
 						}
 					}
@@ -165,12 +161,12 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 	// Pod → if owner is a ReplicaSet, also show the grandparent Deployment
 	if kindLower == "pods" || kindLower == "pod" {
 		if rel.Owner != nil && strings.EqualFold(rel.Owner.Kind, "ReplicaSet") {
-			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name)
+			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name, dp)
 			for _, edge := range topo.Edges {
 				if edge.Target == ownerID && edge.Type == EdgeManages {
-					deployRef := parseNodeID(edge.Source)
+					deployRef := parseNodeID(edge.Source, dp)
 					if deployRef != nil && strings.EqualFold(deployRef.Kind, "Deployment") {
-						enrichRef(deployRef)
+						enrichRef(deployRef, dp)
 						rel.Deployment = deployRef
 						break
 					}
@@ -179,56 +175,52 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 		}
 	}
 
-	// Storage chain: PVC→PV→StorageClass (direct cache lookups, not topology edges)
-	cache := k8s.GetResourceCache()
-	if cache != nil {
+	// Storage chain: PVC→PV→StorageClass (direct provider lookups, not topology edges)
+	if provider != nil {
 		switch kindLower {
 		case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
-			if pvcLister := cache.PersistentVolumeClaims(); pvcLister != nil {
-				if pvc, pvcErr := pvcLister.PersistentVolumeClaims(namespace).Get(name); pvcErr == nil && pvc.Spec.VolumeName != "" {
+			pvcs, _ := provider.PersistentVolumeClaims()
+			for _, pvc := range pvcs {
+				if pvc.Namespace == namespace && pvc.Name == name && pvc.Spec.VolumeName != "" {
 					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
-					enrichRef(&pvRef)
+					enrichRef(&pvRef, dp)
 					rel.Children = append(rel.Children, pvRef)
+					break
 				}
 			}
 		case "persistentvolume", "persistentvolumes", "pv", "pvs":
-			if pvLister := cache.PersistentVolumes(); pvLister != nil {
-				if pv, pvErr := pvLister.Get(name); pvErr == nil {
+			pvs, _ := provider.PersistentVolumes()
+			for _, pv := range pvs {
+				if pv.Name == name {
 					if pv.Spec.ClaimRef != nil {
 						claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}
-						enrichRef(&claimRef)
+						enrichRef(&claimRef, dp)
 						rel.Consumers = append(rel.Consumers, claimRef)
 					}
 					if pv.Spec.StorageClassName != "" {
 						scRef := ResourceRef{Kind: "StorageClass", Name: pv.Spec.StorageClassName}
-						enrichRef(&scRef)
+						enrichRef(&scRef, dp)
 						rel.ConfigRefs = append(rel.ConfigRefs, scRef)
 					}
+					break
 				}
 			}
 		case "storageclass", "storageclasses", "sc":
-			if pvLister := cache.PersistentVolumes(); pvLister != nil {
-				if pvs, pvErr := pvLister.List(labels.Everything()); pvErr == nil {
-					for _, pv := range pvs {
-						if pv.Spec.StorageClassName == name {
-							pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
-							enrichRef(&pvRef)
-							rel.Children = append(rel.Children, pvRef)
-						}
-					}
+			pvs, _ := provider.PersistentVolumes()
+			for _, pv := range pvs {
+				if pv.Spec.StorageClassName == name {
+					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
+					enrichRef(&pvRef, dp)
+					rel.Children = append(rel.Children, pvRef)
 				}
 			}
 		case "node", "nodes":
-			if podLister := cache.Pods(); podLister != nil {
-				allPods, podErr := podLister.List(labels.Everything())
-				if podErr == nil {
-					for _, pod := range allPods {
-						if pod.Spec.NodeName == name && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
-							podRef := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
-							enrichRef(&podRef)
-							rel.Pods = append(rel.Pods, podRef)
-						}
-					}
+			allPods, _ := provider.Pods()
+			for _, pod := range allPods {
+				if pod.Spec.NodeName == name && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
+					podRef := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
+					enrichRef(&podRef, dp)
+					rel.Pods = append(rel.Pods, podRef)
 				}
 			}
 		}
@@ -248,7 +240,7 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 // buildNodeID constructs a node ID from kind, namespace, and name
 // This must match the format used in builder.go
 // Format: kind/namespace/name (using / since it's not allowed in K8s names)
-func buildNodeID(kind, namespace, name string) string {
+func buildNodeID(kind, namespace, name string, dp DynamicProvider) string {
 	// Normalize kind to match topology builder format
 	k := strings.ToLower(kind)
 
@@ -318,20 +310,35 @@ func buildNodeID(kind, namespace, name string) string {
 
 	if singular, ok := kindMap[k]; ok {
 		k = singular
-	} else if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+	} else if dp != nil {
 		// Fall back to resource discovery for CRDs (e.g., "certificaterequests" → "certificaterequest")
-		if res, found := discovery.GetResource(k); found {
-			k = strings.ToLower(res.Kind)
+		if res, found := getResourceByName(dp, k); found {
+			k = strings.ToLower(res)
 		}
 	}
 
 	return k + "/" + namespace + "/" + name
 }
 
+// getResourceByName looks up a resource kind by its plural name via the DynamicProvider.
+// Returns the Kind string and true if found.
+func getResourceByName(dp DynamicProvider, pluralName string) (string, bool) {
+	// Try GetGVR which accepts kind or resource name
+	gvr, ok := dp.GetGVR(pluralName)
+	if !ok {
+		return "", false
+	}
+	kind := dp.GetKindForGVR(gvr)
+	if kind == "" {
+		return "", false
+	}
+	return kind, true
+}
+
 // parseNodeID extracts kind, namespace, and name from a node ID
 // Returns nil for PodGroup since it's a UI-only concept, not a real K8s resource
 // Format: kind/namespace/name (using / since it's not allowed in K8s names)
-func parseNodeID(nodeID string) *ResourceRef {
+func parseNodeID(nodeID string, dp DynamicProvider) *ResourceRef {
 	// Node IDs are formatted as: kind/namespace/name
 	// e.g., "deployment/default/my-app" or "pod/kube-system/coredns-abc123"
 
@@ -350,14 +357,14 @@ func parseNodeID(nodeID string) *ResourceRef {
 	}
 
 	return &ResourceRef{
-		Kind:      normalizeKind(kind),
+		Kind:      normalizeKind(kind, dp),
 		Namespace: namespace,
 		Name:      name,
 	}
 }
 
 // normalizeKind converts internal kind format to display format
-func normalizeKind(kind string) string {
+func normalizeKind(kind string, dp DynamicProvider) string {
 	kindMap := map[string]string{
 		"pod":         "Pod",
 		"service":     "Service",
@@ -416,9 +423,9 @@ func normalizeKind(kind string) string {
 		return normalized
 	}
 	// Fall back to resource discovery for CRDs (e.g., "certificaterequest" → "CertificateRequest")
-	if discovery := k8s.GetResourceDiscovery(); discovery != nil {
-		if res, found := discovery.GetResource(kind); found {
-			return res.Kind
+	if dp != nil {
+		if k, found := getResourceByName(dp, kind); found {
+			return k
 		}
 	}
 	return kind

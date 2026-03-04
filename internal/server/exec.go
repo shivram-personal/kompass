@@ -12,11 +12,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 var upgrader = websocket.Upgrader{
@@ -157,23 +156,8 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build exec request
-	req := client.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(podName).
-		Namespace(namespace).
-		SubResource("exec").
-		VersionedParams(&corev1.PodExecOptions{
-			Container: container,
-			Command:   []string{shell},
-			Stdin:     true,
-			Stdout:    true,
-			Stderr:    true,
-			TTY:       true,
-		}, scheme.ParameterCodec)
-
 	// Create SPDY executor
-	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
+	exec, err := k8score.NewPodExecExecutor(client, config, namespace, podName, container, []string{shell}, true)
 	if err != nil {
 		sendWSError(conn, fmt.Sprintf("Failed to create executor: %v", err))
 		return

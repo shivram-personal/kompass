@@ -8,6 +8,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 var (
@@ -238,79 +240,11 @@ func checkAutopilotViaAnnotations(ctx context.Context) (bool, bool) {
 	return false, len(pods) > 0
 }
 
-func detectByProviderID(node corev1.Node) string {
-	providerID := node.Spec.ProviderID
-
-	if strings.HasPrefix(providerID, "gce://") || strings.HasPrefix(providerID, "gke://") {
-		return "gke"
-	}
-	if strings.HasPrefix(providerID, "aws://") {
-		return "eks"
-	}
-	if strings.HasPrefix(providerID, "azure://") {
-		return "aks"
-	}
-
-	return "unknown"
-}
-
-func detectByLabels(node corev1.Node) string {
-	if isNodeGKE(node) {
-		return "gke"
-	}
-
-	if _, exists := node.Labels["eks.amazonaws.com/nodegroup"]; exists {
-		return "eks"
-	}
-	if _, exists := node.Labels["eks.amazonaws.com/capacityType"]; exists {
-		return "eks"
-	}
-
-	for label := range node.Labels {
-		if strings.HasPrefix(label, "kubernetes.azure.com/") {
-			return "aks"
-		}
-	}
-
-	if _, exists := node.Labels["node.openshift.io/os_id"]; exists {
-		return "openshift"
-	}
-
-	if _, exists := node.Labels["rke.cattle.io/machine"]; exists {
-		return "rancher"
-	}
-
-	return "unknown"
-}
-
-func detectByNodeName(node corev1.Node) string {
-	name := node.Name
-
-	if strings.Contains(name, "kind-") {
-		return "kind"
-	}
-	if name == "minikube" || strings.HasPrefix(name, "minikube-") {
-		return "minikube"
-	}
-	if name == "docker-desktop" {
-		return "docker-desktop"
-	}
-
-	return "unknown"
-}
-
-func isNodeGKE(node corev1.Node) bool {
-	if _, exists := node.Labels["cloud.google.com/gke-nodepool"]; exists {
-		return true
-	}
-	if _, exists := node.Labels["cloud.google.com/gke-os-distribution"]; exists {
-		return true
-	}
-	if strings.HasPrefix(node.Spec.ProviderID, "gce://") {
-		return true
-	}
-	return false
-}
+// Pure helpers delegate to pkg/k8score for reuse without singletons.
+func detectByProviderID(node corev1.Node) string    { return k8score.DetectByProviderID(node) }
+func detectByLabels(node corev1.Node) string        { return k8score.DetectByLabels(node) }
+func detectByNodeName(node corev1.Node) string      { return k8score.DetectByNodeName(node) }
+func isNodeGKE(node corev1.Node) bool               { return k8score.IsNodeGKE(node) }
 
 func detectPlatformFallback(ctx context.Context) (string, error) {
 	isAutopilot, found := checkAutopilotViaAnnotations(ctx)

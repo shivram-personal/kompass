@@ -8,7 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
-	aicontext "github.com/skyhook-io/radar/internal/ai/context"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 

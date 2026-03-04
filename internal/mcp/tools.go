@@ -14,11 +14,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	aicontext "github.com/skyhook-io/radar/internal/ai/context"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
-	"github.com/skyhook-io/radar/internal/topology"
+	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
 // logToolCall logs an MCP tool invocation with colored formatting for terminal visibility.
@@ -368,13 +368,13 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 		if namespace != "" {
 			opts.Namespaces = []string{namespace}
 		}
-		builder := topology.NewBuilder()
+		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 		topo, err := builder.Build(opts)
 		if err != nil {
 			log.Printf("[mcp] Failed to build topology for relationships %s/%s/%s: %v", kind, namespace, name, err)
 		} else {
 			displayKind := normalizeDisplayKind(kind)
-			if rels := topology.GetRelationships(displayKind, namespace, name, topo); rels != nil {
+			if rels := topology.GetRelationships(displayKind, namespace, name, topo, nil, nil); rels != nil {
 				result["relationships"] = rels
 			}
 		}
@@ -543,7 +543,7 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 		opts.ViewMode = topology.ViewModeTraffic
 	}
 
-	builder := topology.NewBuilder()
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	topo, err := builder.Build(opts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build topology: %w", err)
@@ -1162,7 +1162,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	if namespace != "" {
 		opts.Namespaces = []string{namespace}
 	}
-	builder := topology.NewBuilder()
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	if topo, err := builder.Build(opts); err == nil {
 		d.TopologyNodes = len(topo.Nodes)
 		d.TopologyEdges = len(topo.Edges)
