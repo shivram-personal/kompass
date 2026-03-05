@@ -1,52 +1,58 @@
 import { useState, useCallback, useRef } from 'react'
 
-const MIN_ANIMATION_DURATION = 400 // ms
+const MIN_SPIN_DURATION = 400 // ms
+const SUCCESS_DISPLAY_DURATION = 1200 // ms
+
+type RefreshPhase = 'idle' | 'spinning' | 'success'
 
 /**
- * Hook that ensures a refresh animation runs for a minimum duration,
- * providing visual feedback even when the operation completes immediately.
+ * Hook that provides a three-phase refresh animation:
+ *   idle → spinning → success (checkmark) → idle
  *
  * @param refetchFn - The actual refetch function to call
- * @returns [wrappedRefetch, isAnimating] - A wrapped function and animation state
+ * @returns [wrappedRefetch, phase] - A wrapped function and current animation phase
  */
-export function useRefreshAnimation(refetchFn: () => void | Promise<unknown>): [() => void, boolean] {
-  const [isAnimating, setIsAnimating] = useState(false)
-  const animationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+export function useRefreshAnimation(refetchFn: () => void | Promise<unknown>): [() => void, boolean, RefreshPhase] {
+  const [phase, setPhase] = useState<RefreshPhase>('idle')
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const wrappedRefetch = useCallback(() => {
-    // Clear any existing timeout
-    if (animationTimeoutRef.current) {
-      clearTimeout(animationTimeoutRef.current)
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
     }
 
-    // Start animation
-    setIsAnimating(true)
+    setPhase('spinning')
 
-    // Call the actual refetch
     const result = refetchFn()
-
-    // Ensure minimum animation duration
     const startTime = Date.now()
 
-    const stopAnimation = () => {
+    const showSuccess = () => {
       const elapsed = Date.now() - startTime
-      const remaining = MIN_ANIMATION_DURATION - elapsed
+      const remaining = MIN_SPIN_DURATION - elapsed
+
+      const transitionToSuccess = () => {
+        setPhase('success')
+        timeoutRef.current = setTimeout(() => {
+          setPhase('idle')
+        }, SUCCESS_DISPLAY_DURATION)
+      }
 
       if (remaining > 0) {
-        animationTimeoutRef.current = setTimeout(() => {
-          setIsAnimating(false)
-        }, remaining)
+        timeoutRef.current = setTimeout(transitionToSuccess, remaining)
       } else {
-        setIsAnimating(false)
+        transitionToSuccess()
       }
     }
 
     if (result instanceof Promise) {
-      result.finally(stopAnimation)
+      result.finally(showSuccess)
     } else {
-      stopAnimation()
+      showSuccess()
     }
   }, [refetchFn])
 
-  return [wrappedRefetch, isAnimating]
+  // isAnimating = backward compat (true when not idle)
+  const isAnimating = phase !== 'idle'
+
+  return [wrappedRefetch, isAnimating, phase]
 }

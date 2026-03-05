@@ -57,7 +57,7 @@ export function highlightSearchMatches(
     pattern = escapeRegExp(escapeHtml(query))
   }
   const regex = new RegExp(`(${pattern})`, flags)
-  return escaped.replace(regex, '<mark style="background:rgba(234,179,8,0.4);color:inherit;border-radius:2px;padding:0 1px">$1</mark>')
+  return escaped.replace(regex, '<mark class="log-highlight">$1</mark>')
 }
 
 /**

@@ -19,7 +19,7 @@ interface LogCoreProps {
   entries: LogEntry[]
   isLoading: boolean
   isStreaming: boolean
-  onStartStream: () => void
+  onStartStream?: () => void
   onStopStream: () => void
   onRefresh: () => void
   onDownload: (format: DownloadFormat) => void
@@ -30,9 +30,9 @@ interface LogCoreProps {
 }
 
 const LEVEL_OPTIONS: { level: LogLevel; label: string; color: string; activeColor: string }[] = [
-  { level: 'error', label: 'ERR', color: 'text-red-400', activeColor: 'bg-red-500/20 text-red-400 border-red-500/40' },
-  { level: 'warn', label: 'WARN', color: 'text-yellow-400', activeColor: 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' },
-  { level: 'info', label: 'INFO', color: 'text-blue-400', activeColor: 'bg-blue-500/20 text-blue-400 border-blue-500/40' },
+  { level: 'error', label: 'ERR', color: 'text-red-400', activeColor: 'bg-red-500/30 dark:bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/60 dark:border-red-500/40' },
+  { level: 'warn', label: 'WARN', color: 'text-yellow-400', activeColor: 'bg-yellow-400/30 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/60 dark:border-yellow-500/40' },
+  { level: 'info', label: 'INFO', color: 'text-blue-400', activeColor: 'bg-blue-500/25 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/60 dark:border-blue-500/40' },
   { level: 'debug', label: 'DBG', color: 'text-theme-text-secondary', activeColor: 'bg-theme-surface text-theme-text-secondary border-theme-border-light' },
 ]
 
@@ -171,20 +171,22 @@ export function LogCore({
       <div className="flex items-center gap-2 px-3 py-2 border-b border-theme-border bg-theme-surface">
         {toolbarExtra}
 
-        {/* Stream / Stop toggle */}
-        <Tooltip content={isStreaming ? 'Stop streaming' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
-          <button
-            onClick={isStreaming ? onStopStream : onStartStream}
-            className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
-              isStreaming
-                ? 'bg-green-600 text-white hover:bg-green-700'
-                : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
-            }`}
-          >
-            {isStreaming ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-            <span className="hidden sm:inline">{isStreaming ? 'Stop' : 'Stream'}</span>
-          </button>
-        </Tooltip>
+        {/* Stream / Stop toggle — only shown when streaming is supported */}
+        {onStartStream && (
+          <Tooltip content={isStreaming ? 'Stop streaming' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
+            <button
+              onClick={isStreaming ? onStopStream : onStartStream}
+              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
+                isStreaming
+                  ? 'bg-green-600 text-white hover:bg-green-700'
+                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
+              }`}
+            >
+              {isStreaming ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+              <span className="hidden sm:inline">{isStreaming ? 'Stop' : 'Stream'}</span>
+            </button>
+          </Tooltip>
+        )}
 
         {/* Refresh */}
         <Tooltip content="Refresh logs" delay={TIP_DELAY} position="bottom">

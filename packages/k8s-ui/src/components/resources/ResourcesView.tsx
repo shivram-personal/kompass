@@ -2207,10 +2207,10 @@ export function ResourcesView({
         group: r.group,
       }))
     }
-    return CORE_RESOURCE_TYPES.map(t => ({
-      kind: t.label,
-      name: t.kind,
-      group: '',
+    return CORE_RESOURCES.map(r => ({
+      kind: r.kind,
+      name: r.name,
+      group: r.group,
     }))
   }, [categories])
 
@@ -2251,7 +2251,7 @@ export function ResourcesView({
   const refetchFn = selectedQuery?.refetch
   const dataUpdatedAt = selectedQuery?.dataUpdatedAt
 
-  const [refetch, isRefreshAnimating] = useRefreshAnimation(() => refetchFn?.())
+  const [refetch, isRefreshAnimating, refreshPhase] = useRefreshAnimation(() => refetchFn?.())
 
   // Track last updated time
   useEffect(() => {
@@ -3340,10 +3340,16 @@ export function ResourcesView({
           <button
             onClick={refetch}
             disabled={isRefreshAnimating}
-            className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg disabled:opacity-50"
+            className={clsx(
+              'p-2 hover:bg-theme-elevated rounded-lg disabled:opacity-50 transition-colors duration-500',
+              refreshPhase === 'success' ? 'text-emerald-400' : 'text-theme-text-secondary hover:text-theme-text-primary'
+            )}
             title="Refresh"
           >
-            <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
+            {refreshPhase === 'success'
+              ? <Check className="w-4 h-4 stroke-[2.5]" />
+              : <RefreshCw className={clsx('w-4 h-4', refreshPhase === 'spinning' && 'animate-spin')} />
+            }
           </button>
         </div>
 

@@ -5,6 +5,7 @@ export default {
   content: [
     "./index.html",
     "./src/**/*.{js,ts,jsx,tsx}",
+    "../packages/k8s-ui/src/**/*.{js,ts,jsx,tsx}",
   ],
   darkMode: ['selector', '[data-theme="dark"]'],
   theme: {

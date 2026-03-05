@@ -197,7 +197,7 @@ export function WorkloadView({
   const [saveSuccess, setSaveSuccess] = useState(false)
 
   // Refresh animation
-  const [refetch, isRefreshAnimating] = useRefreshAnimation(refetchProp ?? (() => {}))
+  const [refetch, isRefreshAnimating, refreshPhase] = useRefreshAnimation(refetchProp ?? (() => {}))
 
   // Build resource hierarchy
   const resourceLanes = useMemo(() => {
@@ -362,10 +362,16 @@ export function WorkloadView({
               <button
                 onClick={() => refetch()}
                 disabled={isRefreshAnimating}
-                className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
+                className={clsx(
+                  'p-1.5 hover:bg-theme-elevated rounded disabled:opacity-50 transition-colors duration-500',
+                  refreshPhase === 'success' ? 'text-emerald-400' : 'text-theme-text-secondary hover:text-theme-text-primary'
+                )}
                 title="Refresh"
               >
-                <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
+                {refreshPhase === 'success'
+                  ? <Check className="w-4 h-4 stroke-[2.5]" />
+                  : <RefreshCw className={clsx('w-4 h-4', refreshPhase === 'spinning' && 'animate-spin')} />
+                }
               </button>
               {onClose && (
                 <button onClick={onClose} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded" title="Close (Esc)">
@@ -481,10 +487,16 @@ export function WorkloadView({
           <button
             onClick={() => refetch()}
             disabled={isRefreshAnimating}
-            className="p-1.5 mt-0.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
+            className={clsx(
+              'p-1.5 mt-0.5 hover:bg-theme-elevated rounded disabled:opacity-50 transition-colors duration-500',
+              refreshPhase === 'success' ? 'text-emerald-400' : 'text-theme-text-secondary hover:text-theme-text-primary'
+            )}
             title="Refresh"
           >
-            <RefreshCw className={clsx('w-5 h-5', isRefreshAnimating && 'animate-spin')} />
+            {refreshPhase === 'success'
+              ? <Check className="w-5 h-5 stroke-[2.5]" />
+              : <RefreshCw className={clsx('w-5 h-5', refreshPhase === 'spinning' && 'animate-spin')} />
+            }
           </button>
 
           {/* Collapse back to drawer */}

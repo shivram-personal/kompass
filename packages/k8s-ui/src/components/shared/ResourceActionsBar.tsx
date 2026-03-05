@@ -47,18 +47,18 @@ interface ResourceActionsBarProps {
   renderPortForward?: (props: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => React.ReactNode
 
   // Delete
-  onDelete?: (params: { kind: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void }) => void
+  onDelete?: (params: { kind: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isDeleting?: boolean
 
   // Workload restart
-  onRestart?: (params: { kind: string; namespace: string; name: string }) => void
+  onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRestarting?: boolean
 
   // Rollback
   revisions?: WorkloadRevision[]
   revisionsLoading?: boolean
   revisionsError?: Error | null
-  onRollback?: (params: { kind: string; namespace: string; name: string; revision: number }, callbacks?: { onSuccess?: () => void }) => void
+  onRollback?: (params: { kind: string; namespace: string; name: string; revision: number }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRollingBack?: boolean
 
   // CronJob actions
@@ -613,7 +613,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
   revisions?: WorkloadRevision[]
   isLoading?: boolean
   error?: Error | null
-  onRollback?: (params: { kind: string; namespace: string; name: string; revision: number }, callbacks?: { onSuccess?: () => void }) => void
+  onRollback?: (params: { kind: string; namespace: string; name: string; revision: number }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isRollingBack?: boolean
 }) {
   const [confirmRevision, setConfirmRevision] = useState<number | null>(null)

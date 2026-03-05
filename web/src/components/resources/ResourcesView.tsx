@@ -8,26 +8,11 @@ import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
   ResourcesView as BaseResourcesView,
   categorizeResources,
+  CORE_RESOURCES,
 } from '@skyhook/k8s-ui'
 import type { ResourceQueryResult } from '@skyhook/k8s-ui'
 import type { SelectedResource } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
-
-// Fallback resource types when API resources aren't loaded yet (matches package)
-const CORE_RESOURCE_TYPES = [
-  { kind: 'pods', label: 'Pods' },
-  { kind: 'deployments', label: 'Deployments' },
-  { kind: 'daemonsets', label: 'DaemonSets' },
-  { kind: 'statefulsets', label: 'StatefulSets' },
-  { kind: 'replicasets', label: 'ReplicaSets' },
-  { kind: 'services', label: 'Services' },
-  { kind: 'ingresses', label: 'Ingresses' },
-  { kind: 'configmaps', label: 'ConfigMaps' },
-  { kind: 'secrets', label: 'Secrets' },
-  { kind: 'jobs', label: 'Jobs' },
-  { kind: 'cronjobs', label: 'CronJobs' },
-  { kind: 'hpas', label: 'HPAs' },
-] as const
 
 interface ResourcesViewProps {
   namespaces: string[]
@@ -56,23 +41,27 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         kind: r.kind,
         name: r.name,
         group: r.group,
+        isCrd: r.isCrd,
       }))
     }
-    return CORE_RESOURCE_TYPES.map(t => ({
-      kind: t.label,
-      name: t.kind,
-      group: '',
+    return CORE_RESOURCES.map(r => ({
+      kind: r.kind,
+      name: r.name,
+      group: r.group,
+      isCrd: r.isCrd,
     }))
   }, [categories])
 
   // Fetch ALL resources using useQueries
   const resourceQueries = useQueries({
     queries: resourcesToCount.map((resource) => ({
-      queryKey: ['resources', resource.name, resource.group, namespaces],
+      // Only include group in query key for CRDs — core K8s resources (apps, batch, etc.)
+      // must NOT send ?group= because the backend skips the fast typed cache when group is set.
+      queryKey: ['resources', resource.name, resource.isCrd ? resource.group : '', namespaces],
       queryFn: async () => {
         const params = new URLSearchParams()
         if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
-        if (resource.group) params.set('group', resource.group)
+        if (resource.isCrd && resource.group) params.set('group', resource.group)
         const res = await fetch(`/api/resources/${resource.name}?${params}`)
         if (!res.ok) {
           if (res.status === 403) {

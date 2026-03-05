@@ -42,7 +42,7 @@ export function isForbiddenError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403
 }
 
-async function fetchJSON<T>(path: string): Promise<T> {
+export async function fetchJSON<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`)
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
