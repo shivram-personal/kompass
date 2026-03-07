@@ -57,7 +57,10 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 	// Use find to list files — provides type, size, timestamp, permissions
 	// -maxdepth 1 lists only immediate children (like ls)
 	// Output format: type\tsize\ttimestamp\tpermissions\tpath
-	cmd := []string{"find", dirPath, "-maxdepth", "1", "-printf", `%y\t%s\t%T@\t%m\t%p\n`}
+	// Wrap in sh -c so the shell resolves PATH — direct exec via the container
+	// runtime can fail to find binaries that are available through the shell's PATH.
+	findCmd := fmt.Sprintf("find %s -maxdepth 1 -printf '%%y\\t%%s\\t%%T@\\t%%m\\t%%p\\n'", shellQuote(dirPath))
+	cmd := []string{"/bin/sh", "-c", findCmd}
 
 	req := client.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -110,7 +113,7 @@ func (s *Server) listFilesWithLS(r *http.Request, namespace, podName, container,
 	client := k8s.GetClient()
 	config := k8s.GetConfig()
 
-	cmd := []string{"ls", "-la", dirPath}
+	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("ls -la %s", shellQuote(dirPath))}
 
 	req := client.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -503,6 +506,13 @@ func classifyExecError(findErr, lsErr string) string {
 
 	// Default: include the actual ls error so users can diagnose
 	return fmt.Sprintf("Failed to list files: %s", lsErr)
+}
+
+// shellQuote wraps a string in single quotes for safe use in sh -c commands.
+// Single quotes inside the string are escaped by ending the quote, adding an
+// escaped single quote, and re-opening the quote: ' → '\''
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }
 
 // isCommandNotFound detects errors indicating a command is not available in the container
