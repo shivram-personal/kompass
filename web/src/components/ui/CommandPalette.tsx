@@ -45,11 +45,15 @@ function scoreMatch(text: string, query: string): number {
 }
 
 function bestScore(item: CommandItem, query: string): number {
-  let best = Math.max(
-    scoreMatch(item.label, query),
+  // Primary label gets full score; secondary fields are discounted
+  // so that e.g. "node" matching the label "Node" ranks above
+  // "UpdateInfo" where "node" only matches the group "nodemanagement.gke.io"
+  let best = scoreMatch(item.label, query)
+  const secondary = Math.floor(Math.max(
     scoreMatch(item.sublabel || '', query),
     scoreMatch(item.category, query)
-  )
+  ) * 0.6)
+  best = Math.max(best, secondary)
   if (item.searchTerms) {
     for (const term of item.searchTerms) {
       best = Math.max(best, scoreMatch(term, query))
@@ -205,7 +209,14 @@ export function CommandPalette({
     }
 
     return items
-      .map(item => ({ item, score: bestScore(item, query) }))
+      .map(item => {
+        let score = bestScore(item, query)
+        // Boost core K8s resources over CRDs at the same match quality
+        if (score > 0 && item.category === 'Resource Kinds' && item.sublabel === 'core') {
+          score += 10
+        }
+        return { item, score }
+      })
       .filter(({ score }) => score > 0)
       .sort((a, b) => b.score - a.score)
       .slice(0, 20)
