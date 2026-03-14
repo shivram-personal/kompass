@@ -111,11 +111,16 @@ export function useHasLimitedAccess(): boolean {
 }
 
 // Namespace-scoped capability hooks: lazily re-check exec/logs/portForward
-// scoped to a specific namespace when cluster-wide RBAC denied them.
-// Returns the same boolean as the global hooks when no namespace override is needed.
+// scoped to a specific namespace when global RBAC checks denied them.
+// Falls back to global capability values while the namespace check is loading
+// or when all capabilities are already granted.
 export function useNamespacedCapabilities(namespace: string | undefined) {
   const globalCaps = useContext(CapabilitiesContext)
-  const { data: nsCaps } = useNamespaceCapabilities(namespace, globalCaps)
+  const { data: nsCaps, error } = useNamespaceCapabilities(namespace, globalCaps)
+
+  if (error) {
+    console.warn(`Failed to fetch namespace capabilities for ${namespace}, using global:`, error)
+  }
 
   return useMemo(() => ({
     canExec: nsCaps?.exec ?? globalCaps.exec,

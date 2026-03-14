@@ -306,7 +306,7 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
   const startPortForward = useStartPortForward()
   const { data: portsData, isLoading: portsLoading } = useAvailablePorts('pod', namespace, podName)
 
-  // Capabilities (namespace-scoped: re-checks RBAC if cluster-wide denied)
+  // Capabilities (namespace-scoped: re-checks RBAC if globally denied)
   const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
 
   const [isLoadingAction, setIsLoadingAction] = useState(false)

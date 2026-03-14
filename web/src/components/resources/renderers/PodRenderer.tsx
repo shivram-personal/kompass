@@ -24,7 +24,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate, onOpenLogs, reso
   const openTerminal = useOpenTerminal()
   const openLogsPanel = useOpenLogs()
 
-  // Capabilities (namespace-scoped: re-checks RBAC if cluster-wide denied)
+  // Capabilities (namespace-scoped: re-checks RBAC if globally denied)
   const { canExec, canViewLogs, canPortForward } = useNamespacedCapabilities(namespace)
 
   // Metrics

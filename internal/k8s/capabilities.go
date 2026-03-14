@@ -65,8 +65,9 @@ type Capabilities struct {
 	Resources     *ResourcePermissions `json:"resources,omitempty"` // Per-resource-type permissions
 }
 
-// NamespaceCapabilities holds namespace-scoped overrides for capabilities that
-// were denied cluster-wide but may be allowed in a specific namespace.
+// NamespaceCapabilities holds the effective exec/logs/portForward capabilities
+// for a specific namespace. When global checks deny these capabilities,
+// namespace-scoped RBAC re-checks may grant them.
 type NamespaceCapabilities struct {
 	Exec        bool `json:"exec"`
 	Logs        bool `json:"logs"`
@@ -81,8 +82,8 @@ var (
 	capabilitiesErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
 
 	// Per-namespace capability cache for lazy RBAC re-checks.
-	// When cluster-wide checks deny exec/logs/portForward, we re-check scoped
-	// to the specific namespace the user is viewing.
+	// When global checks (cluster-wide + effective-namespace) deny
+	// exec/logs/portForward, callers can re-check for a specific namespace.
 	nsCapCache   map[string]*nsCapEntry
 	nsCapMu      sync.RWMutex
 
@@ -249,9 +250,10 @@ func InvalidateCapabilitiesCache() {
 }
 
 // CheckNamespaceCapabilities performs namespace-scoped RBAC checks for capabilities
-// that were denied cluster-wide. This enables lazy re-checking when a user views
-// a pod in a specific namespace — they may have namespace-scoped RoleBindings that
-// grant exec/logs/portForward even though cluster-wide checks returned false.
+// that were denied by global checks (cluster-wide + effective-namespace fallback).
+// This enables lazy re-checking when a user views a resource in a specific namespace —
+// they may have namespace-scoped RoleBindings that grant exec/logs/portForward in
+// namespaces other than the kubeconfig default.
 //
 // Returns nil if no namespace-scoped re-check is needed (all capabilities already allowed).
 func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCaps *Capabilities) (*NamespaceCapabilities, error) {
@@ -276,7 +278,7 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 	nsCapMu.RUnlock()
 
 	if GetClient() == nil {
-		return &NamespaceCapabilities{}, nil
+		return nil, nil // No override — caller will use global caps
 	}
 
 	checkCtx, cancel := NewOperationContext(10 * time.Second)
@@ -310,27 +312,37 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 		return result, nil
 	}
 
+	var hadErrors atomic.Bool
 	var wg sync.WaitGroup
 	wg.Add(len(checks))
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, _ := canI(checkCtx, namespace, "", c.resource, c.verb)
+			allowed, apiErr := canI(checkCtx, namespace, "", c.resource, c.verb)
 			if allowed {
 				*c.result = true
+			}
+			if apiErr {
+				hadErrors.Store(true)
 			}
 		}(check)
 	}
 	wg.Wait()
 
-	// Cache the result
+	// Cache the result. Use short TTL when API errors caused fail-closed results,
+	// matching the pattern in CheckCapabilities.
+	ttl := capabilitiesTTL
+	if hadErrors.Load() {
+		ttl = capabilitiesErrorTTL
+		log.Printf("Warning: namespace %s capability checks had API errors, using short cache TTL (%v)", namespace, ttl)
+	}
 	nsCapMu.Lock()
 	if nsCapCache == nil {
 		nsCapCache = make(map[string]*nsCapEntry)
 	}
 	nsCapCache[namespace] = &nsCapEntry{
 		caps:   *result,
-		expiry: time.Now().Add(capabilitiesTTL),
+		expiry: time.Now().Add(ttl),
 	}
 	nsCapMu.Unlock()
 

@@ -461,13 +461,16 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 
 	caps.MCPEnabled = s.mcpHandler != nil
 
-	// Namespace-scoped re-check: when exec/logs/portForward are denied cluster-wide,
-	// re-check scoped to the requested namespace. Users with namespace-scoped
-	// RoleBindings (common in shared clusters) may have these permissions even
-	// though the cluster-wide SelfSubjectAccessReview returned false.
+	// Namespace-scoped re-check: when exec/logs/portForward are denied by the
+	// initial RBAC checks (cluster-wide + effective-namespace fallback), re-check
+	// scoped to the specific namespace the user is viewing. Users with
+	// namespace-scoped RoleBindings may have these permissions in namespaces
+	// other than the kubeconfig default.
 	if ns := r.URL.Query().Get("namespace"); ns != "" {
 		nsCaps, err := k8s.CheckNamespaceCapabilities(r.Context(), ns, caps)
-		if err == nil && nsCaps != nil {
+		if err != nil {
+			log.Printf("[capabilities] namespace-scoped check for %q failed: %v", ns, err)
+		} else if nsCaps != nil {
 			caps.Exec = nsCaps.Exec
 			caps.Logs = nsCaps.Logs
 			caps.PortForward = nsCaps.PortForward
