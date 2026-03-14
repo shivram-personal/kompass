@@ -8,7 +8,6 @@ import (
 	"log"
 	"net/http"
 	"path"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -44,8 +43,10 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 		dirPath = "/"
 	}
 
-	// Clean the path to prevent traversal
-	dirPath = filepath.Clean(dirPath)
+	// Clean the path to prevent traversal.
+	// Use path.Clean (POSIX) not filepath.Clean — the path runs inside a Linux
+	// container, but filepath is OS-specific and converts to backslashes on Windows.
+	dirPath = path.Clean(dirPath)
 
 	client := k8s.GetClient()
 	config := k8s.GetConfig()
@@ -161,7 +162,7 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath = filepath.Clean(filePath)
+	filePath = path.Clean(filePath)
 	fileName := path.Base(filePath)
 
 	client := k8s.GetClient()
@@ -208,7 +209,13 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 			// tar not available — fallback to cat
 			catContent, catErr := s.downloadWithCat(r, namespace, podName, container, filePath)
 			if catErr != nil {
-				s.writeError(w, http.StatusInternalServerError, "Container lacks 'tar' and 'cat' commands. Cannot download files from distroless containers.")
+				if isCommandNotFound(catErr.Error()) {
+					s.writeError(w, http.StatusInternalServerError, "Container lacks 'tar' and 'cat' commands. Cannot download files from distroless containers.")
+				} else {
+					log.Printf("[copy] cat fallback failed for %s/%s path=%s: %v", namespace, podName, filePath, catErr)
+					errorlog.Record("copy", "error", "file download failed for %s/%s: %v", namespace, podName, catErr)
+					s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to download file: %v", catErr))
+				}
 				return
 			}
 			w.Header().Set("Content-Type", "application/octet-stream")
@@ -222,6 +229,7 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		log.Printf("[copy] exec tar failed for %s/%s path=%s: %v, stderr: %s", namespace, podName, filePath, err, stderr.String())
+		errorlog.Record("copy", "error", "file download failed for %s/%s path=%s: %v", namespace, podName, filePath, err)
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to download file: %v", err))
 		return
 	}
@@ -475,8 +483,13 @@ func classifyExecError(findErr, lsErr string) string {
 		return "Permission denied: the container user lacks access to this directory. Try a different path or container."
 	}
 
-	// Check for shell not found (distroless containers)
+	// Check for shell not found (distroless containers).
+	// Some runtimes report "executable file not found", others report
+	// "/bin/sh: no such file or directory" — catch both forms.
 	if strings.Contains(combined, "executable file not found") && (strings.Contains(combined, "sh") || strings.Contains(combined, "shell")) {
+		return "Container has no shell (/bin/sh). This is likely a distroless or scratch-based container that cannot be browsed."
+	}
+	if strings.Contains(combined, "/bin/sh") && strings.Contains(combined, "no such file or directory") {
 		return "Container has no shell (/bin/sh). This is likely a distroless or scratch-based container that cannot be browsed."
 	}
 
@@ -494,7 +507,7 @@ func classifyExecError(findErr, lsErr string) string {
 
 	// Check for connection/network issues
 	if strings.Contains(combined, "error dialing backend") || strings.Contains(combined, "connection refused") ||
-		strings.Contains(combined, "transport") || strings.Contains(combined, "stream error") ||
+		strings.Contains(combined, "transport closed") || strings.Contains(combined, "transport error") || strings.Contains(combined, "stream error") ||
 		strings.Contains(combined, "websocket") || strings.Contains(combined, "upgrade") {
 		return fmt.Sprintf("Failed to exec into container (connection error): %s", lsErr)
 	}
