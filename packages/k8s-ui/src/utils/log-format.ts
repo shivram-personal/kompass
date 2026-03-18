@@ -272,10 +272,18 @@ export function escapeRegExp(text: string): string {
  * K8s timestamps are in RFC3339Nano format: 2024-01-20T10:30:00.123456789Z content
  */
 export function parseLogLine(line: string): { timestamp: string; content: string } {
+  // K8s timestamp prefix: "2026-03-19T00:01:19.811Z message..."
   if (line.length > 30 && line[4] === '-' && line[7] === '-' && line[10] === 'T') {
     const spaceIdx = line.indexOf(' ')
     if (spaceIdx > 20 && spaceIdx < 40) {
       return { timestamp: line.slice(0, spaceIdx), content: line.slice(spaceIdx + 1) }
+    }
+  }
+  // Structured JSON with "ts" or "timestamp" field
+  if (line[0] === '{') {
+    const tsMatch = line.match(/"(?:ts|timestamp|time)"\s*:\s*"(\d{4}-\d{2}-\d{2}T[^"]+)"/)
+    if (tsMatch) {
+      return { timestamp: tsMatch[1], content: line }
     }
   }
   return { timestamp: '', content: line }
