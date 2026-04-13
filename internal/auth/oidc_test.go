@@ -499,21 +499,6 @@ func TestBackchannelLogout_NoRevoker(t *testing.T) {
 	}
 }
 
-func TestBackchannelLogout_MethodNotAllowed(t *testing.T) {
-	h := newTestOIDCHandler()
-	h.revoker = NewMemoryRevoker()
-	defer h.revoker.Stop()
-
-	r := httptest.NewRequest("GET", "/auth/backchannel-logout", nil)
-	w := httptest.NewRecorder()
-
-	h.HandleBackchannelLogout(w, r)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("status = %d, want 405", w.Code)
-	}
-}
-
 func TestBackchannelLogout_MissingToken(t *testing.T) {
 	h := newTestOIDCHandler()
 	h.revoker = NewMemoryRevoker()

@@ -59,7 +59,6 @@ type Server struct {
 	authConfig      auth.Config
 	permCache       *auth.PermissionCache
 	oidcHandler     *auth.OIDCHandler
-	revoker         *auth.MemoryRevoker
 	saveFileFunc    func(defaultFilename string, data []byte) (string, error)
 }
 
@@ -116,9 +115,9 @@ func New(cfg Config) *Server {
 
 			// Wire up backchannel logout revocation store
 			if s.authConfig.OIDCBackchannelLogout {
-				s.revoker = auth.NewMemoryRevoker()
-				oidcHandler.SetRevoker(s.revoker)
-				s.authConfig.Revoker = s.revoker // middleware uses this for IsRevoked checks
+				revoker := auth.NewMemoryRevoker()
+				oidcHandler.SetRevoker(revoker)
+				s.authConfig.Revoker = revoker // middleware uses this for IsRevoked checks
 			}
 
 			s.oidcHandler = oidcHandler
@@ -479,9 +478,6 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) Stop() {
 	StopAllLocalTermSessions()
 	s.broadcaster.Stop()
-	if s.revoker != nil {
-		s.revoker.Stop()
-	}
 	if s.listener != nil {
 		s.listener.Close()
 	}

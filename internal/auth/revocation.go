@@ -20,7 +20,6 @@ type MemoryRevoker struct {
 	revoked  map[string]time.Time // sid → expiry (auto-cleaned after expiry)
 	jtis     map[string]time.Time // jti → expiry (dedupe for IdP retries)
 	stopCh   chan struct{}
-	stopOnce sync.Once
 	gcTicker *time.Ticker
 }
 
@@ -40,9 +39,6 @@ func NewMemoryRevoker() *MemoryRevoker {
 // Revoke marks a session ID as revoked until the given expiry time.
 // After expiry, the entry is cleaned up by the GC goroutine.
 func (r *MemoryRevoker) Revoke(sid string, expiry time.Time) {
-	if sid == "" {
-		return // empty sid (legacy cookies) can't be revoked — match IsRevoked guard
-	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.revoked[sid] = expiry
@@ -79,12 +75,10 @@ func (r *MemoryRevoker) SeenJTI(jti string, expiry time.Time) bool {
 	return false
 }
 
-// Stop halts the GC goroutine. Safe to call multiple times.
+// Stop halts the GC goroutine. Call on shutdown.
 func (r *MemoryRevoker) Stop() {
-	r.stopOnce.Do(func() {
-		r.gcTicker.Stop()
-		close(r.stopCh)
-	})
+	r.gcTicker.Stop()
+	close(r.stopCh)
 }
 
 // gc periodically removes expired revocations and JTIs.
