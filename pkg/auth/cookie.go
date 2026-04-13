@@ -17,6 +17,12 @@ import (
 // DefaultCookieName is the default session cookie name
 const DefaultCookieName = "radar_session"
 
+// maxCookieSize is the safe limit for cookie values. RFC 6265 requires
+// browsers to support at least 4096 bytes per cookie, but some proxies
+// and CDNs enforce stricter limits. We use 3800 to leave headroom for
+// the cookie name, attributes (Path, Secure, HttpOnly, SameSite, MaxAge).
+const maxCookieSize = 3800
+
 // Session represents a parsed session cookie.
 type Session struct {
 	User      *User
@@ -59,17 +65,26 @@ func CreateSessionCookie(user *User, sid, idToken, secret string, ttl time.Durat
 		SID:       sid,
 	}
 
-	data, err := json.Marshal(payload)
-	if err != nil {
-		log.Fatalf("[auth] Failed to marshal session cookie payload for user %s: %v", user.Username, err)
-	}
-	encoded := base64.RawURLEncoding.EncodeToString(data)
+	value := buildCookieValue(payload, secret)
 
-	sig := signData(encoded, secret)
+	// Browser cookie size limit is ~4096 bytes. If the payload is too large
+	// (many groups + large ID token), drop the ID token first — it's only
+	// needed for RP-Initiated Logout's id_token_hint and falls back to
+	// client_id gracefully. Log so operators know.
+	if len(value) > maxCookieSize && payload.IDToken != "" {
+		log.Printf("[auth] Session cookie for %s exceeds %d bytes (%d), dropping ID token to fit",
+			user.Username, maxCookieSize, len(value))
+		payload.IDToken = ""
+		value = buildCookieValue(payload, secret)
+	}
+	if len(value) > maxCookieSize {
+		log.Printf("[auth] WARNING: Session cookie for %s is %d bytes (limit ~%d) — browser may silently drop it. Reduce the number of groups in the OIDC token.",
+			user.Username, len(value), maxCookieSize)
+	}
 
 	return &http.Cookie{
 		Name:     DefaultCookieName,
-		Value:    encoded + "." + sig,
+		Value:    value,
 		Path:     "/",
 		HttpOnly: true,
 		Secure:   secure,
@@ -127,6 +142,16 @@ func ParseSessionCookie(r *http.Request, secret string) *Session {
 		IDToken:   p.IDToken,
 		ExpiresAt: time.Unix(p.ExpiresAt, 0),
 	}
+}
+
+// buildCookieValue marshals the payload and signs it: base64(json) + "." + base64(hmac).
+func buildCookieValue(p cookiePayload, secret string) string {
+	data, err := json.Marshal(p)
+	if err != nil {
+		log.Fatalf("[auth] Failed to marshal session cookie payload for user %s: %v", p.Username, err)
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(data)
+	return encoded + "." + signData(encoded, secret)
 }
 
 // ClearSessionCookie returns a cookie that clears the session

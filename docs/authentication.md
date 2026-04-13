@@ -368,6 +368,8 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | OIDC redirect URL | `--auth-oidc-redirect-url` | `auth.oidc.redirectURL` | — |
 | OIDC groups claim | `--auth-oidc-groups-claim` | `auth.oidc.groupsClaim` | `groups` |
 | OIDC post-logout redirect | `--auth-oidc-post-logout-redirect-url` | `auth.oidc.postLogoutRedirectURL` | — |
+| OIDC username prefix | `--auth-oidc-username-prefix` | `auth.oidc.usernamePrefix` | — |
+| OIDC groups prefix | `--auth-oidc-groups-prefix` | `auth.oidc.groupsPrefix` | — |
 | OIDC CA certificate | `--auth-oidc-ca-cert` | `auth.oidc.caCert` | — |
 | OIDC skip TLS verify | `--auth-oidc-insecure-skip-verify` | `auth.oidc.insecureSkipVerify` | `false` |
 | OIDC backchannel logout | `--auth-oidc-backchannel-logout` | `auth.oidc.backchannelLogout` | `false` |

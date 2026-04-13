@@ -31,6 +31,8 @@ type Config struct {
 	OIDCRedirectURL           string
 	OIDCGroupsClaim           string // default "groups"
 	OIDCPostLogoutRedirectURL  string // optional, URL to redirect after IdP logout
+	OIDCUsernamePrefix         string // prefix added to OIDC username for K8s impersonation (e.g., "oidc:")
+	OIDCGroupsPrefix           string // prefix added to OIDC groups for K8s impersonation (e.g., "oidc:")
 	OIDCInsecureSkipVerify     bool   // skip TLS verification for OIDC provider (dev/test only)
 	OIDCCACert                 string // path to CA certificate file for OIDC provider TLS
 	OIDCBackchannelLogout      bool   // enable backchannel logout endpoint

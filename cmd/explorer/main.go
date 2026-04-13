@@ -64,6 +64,8 @@ func main() {
 	authOIDCRedirectURL := flag.String("auth-oidc-redirect-url", "", "OIDC redirect URL")
 	authOIDCGroupsClaim := flag.String("auth-oidc-groups-claim", "groups", "JWT claim for groups")
 	authOIDCPostLogoutRedirectURL := flag.String("auth-oidc-post-logout-redirect-url", "", "URL to redirect after OIDC provider logout (must be registered with IdP)")
+	authOIDCUsernamePrefix := flag.String("auth-oidc-username-prefix", "", "Prefix added to OIDC username for K8s impersonation (must match kube-apiserver --oidc-username-prefix)")
+	authOIDCGroupsPrefix := flag.String("auth-oidc-groups-prefix", "", "Prefix added to OIDC groups for K8s impersonation (must match kube-apiserver --oidc-groups-prefix)")
 	authOIDCInsecureSkipVerify := flag.Bool("auth-oidc-insecure-skip-verify", false, "Skip TLS certificate verification for OIDC provider (insecure, dev/test only)")
 	authOIDCCACert := flag.String("auth-oidc-ca-cert", "", "Path to CA certificate file for OIDC provider TLS verification")
 	authOIDCBackchannelLogout := flag.Bool("auth-oidc-backchannel-logout", false, "Enable OIDC Back-Channel Logout endpoint (single-replica only)")
@@ -125,6 +127,8 @@ func main() {
 			OIDCRedirectURL:           *authOIDCRedirectURL,
 			OIDCGroupsClaim:           *authOIDCGroupsClaim,
 			OIDCPostLogoutRedirectURL:  *authOIDCPostLogoutRedirectURL,
+			OIDCUsernamePrefix:         *authOIDCUsernamePrefix,
+			OIDCGroupsPrefix:           *authOIDCGroupsPrefix,
 			OIDCInsecureSkipVerify:     *authOIDCInsecureSkipVerify,
 			OIDCCACert:                 *authOIDCCACert,
 			OIDCBackchannelLogout:      *authOIDCBackchannelLogout,

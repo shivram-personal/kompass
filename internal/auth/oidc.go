@@ -252,6 +252,16 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Apply OIDC prefix to match Kubernetes API server's --oidc-username-prefix / --oidc-groups-prefix
+	if h.cfg.OIDCUsernamePrefix != "" {
+		username = h.cfg.OIDCUsernamePrefix + username
+	}
+	if h.cfg.OIDCGroupsPrefix != "" {
+		for i, g := range groups {
+			groups[i] = h.cfg.OIDCGroupsPrefix + g
+		}
+	}
+
 	user := &User{Username: username, Groups: groups}
 
 	// Extract session ID from ID token if present (needed for backchannel logout matching),

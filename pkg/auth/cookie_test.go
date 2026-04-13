@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -316,5 +317,47 @@ func TestParseSessionCookie_ExpiresAt(t *testing.T) {
 	diff := parsed.ExpiresAt.Sub(expected)
 	if diff < -5*time.Second || diff > 5*time.Second {
 		t.Errorf("ExpiresAt off by %v, want within 5s of now+2h", diff)
+	}
+}
+
+func TestCreateSessionCookie_DropsIDTokenWhenTooLarge(t *testing.T) {
+	secret := "test-secret"
+	// Build a cookie that's over 3800 bytes with the ID token, but under without it.
+	// 40 groups × ~25 chars ≈ 1000 bytes of groups. 2KB ID token. Together > 3800 after base64.
+	groups := make([]string, 40)
+	for i := range groups {
+		groups[i] = "org:engineering:team-" + strings.Repeat("x", 10)
+	}
+	user := &User{Username: "alice@example.com", Groups: groups}
+	sid := NewSessionID()
+	largeIDToken := strings.Repeat("x", 2000)
+
+	// First verify the cookie WITHOUT ID token fits
+	smallCookie := CreateSessionCookie(user, sid, "", secret, 1*time.Hour, false)
+	if len(smallCookie.Value) > maxCookieSize {
+		t.Skipf("groups alone exceed %d bytes (%d) — can't test ID token drop", maxCookieSize, len(smallCookie.Value))
+	}
+
+	// Now create with the large ID token — should trigger the drop
+	cookie := CreateSessionCookie(user, sid, largeIDToken, secret, 1*time.Hour, false)
+
+	// Parse and verify the cookie is still valid
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	parsed := ParseSessionCookie(req, secret)
+	if parsed == nil {
+		t.Fatal("ParseSessionCookie returned nil for size-capped cookie")
+	}
+	if parsed.User.Username != "alice@example.com" {
+		t.Errorf("username = %q, want alice@example.com", parsed.User.Username)
+	}
+	if parsed.SID != sid {
+		t.Errorf("SID lost after size cap")
+	}
+	if parsed.IDToken == largeIDToken {
+		t.Error("ID token should have been dropped to fit cookie size limit")
+	}
+	if len(cookie.Value) > maxCookieSize {
+		t.Errorf("cookie still %d bytes after dropping ID token (limit %d)", len(cookie.Value), maxCookieSize)
 	}
 }
