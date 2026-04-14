@@ -255,7 +255,10 @@ func (c *Client) doQuery(ctx context.Context, reqURL string) (*QueryResult, erro
 	return parseQueryResult(promResp.Data)
 }
 
-// probe checks if a Prometheus endpoint is reachable.
+// probe checks if a Prometheus endpoint is reachable and has data.
+// An instance that responds HTTP 200 but returns zero results for "up"
+// (no active scrape targets) is treated as unreachable so discovery
+// continues to the next candidate.
 func (c *Client) probe(ctx context.Context, addr string) bool {
 	testCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
@@ -271,7 +274,32 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 	}
 	defer resp.Body.Close()
 
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	// Verify the instance actually has scrape targets. An empty VictoriaMetrics
+	// or Prometheus instance returns 200 with zero results — skip it.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return false
+	}
+	var promResp struct {
+		Status string `json:"status"`
+		Data   struct {
+			Result []json.RawMessage `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &promResp); err != nil {
+		// A 200 response that isn't Prometheus JSON is almost certainly not
+		// Prometheus (captive portal, ingress login page, misconfigured proxy).
+		return false
+	}
+	if promResp.Status == "success" && len(promResp.Data.Result) == 0 {
+		errorlog.Record("prometheus", "warning", "endpoint %s has no active scrape targets (empty instance), skipping", addr)
+		return false
+	}
+	return true
 }
 
 // Prometheus API response types
