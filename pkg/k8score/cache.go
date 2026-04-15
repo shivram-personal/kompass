@@ -472,10 +472,10 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			}
 
 			if timedOut {
-				// Some informers never synced within the deadline. Flip
-				// deferredFailed so IsDeferredPending returns false for the
-				// stragglers (HTTP handlers return 403 instead of perpetual
-				// 503). Informers that already synced keep their own
+				// Stop waiting on stragglers. deferredFailed is the "give up"
+				// signal read by IsDeferredPending — stragglers start reporting
+				// not-pending, so HTTP handlers return 403 instead of perpetual
+				// 503. Informers that already synced keep their own
 				// deferredSynced[k]=true and continue serving normally.
 				rc.deferredMu.RLock()
 				var pending []string
@@ -486,7 +486,9 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 				}
 				rc.deferredMu.RUnlock()
 				rc.deferredFailed.Store(true)
-				stdlog.Printf("WARNING: Deferred sync timed out after %v; %d informer(s) never synced: %s",
+				stdlog.Printf("WARNING: Deferred sync timed out after %v; %d informer(s) never synced: %s. "+
+					"These resources will return 403 to API consumers. Common cause: the corresponding API "+
+					"version isn't served on this cluster (check `kubectl api-resources | grep <resource>`).",
 					cfg.DeferredSyncTimeout, len(pending), strings.Join(pending, ", "))
 			} else {
 				logf("    Phase 2 sync (%d deferred informers): %v", len(deferredSyncFuncs), time.Since(deferredStart))

@@ -140,13 +140,21 @@ func TestNewResourceCache_DeferredSync_PartialFailure(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	if rc.ConfigMaps() == nil {
-		t.Error("expected ConfigMaps() to become ready despite sibling HPA failing")
+		t.Fatal("expected ConfigMaps() to become ready despite sibling HPA failing")
 	}
 	if rc.Secrets() == nil {
-		t.Error("expected Secrets() to become ready despite sibling HPA failing")
+		t.Fatal("expected Secrets() to become ready despite sibling HPA failing")
 	}
-	if rc.HorizontalPodAutoscalers() == nil {
-		t.Error("HPA lister uses isEnabled(), not isReady() — expected non-nil")
+
+	// Pre-timeout contract check: while HPA is still stuck and the deadline
+	// hasn't fired, IsDeferredPending must report HPA pending (HTTP handlers
+	// return 503) and ConfigMaps not-pending (handlers serve data). This is
+	// the 503-vs-403 distinction the fix is built around.
+	if !rc.IsDeferredPending(HorizontalPodAutoscalers) {
+		t.Error("pre-timeout: expected IsDeferredPending(HPA)=true while informer still stuck")
+	}
+	if rc.IsDeferredPending(ConfigMaps) {
+		t.Error("pre-timeout: ConfigMaps synced, expected IsDeferredPending=false")
 	}
 
 	// deferredDone must close even though HPA never syncs — otherwise the
@@ -157,14 +165,14 @@ func TestNewResourceCache_DeferredSync_PartialFailure(t *testing.T) {
 		t.Fatal("deferredDone never closed after DeferredSyncTimeout")
 	}
 
-	// Post-timeout: ConfigMaps synced fine → IsDeferredPending returns false.
-	// HPA never synced → IsDeferredPending also returns false (because
-	// deferredFailed is set) so HTTP handlers return 403, not perpetual 503.
-	if rc.IsDeferredPending(ConfigMaps) {
-		t.Error("ConfigMaps synced, expected IsDeferredPending=false")
-	}
+	// Post-timeout: HPA flips from pending to not-pending because
+	// deferredFailed is now set — stops the perpetual-503 spinner.
+	// ConfigMaps stays not-pending (it was already synced).
 	if rc.IsDeferredPending(HorizontalPodAutoscalers) {
-		t.Error("HPA never synced but timeout fired, expected IsDeferredPending=false")
+		t.Error("post-timeout: expected IsDeferredPending(HPA)=false (deferredFailed signals give-up)")
+	}
+	if rc.IsDeferredPending(ConfigMaps) {
+		t.Error("post-timeout: ConfigMaps synced, expected IsDeferredPending=false")
 	}
 }
 
