@@ -280,7 +280,8 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 
 	// Verify the instance actually has scrape targets. An empty VictoriaMetrics
 	// or Prometheus instance returns 200 with zero results — skip it.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	// 10 MB matches doQuery's limit so a large cluster's `up` response fits.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return false
 	}
@@ -295,7 +296,11 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 		// Prometheus (captive portal, ingress login page, misconfigured proxy).
 		return false
 	}
-	if promResp.Status == "success" && len(promResp.Data.Result) == 0 {
+	if promResp.Status != "success" {
+		// Some proxies return 200 with a Prometheus-shaped error body.
+		return false
+	}
+	if len(promResp.Data.Result) == 0 {
 		errorlog.Record("prometheus", "warning", "endpoint %s has no active scrape targets (empty instance), skipping", addr)
 		return false
 	}
