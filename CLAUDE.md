@@ -2,6 +2,24 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with this repository.
 
+## Active feature branches
+
+- **`feature/finops-v2`** — radar is publishing reusable cost math to
+  koala-backend (via `github.com/skyhook-io/radar/pkg`) as part of the
+  Costs / FinOps v2 rewrite. Main context doc at `../FINOPS-V2.md`. Key
+  touchpoints:
+  - `pkg/opencost/compute.go` — REST-primary `ComputeCostSummary`.
+    **Window normalization**: OpenCost's `/allocation.totalCost` is
+    summed over the window, not hourly. `windowHours(opts.Window)`
+    divides totals to $/hr. Regression test pins this behavior in
+    `compute_rest_test.go` (TestComputeCostSummary_REST_WindowNormalization).
+  - `pkg/opencost/trend.go` (new) — `ComputeCostTrend` uses `step=`.
+    `defaultStep()` picks coarse steps (24h→6h, 7d→1d, 30d→2d) because
+    OpenCost scales with bucket count; CAC's proxy wait caps us at 30s
+    end-to-end.
+  - `pkg/prom/` — shared Prometheus client + discovery. Consumed by both
+    radar's internal paths and by skyhook-connector's FinOpsChecker.
+
 ## Project Overview
 
 Radar is a modern Kubernetes visibility tool — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, and cluster audit (best-practices scanning). Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Built by Skyhook.
