@@ -87,7 +87,7 @@ func TestProbe(t *testing.T) {
 	}
 }
 
-func TestHeadersOnQuery(t *testing.T) {
+func TestHeadersOnProbe(t *testing.T) {
 	var gotAuth, gotOrg atomic.Value
 	gotAuth.Store("")
 	gotOrg.Store("")
@@ -96,8 +96,6 @@ func TestHeadersOnQuery(t *testing.T) {
 		gotAuth.Store(r.Header.Get("Authorization"))
 		gotOrg.Store(r.Header.Get("X-Scope-OrgID"))
 		w.WriteHeader(http.StatusOK)
-		// One result so probe()'s "empty instance" check passes; doQuery
-		// doesn't care about the body shape for this test.
 		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
 	}))
 	defer srv.Close()
@@ -110,24 +108,14 @@ func TestHeadersOnQuery(t *testing.T) {
 		},
 	}
 
-	if _, err := c.doQuery(context.Background(), srv.URL+"/api/v1/query?query=up"); err != nil {
-		t.Fatalf("doQuery failed: %v", err)
+	if !c.probe(context.Background(), srv.URL) {
+		t.Fatal("probe() returned false for healthy server")
 	}
 	if got := gotAuth.Load().(string); got != "Bearer test-token" {
 		t.Errorf("Authorization header = %q, want %q", got, "Bearer test-token")
 	}
 	if got := gotOrg.Load().(string); got != "tenant-7" {
 		t.Errorf("X-Scope-OrgID header = %q, want %q", got, "tenant-7")
-	}
-
-	// probe() must carry the same headers — otherwise discovery would 401
-	// against an auth-protected endpoint before any real query runs.
-	gotAuth.Store("")
-	if !c.probe(context.Background(), srv.URL) {
-		t.Fatal("probe() returned false for healthy server")
-	}
-	if got := gotAuth.Load().(string); got != "Bearer test-token" {
-		t.Errorf("probe Authorization header = %q, want %q", got, "Bearer test-token")
 	}
 }
 
@@ -139,13 +127,13 @@ func TestHeadersNoneWhenUnset(t *testing.T) {
 			sawAuth.Store(true)
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"job":"prometheus"},"value":[1700000000,"1"]}]}}`))
 	}))
 	defer srv.Close()
 
 	c := &Client{httpClient: &http.Client{Timeout: 5 * time.Second}}
-	if _, err := c.doQuery(context.Background(), srv.URL+"/api/v1/query?query=up"); err != nil {
-		t.Fatalf("doQuery failed: %v", err)
+	if !c.probe(context.Background(), srv.URL) {
+		t.Fatal("probe() returned false for healthy server")
 	}
 	if sawAuth.Load() {
 		t.Error("Authorization header sent when none configured")

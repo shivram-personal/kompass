@@ -1,4 +1,4 @@
-package prometheus
+package prom
 
 import (
 	"fmt"
@@ -199,9 +199,9 @@ func buildClusterQueryInner(category MetricCategory, filterContainer bool) strin
 	}
 }
 
-// categoryUsesContainerFilter returns true if the category's queries include
-// the container!='' filter that may need fallback on cri-docker clusters.
-func categoryUsesContainerFilter(category MetricCategory) bool {
+// CategoryUsesContainerFilter returns true if the category's queries include
+// the container!='' filter that may need a fallback on cri-docker clusters.
+func CategoryUsesContainerFilter(category MetricCategory) bool {
 	return category == CategoryCPU || category == CategoryMemory
 }
 

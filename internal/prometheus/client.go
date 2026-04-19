@@ -2,14 +2,8 @@ package prometheus
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log"
 	"maps"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,15 +12,20 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/skyhook-io/radar/internal/errorlog"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
-// Client is a Prometheus HTTP API client with auto-discovery.
+// Client is radar's application-scoped Prometheus client. It holds the
+// K8s-aware state required for kubectl-like port-forward discovery, along
+// with a pkg/prom.Client that performs the actual HTTP calls once an
+// endpoint has been discovered.
 type Client struct {
 	mu sync.RWMutex
 
-	// Discovered/configured connection
-	baseURL  string // e.g. "http://localhost:54321" or "http://prometheus.monitoring.svc:9090"
-	basePath string // e.g. "/select/0/prometheus" for vmselect
+	// Effective connection (populated after discover succeeds).
+	baseURL  string
+	basePath string
+	prom     *prom.Client // rebuilt whenever baseURL/basePath changes
 
 	// Discovery state
 	discovered       bool
@@ -39,25 +38,8 @@ type Client struct {
 	k8sConfig   *rest.Config
 	contextName string
 
+	// Shared HTTP client used when constructing the underlying pkg/prom.Client.
 	httpClient *http.Client
-}
-
-// ServiceInfo holds info about a discovered Prometheus service.
-type ServiceInfo struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Port      int    `json:"port"`
-	BasePath  string `json:"basePath,omitempty"`
-}
-
-// Status represents the current Prometheus connection status.
-type Status struct {
-	Available   bool         `json:"available"`
-	Connected   bool         `json:"connected"`
-	Address     string       `json:"address,omitempty"`
-	Service     *ServiceInfo `json:"service,omitempty"`
-	ContextName string       `json:"contextName,omitempty"`
-	Error       string       `json:"error,omitempty"`
 }
 
 // Global client instance
@@ -75,9 +57,7 @@ func Initialize(client kubernetes.Interface, config *rest.Config, contextName st
 		k8sClient:   client,
 		k8sConfig:   config,
 		contextName: contextName,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		httpClient:  &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -102,6 +82,9 @@ func SetHeaders(h map[string]string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.headers = copyHeaders(h)
+	// Drop the cached prom.Client so the next request rebuilds its transport
+	// with the new headers.
+	c.prom = nil
 }
 
 func copyHeaders(h map[string]string) map[string]string {
@@ -121,6 +104,7 @@ func (c *Client) SetURL(rawURL string) {
 	c.manualURL = strings.TrimRight(rawURL, "/")
 	c.baseURL = ""
 	c.basePath = ""
+	c.prom = nil
 	c.discovered = false
 	c.discoveryService = nil
 }
@@ -140,6 +124,7 @@ func Reset() {
 		globalClient.mu.Lock()
 		globalClient.baseURL = ""
 		globalClient.basePath = ""
+		globalClient.prom = nil
 		globalClient.discovered = false
 		globalClient.discoveryService = nil
 		globalClient.mu.Unlock()
@@ -170,9 +155,7 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		contextName: contextName,
 		manualURL:   manualURL,
 		headers:     headers,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-		},
+		httpClient:  &http.Client{Timeout: 10 * time.Second},
 	}
 }
 
@@ -200,273 +183,102 @@ func (c *Client) GetStatus() Status {
 // Returns the base URL and base path, or an error.
 func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	c.mu.RLock()
-	if c.baseURL != "" {
-		// Verify cached address still works
-		base := c.baseURL
-		bp := c.basePath
-		c.mu.RUnlock()
-		if c.probe(ctx, base+bp) {
+	base := c.baseURL
+	bp := c.basePath
+	cached := c.prom
+	c.mu.RUnlock()
+
+	if base != "" && cached != nil {
+		ok, _ := cached.Probe(ctx)
+		if ok {
 			return base, bp, nil
 		}
 		// Stale — clear and rediscover
 		c.mu.Lock()
 		c.baseURL = ""
 		c.basePath = ""
+		c.prom = nil
 		c.discovered = false
 		c.mu.Unlock()
-	} else {
-		c.mu.RUnlock()
 	}
 
 	return c.discover(ctx)
 }
 
-// QueryRange executes a Prometheus range query.
-func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*QueryResult, error) {
-	base, basePath, err := c.EnsureConnected(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	params := url.Values{
-		"query": {query},
-		"start": {strconv.FormatInt(start.Unix(), 10)},
-		"end":   {strconv.FormatInt(end.Unix(), 10)},
-		"step":  {fmt.Sprintf("%.0f", step.Seconds())},
-	}
-
-	reqURL := fmt.Sprintf("%s%s/api/v1/query_range?%s", base, basePath, params.Encode())
-	return c.doQuery(ctx, reqURL)
+// Prom returns the underlying pkg/prom.Client for callers that compose cost
+// math on top of raw Query/QueryRange (e.g. pkg/opencost.ComputeCostSummaryFromProm).
+// Callers must have run EnsureConnected first; returns nil if discovery has
+// not produced a baseURL.
+func (c *Client) Prom() *prom.Client {
+	return c.getPromClient()
 }
 
-// Query executes a Prometheus instant query.
-func (c *Client) Query(ctx context.Context, query string) (*QueryResult, error) {
-	base, basePath, err := c.EnsureConnected(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	params := url.Values{
-		"query": {query},
-	}
-
-	reqURL := fmt.Sprintf("%s%s/api/v1/query?%s", base, basePath, params.Encode())
-	return c.doQuery(ctx, reqURL)
-}
-
-func (c *Client) doQuery(ctx context.Context, reqURL string) (*QueryResult, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	c.applyHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		errorlog.Record("prometheus", "error", "HTTP request failed: %v", err)
-		return nil, fmt.Errorf("querying prometheus: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB cap
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		errorlog.Record("prometheus", "error", "returned status %d: %s", resp.StatusCode, string(body))
-		return nil, fmt.Errorf("prometheus returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var promResp promResponse
-	if err := json.Unmarshal(body, &promResp); err != nil {
-		return nil, fmt.Errorf("parsing response: %w", err)
-	}
-
-	if promResp.Status != "success" {
-		return nil, fmt.Errorf("prometheus error: %s (%s)", promResp.Error, promResp.ErrorType)
-	}
-
-	return parseQueryResult(promResp.Data)
-}
-
-// applyHeaders attaches the configured custom headers to req under the
-// client's read lock, so a concurrent SetHeaders / Reinitialize doesn't race.
-func (c *Client) applyHeaders(req *http.Request) {
+// getPromClient returns a pkg/prom.Client pointed at the current baseURL/basePath,
+// building (and caching) one if necessary. Callers must hold the read or
+// write lock appropriately; see QueryRange/Query.
+func (c *Client) getPromClient() *prom.Client {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
+	if c.prom != nil {
+		p := c.prom
+		c.mu.RUnlock()
+		return p
 	}
+	base, bp, httpC := c.baseURL, c.basePath, c.httpClient
+	headers := copyHeaders(c.headers)
+	c.mu.RUnlock()
+
+	if base == "" {
+		return nil
+	}
+
+	tr := prom.NewHTTPTransport(base, bp, httpC)
+	tr.Headers = headers
+	p := prom.NewClient(tr)
+	c.mu.Lock()
+	// Double-check in case another goroutine built one.
+	if c.prom == nil {
+		c.prom = p
+	} else {
+		p = c.prom
+	}
+	c.mu.Unlock()
+	return p
 }
 
-// probe checks if a Prometheus endpoint is reachable and has data.
-// An instance that responds HTTP 200 but returns zero results for "up"
-// (no active scrape targets) is treated as unreachable so discovery
-// continues to the next candidate.
+// probe checks if a Prometheus endpoint at `addr` is reachable and has at
+// least one active scrape target, using pkg/prom.Client.Probe. Retained as
+// a method on *Client so existing discovery call sites (which test many
+// candidate addresses before committing) can continue to use `c.probe(...)`.
+// Also records an errorlog warning when a candidate is skipped because the
+// instance has no active scrape targets, so operators can see why discovery
+// moved past an otherwise-reachable endpoint.
 func (c *Client) probe(ctx context.Context, addr string) bool {
-	testCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(testCtx, "GET", addr+"/api/v1/query?query=up", nil)
-	if err != nil {
-		return false
+	c.mu.RLock()
+	httpC := c.httpClient
+	headers := copyHeaders(c.headers)
+	c.mu.RUnlock()
+	tr := prom.NewHTTPTransport(addr, "", httpC)
+	tr.Headers = headers
+	ok, reason := prom.NewClient(tr).Probe(ctx)
+	if !ok && reason == prom.ProbeReasonEmptyInstance {
+		errorlog.Record("prometheus", "warning",
+			"endpoint %s has no active scrape targets (empty instance), skipping", addr)
 	}
-	c.applyHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		// Surface auth failures explicitly — otherwise a misconfigured Bearer
-		// token shows up as "Prometheus not found" after discovery falls
-		// through every candidate.
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-			errorlog.Record("prometheus", "error", "endpoint %s returned HTTP %d (check --prometheus-header credentials)", addr, resp.StatusCode)
-		}
-		return false
-	}
-
-	// Verify the instance actually has scrape targets. An empty VictoriaMetrics
-	// or Prometheus instance returns 200 with zero results — skip it.
-	// 10 MB matches doQuery's limit so a large cluster's `up` response fits.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
-	if err != nil {
-		return false
-	}
-	var promResp struct {
-		Status string `json:"status"`
-		Data   struct {
-			Result []json.RawMessage `json:"result"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &promResp); err != nil {
-		// A 200 response that isn't Prometheus JSON is almost certainly not
-		// Prometheus (captive portal, ingress login page, misconfigured proxy).
-		return false
-	}
-	if promResp.Status != "success" {
-		// Some proxies return 200 with a Prometheus-shaped error body.
-		return false
-	}
-	if len(promResp.Data.Result) == 0 {
-		errorlog.Record("prometheus", "warning", "endpoint %s has no active scrape targets (empty instance), skipping", addr)
-		return false
-	}
-	return true
+	return ok
 }
 
-// Prometheus API response types
-
-type promResponse struct {
-	Status    string          `json:"status"`
-	Data      json.RawMessage `json:"data"`
-	ErrorType string          `json:"errorType,omitempty"`
-	Error     string          `json:"error,omitempty"`
+// QueryRange executes a Prometheus range query via the underlying pkg/prom.Client.
+func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
+	}
+	return c.getPromClient().QueryRange(ctx, query, start, end, step)
 }
 
-// QueryResult is the parsed result of a Prometheus query.
-type QueryResult struct {
-	ResultType string   `json:"resultType"`
-	Series     []Series `json:"series"`
-}
-
-// Series is a single time series from a Prometheus query.
-type Series struct {
-	Labels     map[string]string `json:"labels"`
-	DataPoints []DataPoint       `json:"dataPoints"`
-}
-
-// DataPoint is a single (timestamp, value) pair.
-type DataPoint struct {
-	Timestamp int64   `json:"timestamp"`
-	Value     float64 `json:"value"`
-}
-
-func parseQueryResult(data json.RawMessage) (*QueryResult, error) {
-	var raw struct {
-		ResultType string `json:"resultType"`
-		Result     []struct {
-			Metric map[string]string `json:"metric"`
-			Values [][]interface{}   `json:"values"` // for matrix
-			Value  []interface{}     `json:"value"`  // for vector
-		} `json:"result"`
+// Query executes a Prometheus instant query via the underlying pkg/prom.Client.
+func (c *Client) Query(ctx context.Context, query string) (*QueryResult, error) {
+	if _, _, err := c.EnsureConnected(ctx); err != nil {
+		return nil, err
 	}
-
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("parsing result: %w", err)
-	}
-
-	result := &QueryResult{
-		ResultType: raw.ResultType,
-		Series:     make([]Series, 0, len(raw.Result)),
-	}
-
-	for _, r := range raw.Result {
-		series := Series{
-			Labels: r.Metric,
-		}
-
-		if raw.ResultType == "matrix" {
-			series.DataPoints = make([]DataPoint, 0, len(r.Values))
-			for _, v := range r.Values {
-				dp, err := parseDataPoint(v)
-				if err != nil {
-					log.Printf("[prometheus] Skipping invalid data point: %v", err)
-					continue
-				}
-				series.DataPoints = append(series.DataPoints, dp)
-			}
-		} else if raw.ResultType == "vector" && r.Value != nil {
-			dp, err := parseDataPoint(r.Value)
-			if err != nil {
-				log.Printf("[prometheus] Skipping invalid vector data point: %v", err)
-			} else {
-				series.DataPoints = []DataPoint{dp}
-			}
-		}
-
-		result.Series = append(result.Series, series)
-	}
-
-	return result, nil
-}
-
-func parseDataPoint(v []interface{}) (DataPoint, error) {
-	if len(v) != 2 {
-		return DataPoint{}, fmt.Errorf("expected 2 elements, got %d", len(v))
-	}
-
-	// Timestamp can be float64 or json.Number
-	var ts float64
-	switch t := v[0].(type) {
-	case float64:
-		ts = t
-	case json.Number:
-		var err error
-		ts, err = t.Float64()
-		if err != nil {
-			return DataPoint{}, fmt.Errorf("parsing timestamp: %w", err)
-		}
-	default:
-		return DataPoint{}, fmt.Errorf("unexpected timestamp type: %T", v[0])
-	}
-
-	// Value is always a string in Prometheus responses
-	valStr, ok := v[1].(string)
-	if !ok {
-		return DataPoint{}, fmt.Errorf("expected string value, got %T", v[1])
-	}
-	val, err := strconv.ParseFloat(valStr, 64)
-	if err != nil {
-		return DataPoint{}, fmt.Errorf("parsing value %q: %w", valStr, err)
-	}
-
-	return DataPoint{
-		Timestamp: int64(ts),
-		Value:     val,
-	}, nil
+	return c.getPromClient().Query(ctx, query)
 }
