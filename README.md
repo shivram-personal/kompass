@@ -6,7 +6,6 @@
 Topology, event timeline, and service traffic — plus resource browsing, Helm management, and GitOps support for FluxCD and ArgoCD.
 
 [![CI](https://github.com/skyhook-io/radar/actions/workflows/ci.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/ci.yml)
-[![Snyk](https://snyk.io/test/github/skyhook-io/radar/badge.svg?targetFile=go.mod)](https://snyk.io/test/github/skyhook-io/radar)
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
 [![Go Report Card](https://goreportcard.com/badge/github.com/skyhook-io/radar?v=2)](https://goreportcard.com/report/github.com/skyhook-io/radar)
 [![Downloads](https://img.shields.io/github/downloads/skyhook-io/radar/total?logo=github)](https://github.com/skyhook-io/radar/releases)
