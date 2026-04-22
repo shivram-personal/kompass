@@ -183,8 +183,10 @@ export function Property({ label, value, copyable, onCopy, copied }: PropertyPro
 // ============================================================================
 
 // Condition types where status=True means a problem and status=False means healthy.
-// Covers kubelet-native Node conditions, Pod DisruptionTarget, and common Node Problem
-// Detector (NPD) conditions. Name-based patterns catch additional NPD-style types.
+// Covers kubelet-native Node conditions, Pod DisruptionTarget, common Node Problem
+// Detector (NPD) conditions, and the `Degraded`/`Stalled`/`OutOfSync`/`ReplicaFailure`
+// patterns used by Operator-style CRDs (ArgoCD, FluxCD, cert-manager, etc.).
+// Name-based patterns catch additional same-family types.
 const NEGATIVE_POLARITY_TYPES = new Set([
   'MemoryPressure',
   'DiskPressure',
@@ -195,6 +197,10 @@ const NEGATIVE_POLARITY_TYPES = new Set([
   'ReadonlyFilesystem',
   'CorruptDockerOverlay2',
   'Swap',
+  'Degraded',
+  'Stalled',
+  'OutOfSync',
+  'ReplicaFailure',
 ])
 
 const NEGATIVE_POLARITY_PATTERNS: RegExp[] = [
@@ -208,6 +214,9 @@ const NEGATIVE_POLARITY_PATTERNS: RegExp[] = [
   /Shutdown$/,
   /^ReadOnly/,
   /Error/,
+  /Failure$/,
+  /^Failed/,
+  /^Failing/,
 ]
 
 function isInvertedPolarityCondition(type: string | undefined): boolean {
@@ -232,7 +241,7 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
     return (a.type || '').localeCompare(b.type || '')
   })
 
-  const failCount = sorted.filter((c: any) => c.status !== 'Unknown' && !isConditionHealthy(c)).length
+  const failCount = sorted.filter((c: any) => (c.status === 'True' || c.status === 'False') && !isConditionHealthy(c)).length
 
   return (
     <Section
@@ -245,7 +254,7 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
 
         <div className="space-y-0.5">
           {sorted.map((cond: any) => {
-            const isUnknown = cond.status === 'Unknown'
+            const isUnknown = cond.status !== 'True' && cond.status !== 'False'
             const isOk = !isUnknown && isConditionHealthy(cond)
             const isFail = !isOk && !isUnknown
             return (
