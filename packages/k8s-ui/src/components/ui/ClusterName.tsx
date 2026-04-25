@@ -3,7 +3,7 @@ import { parseContextName } from '../../utils/context-name'
 import type { ParsedContextName } from '../../utils/context-name'
 import awsLogo from './provider-logos/aws.png'
 import gcpLogo from './provider-logos/gcp.png'
-import azureLogo from './provider-logos/azure.png'
+import azureLogo from './provider-logos/azure.svg'
 
 // ClusterName renders a kubectl context string with the meaningful
 // cluster identity surfaced as primary text and provider/region pushed
@@ -43,10 +43,7 @@ function ProviderBadge({ provider }: { provider: NonNullable<ParsedContextName['
     <img
       src={PROVIDER_LOGOS[provider]}
       alt={`${provider} cluster`}
-      // object-contain keeps wordmark logos (especially AWS, which is
-      // horizontal) from being warped into a square. 16x16 fits inline
-      // text comfortably.
-      className="h-4 w-4 flex-shrink-0 object-contain"
+      className="h-4 w-4 flex-shrink-0"
     />
   )
 }
