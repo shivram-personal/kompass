@@ -1673,15 +1673,25 @@ interface ResourcesViewProps {
 const DEFAULT_KIND_INFO: SelectedKindInfo = { name: 'pods', kind: 'Pod', group: '' }
 
 // Read initial state from URL — kind is in the path: {basePath}/{kind}
-function getInitialKindFromURL(basePath: string = '/resources'): SelectedKindInfo {
-  // Read kind from URL path segment after basePath: {basePath}/{kind}
-  const pathname = window.location.pathname
+//
+// Hosts that own their own URL shape (Hub fleet view) pass a synthetic
+// pathname/search via the locationPathname/locationSearch props. When
+// those are provided, prefer them over window.location — otherwise the
+// host's URL (e.g. `/fleet/search?kind=deployment`) wouldn't resolve
+// against the synthetic basePath and we'd fall through to DEFAULT_KIND.
+function getInitialKindFromURL(
+  basePath: string = '/resources',
+  locationPathname?: string,
+  locationSearch?: string,
+): SelectedKindInfo {
+  const pathname = locationPathname || window.location.pathname
+  const search = locationSearch || window.location.search
   const base = basePath.replace(/\/$/, '') // strip trailing slash
   let kind: string | null = null
   if (pathname.startsWith(base + '/')) {
     kind = pathname.slice(base.length + 1).split('/')[0] || null
   }
-  const group = new URLSearchParams(window.location.search).get('apiGroup') || ''
+  const group = new URLSearchParams(search).get('apiGroup') || ''
   if (kind) {
     // Find matching resource from CORE_RESOURCES or use as-is
     // Only match core resources when no apiGroup is specified (avoids collisions like KNative Service)
@@ -1744,10 +1754,10 @@ export function ResourcesView({
 }: ResourcesViewProps) {
   const location = useMemo(() => ({ search: locationSearch, pathname: locationPathname }), [locationSearch, locationPathname])
   const initialFilters = getInitialFiltersFromURL()
-  const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath))
+  const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, locationPathname, locationSearch))
   // Sync selectedKind from URL when locationPathname changes (e.g., browser back, external sidebar navigation)
   useEffect(() => {
-    const kindFromURL = getInitialKindFromURL(basePath)
+    const kindFromURL = getInitialKindFromURL(basePath, locationPathname, locationSearch)
     if (kindFromURL.name !== selectedKind.name || kindFromURL.group !== selectedKind.group) {
       setSelectedKind(kindFromURL)
     }
@@ -2277,7 +2287,7 @@ export function ResourcesView({
     isSyncingFromURL.current = true
 
     // Re-read URL params and update state
-    const newKind = getInitialKindFromURL(basePath)
+    const newKind = getInitialKindFromURL(basePath, locationPathname, locationSearch)
     const newFilters = getInitialFiltersFromURL()
 
     // Update kind if it changed
