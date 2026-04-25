@@ -1,6 +1,7 @@
 // Utility functions for resource display in tables
 
 import { formatCPUString, formatMemoryString, formatBytes } from '../../utils/format'
+import { pluralize } from '../../utils/pluralize'
 
 // Import functions from sub-modules used internally by getCellFilterValue
 import { getCertificateStatus, getCertificateRequestStatus, getClusterIssuerStatus, getClusterIssuerType, getOrderState, getChallengeState, getChallengeType } from './resource-utils-certmanager'
@@ -904,7 +905,7 @@ export function getNodeTaints(node: any): { count: number; text: string } {
   const taints = node.spec?.taints || []
   const count = taints.length
   if (count === 0) return { count: 0, text: 'None' }
-  return { count, text: count === 1 ? '1 taint' : `${count} taints` }
+  return { count, text: pluralize(count, 'taint') }
 }
 
 export function getNodeVersion(node: any): string {

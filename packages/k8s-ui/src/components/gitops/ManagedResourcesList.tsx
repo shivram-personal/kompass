@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Package, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { ManagedResource, GitOpsHealthStatus } from '../../types/gitops'
 import { groupManagedResourcesByKind } from '../../types/gitops'
+import { pluralize } from '../../utils/pluralize'
 
 interface ManagedResourcesListProps {
   resources: ManagedResource[]
@@ -204,7 +205,7 @@ export function InventoryCount({ count, healthy, unhealthy }: { count: number; h
 
   return (
     <span className="text-xs text-theme-text-secondary">
-      {count} {count === 1 ? 'resource' : 'resources'}
+      {pluralize(count, 'resource')}
     </span>
   )
 }

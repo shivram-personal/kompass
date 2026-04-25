@@ -2,6 +2,21 @@ import { ReactNode, useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 
+// Module-level singleton coordinator: only one Tooltip can be visible
+// at a time across the whole app. Without this, two Tooltip instances
+// could both render their portal simultaneously — happens when a
+// trigger element unmounts/remounts during an in-progress hover (React
+// re-render, HMR, rapid cursor movement between adjacent triggers),
+// because the old trigger's mouseleave never fires so its visible
+// state stays stuck. Observed in the multi-cluster fleet visual test
+// on Packages source-chip hovers.
+//
+// Each visible Tooltip registers a `hide` callback. When the next
+// Tooltip becomes visible, it calls the previous active tooltip's
+// hide(), guaranteeing a single visible portal. Registry clears on
+// hide or unmount.
+let activeHide: (() => void) | null = null
+
 interface TooltipProps {
   content: ReactNode
   children: ReactNode
@@ -79,9 +94,27 @@ export function Tooltip({
     setCoords({ top, left })
   }, [position])
 
+  // Stable hide function for the singleton registry — useRef so the
+  // identity stays the same across renders, otherwise the registry
+  // could hold a stale closure that doesn't see the latest setState.
+  const hideRef = useRef<() => void>(() => {})
+  hideRef.current = () => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current)
+      timeoutRef.current = null
+    }
+    setIsVisible(false)
+  }
+
   const showTooltip = () => {
     if (disabled || !content) return
     timeoutRef.current = window.setTimeout(() => {
+      // Singleton: hide whoever was visible before us, register self
+      // as the new active tooltip. Guards against stuck duplicates.
+      if (activeHide && activeHide !== hideRef.current) {
+        activeHide()
+      }
+      activeHide = hideRef.current
       setIsVisible(true)
     }, delay)
   }
@@ -90,6 +123,9 @@ export function Tooltip({
     if (timeoutRef.current) {
       clearTimeout(timeoutRef.current)
       timeoutRef.current = null
+    }
+    if (activeHide === hideRef.current) {
+      activeHide = null
     }
     setIsVisible(false)
   }
@@ -105,6 +141,13 @@ export function Tooltip({
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
+      }
+      // Clear from singleton registry on unmount — otherwise a Tooltip
+      // that unmounts while visible (e.g. row removed during hover)
+      // would leave a stale entry in activeHide pointing at a torn-down
+      // setState, blocking the next Tooltip from registering.
+      if (activeHide === hideRef.current) {
+        activeHide = null
       }
     }
   }, [])

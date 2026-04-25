@@ -1,5 +1,6 @@
 import { Database, HardDrive, Activity, Clock, Shield, KeyRound } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { pluralize } from '../../../utils/pluralize'
 import {
   getCNPGClusterInstances,
   getCNPGClusterPhase,
@@ -118,14 +119,14 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
         <AlertBanner
           variant="error"
           title="Certificate Expired"
-          items={expiredCerts.map(c => `${c.secretName} expired ${Math.abs(c.daysUntilExpiry)} day${Math.abs(c.daysUntilExpiry) === 1 ? '' : 's'} ago (${c.expiryDate})`)}
+          items={expiredCerts.map(c => `${c.secretName} expired ${pluralize(Math.abs(c.daysUntilExpiry), 'day')} ago (${c.expiryDate})`)}
         />
       )}
       {criticalCerts.length > 0 && (
         <AlertBanner
           variant="error"
           title="Certificate Expiring Soon"
-          items={criticalCerts.map(c => `${c.secretName} expires in ${c.daysUntilExpiry} day${c.daysUntilExpiry === 1 ? '' : 's'} (${c.expiryDate})`)}
+          items={criticalCerts.map(c => `${c.secretName} expires in ${pluralize(c.daysUntilExpiry, 'day')} (${c.expiryDate})`)}
         />
       )}
       {warningCerts.length > 0 && (

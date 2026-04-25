@@ -1,4 +1,5 @@
 export * from './format'
+export * from './pluralize'
 export * from './badge-colors'
 export * from './resource-icons'
 export * from './navigation'

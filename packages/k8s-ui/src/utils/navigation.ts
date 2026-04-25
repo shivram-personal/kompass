@@ -1,4 +1,5 @@
 import type { SelectedResource, ResourceRef, APIResource } from '../types/core'
+import { englishPlural } from './pluralize'
 
 /**
  * Canonical callback type for navigating to a resource.
@@ -93,14 +94,9 @@ export function kindToPlural(kind: string): string {
   }
   if (aliases[kindLower]) return aliases[kindLower]
 
-  // Fallback: English pluralization rules (covers *Class→*classes, *Policy→*policies, *Repository→*repositories, etc.)
-  if (kindLower.endsWith('s') || kindLower.endsWith('x') || kindLower.endsWith('ch') || kindLower.endsWith('sh')) {
-    return kindLower + 'es'
-  }
-  if (kindLower.endsWith('y') && !/[aeiou]y$/.test(kindLower)) {
-    return kindLower.slice(0, -1) + 'ies'
-  }
-  return kindLower + 's'
+  // Fallback: English pluralization rules (shared with pluralize() in
+  // utils/pluralize.ts so a rule change updates both call paths).
+  return englishPlural(kindLower)
 }
 
 /**

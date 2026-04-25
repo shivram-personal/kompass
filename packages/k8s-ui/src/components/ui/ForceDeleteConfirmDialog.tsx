@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { ChevronDown, ChevronRight, Loader2 } from 'lucide-react'
 import { ConfirmDialog } from './ConfirmDialog'
 import { formatKindName } from './drawer-components'
+import { pluralize } from '../../utils/pluralize'
 
 export interface CascadeDependent {
   kind: string
@@ -106,7 +107,7 @@ function CascadeDependentsList({ dependents }: { dependents: CascadeDependent[] 
       >
         {expanded ? <ChevronDown className="w-3.5 h-3.5 shrink-0" /> : <ChevronRight className="w-3.5 h-3.5 shrink-0" />}
         <span>
-          Will also delete {dependents.length} dependent {dependents.length === 1 ? 'resource' : 'resources'}
+          Will also delete {pluralize(dependents.length, 'dependent resource')}
         </span>
       </button>
 

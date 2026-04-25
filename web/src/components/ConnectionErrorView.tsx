@@ -3,7 +3,7 @@ import { useState } from 'react'
 import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
-import { useOpenLocalTerminal } from '@skyhook-io/k8s-ui'
+import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -193,8 +193,12 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             {connection.errorType === 'config' ? 'No Cluster Configuration' : 'Cannot Connect to Cluster'}
           </h2>
 
-          <p className="text-sm text-theme-text-secondary mb-1">
-            Context: <span className="font-mono text-theme-text-primary">{connection.context || '(none)'}</span>
+          <p className="text-sm text-theme-text-secondary mb-1 inline-flex items-center gap-1.5">
+            Context: {connection.context ? (
+              <ClusterName name={connection.context} />
+            ) : (
+              <span className="font-mono text-theme-text-primary">(none)</span>
+            )}
           </p>
 
           {connection.clusterName && (

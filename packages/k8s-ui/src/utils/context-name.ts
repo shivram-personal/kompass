@@ -11,8 +11,13 @@ export interface ParsedContextName {
  * and cluster name. Used by the context switcher and error views.
  */
 export function parseContextName(name: string): ParsedContextName {
-  // GKE format: gke_{project}_{region}_{cluster-name}
-  const gkeMatch = name.match(/^gke_([^_]+)_([^_]+)_(.+)$/)
+  // GKE format: gke_{project}_{region|zone}_{cluster-name}
+  // Region is `<continent>-<direction><number>` (e.g. us-east1, europe-west1,
+  // asia-northeast1). Zonal clusters append `-<letter>` (e.g. us-east1-b).
+  // We require the middle segment to contain at least one digit; that rules
+  // out garbage like `gke_a_b_c` and `gke_proj_notazone_cluster` while
+  // matching all real GCP zone shapes without enumerating them.
+  const gkeMatch = name.match(/^gke_([a-z][a-z0-9-]+)_([a-z][a-z0-9-]*\d[a-z0-9-]*)_(.+)$/)
   if (gkeMatch) {
     const [, project, region, cluster] = gkeMatch
     return {
@@ -50,13 +55,21 @@ export function parseContextName(name: string): ParsedContextName {
     }
   }
 
-  // AKS format: try to detect
-  if (name.toLowerCase().includes('aks') || name.includes('.azure.') || name.includes('azurecr')) {
+  // AKS context format produced by `az aks get-credentials`:
+  //   clusterUser_<resourceGroup>_<clusterName>
+  //   clusterAdmin_<resourceGroup>_<clusterName>
+  // Strict regex — the prior heuristic (substring match for "aks") was a
+  // correctness bug that mis-tagged user-named clusters like "tracks-prod"
+  // (contains "aks") or "my-aks-experiment". Better to fall through to
+  // unknown than to mis-parse.
+  const aksMatch = name.match(/^cluster(?:User|Admin)_([^_]+)_(.+)$/)
+  if (aksMatch) {
+    const [, resourceGroup, cluster] = aksMatch
     return {
       provider: 'AKS',
-      account: null,
+      account: resourceGroup,
       region: null,
-      clusterName: name,
+      clusterName: cluster,
       raw: name,
     }
   }
