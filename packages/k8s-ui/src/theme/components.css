@@ -146,6 +146,13 @@
     border-color: light-dark(#fcd34d, rgba(120, 53, 15, 0.4));
   }
 
+  /* Alert - orange (between degraded and unhealthy; "high severity"). */
+  .status-alert {
+    background-color: light-dark(#ffedd5, rgba(124, 45, 18, 0.5));
+    color: light-dark(#c2410c, #fdba74);
+    border-color: light-dark(#fdba74, rgba(124, 45, 18, 0.4));
+  }
+
   /* Unhealthy/Error - red */
   .status-unhealthy {
     background-color: light-dark(#fee2e2, rgba(127, 29, 29, 0.5));

@@ -9,7 +9,7 @@ import { TrafficSummary } from './TrafficSummary'
 import { CertificateHealthCard } from './CertificateHealthCard'
 import { NetworkPolicyCoverageCard } from './NetworkPolicyCoverageCard'
 import { CostCard } from './CostCard'
-import { AuditCard } from '@skyhook-io/k8s-ui'
+import { AuditCard, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -197,10 +197,7 @@ function ProblemsPanel({ problems, onResourceClick }: ProblemsPanelProps) {
                 group: p.group,
               })}
             >
-              <span className={clsx(
-                'w-1.5 h-1.5 rounded-full shrink-0',
-                p.severity === 'critical' ? 'bg-red-400' : p.severity === 'high' ? 'bg-orange-400' : 'bg-yellow-400'
-              )} />
+              <StatusDot tone={mapHealthToTone(p.severity)} className="shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{p.kind}</span>

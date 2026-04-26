@@ -1,4 +1,4 @@
-// Pluralization helpers used across both Radar and Radar Hub. Layered:
+// Pluralization helpers shared across the package. Layered:
 //
 //   englishPlural(noun)         — lowest level. Applies regular English
 //                                 rules: s/x/ch/sh → +es; consonant-y → ies;

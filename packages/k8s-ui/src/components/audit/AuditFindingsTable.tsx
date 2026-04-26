@@ -38,11 +38,11 @@ export interface AuditFindingsTableProps {
   /** When true, render a Cluster column on flat findings rows and offer a
    *  "Group by cluster" toggle in addition to the existing namespace
    *  grouping. Set this when findings come from multiple clusters
-   *  (fleet aggregation) so users can pivot the view by cluster. Each
-   *  finding's clusterId/clusterName fields drive the column + groups. */
+   *  (cross-cluster aggregation) so users can pivot the view by cluster.
+   *  Each finding's clusterId/clusterName fields drive the column + groups. */
   multiCluster?: boolean
   /** Click-through for cluster-name links in the multi-cluster view.
-   *  Defaults to no-op; the fleet caller passes a navigator that opens
+   *  Defaults to no-op; multi-cluster hosts pass a navigator that opens
    *  the cluster's per-cluster audit page. */
   onClusterClick?: (clusterId: string) => void
 }
@@ -471,7 +471,7 @@ function FlatFindingRow({ finding, onResourceClick, showCluster, onClusterClick 
         <AlertTriangle className={clsx('w-4 h-4 shrink-0', severityColor)} />
       )}
       {showCluster && finding.clusterId && (
-        // Cluster column for fleet/multi-cluster contexts. Renders before
+        // Cluster column for multi-cluster contexts. Renders before
         // the kind/namespace/name path so cluster scope is established
         // first in the read order.
         onClusterClick ? (

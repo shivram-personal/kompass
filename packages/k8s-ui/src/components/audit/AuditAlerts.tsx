@@ -12,7 +12,7 @@ export interface AuditFinding {
   severity: string
   message: string
   /** Optional cluster identifier — set when findings come from multiple
-   *  clusters (e.g. fleet aggregation). When all findings have the same
+   *  clusters (cross-cluster aggregation). When all findings have the same
    *  clusterId or none is set, AuditFindingsTable hides the cluster column. */
   clusterId?: string
   /** Optional human-readable cluster name. Used for the cluster column

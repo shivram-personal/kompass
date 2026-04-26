@@ -1,6 +1,7 @@
 import type { DashboardCertificateHealth } from '../../api/client'
 import { Shield, ArrowRight } from 'lucide-react'
 import { clsx } from 'clsx'
+import { StatusDot, type StatusTone } from '@skyhook-io/k8s-ui'
 
 interface CertificateHealthCardProps {
   data: DashboardCertificateHealth
@@ -63,10 +64,10 @@ export function CertificateHealthCard({ data, onNavigate }: CertificateHealthCar
 
         {/* Breakdown */}
         <div className="grid grid-cols-2 gap-x-6 gap-y-2 mt-4 w-full">
-          <BucketRow label="Healthy" count={data.healthy} color="text-green-400" dotColor="bg-green-500" />
-          <BucketRow label="Warning" subtitle="< 30d" count={data.warning} color="text-yellow-400" dotColor="bg-yellow-500" />
-          <BucketRow label="Critical" subtitle="< 7d" count={data.critical} color="text-orange-400" dotColor="bg-orange-500" />
-          <BucketRow label="Expired" count={data.expired} color="text-red-400" dotColor="bg-red-500" />
+          <BucketRow label="Healthy" count={data.healthy} tone="healthy" />
+          <BucketRow label="Warning" subtitle="< 30d" count={data.warning} tone="degraded" />
+          <BucketRow label="Critical" subtitle="< 7d" count={data.critical} tone="alert" />
+          <BucketRow label="Expired" count={data.expired} tone="unhealthy" />
         </div>
       </div>
 
@@ -85,21 +86,29 @@ export function CertificateHealthCard({ data, onNavigate }: CertificateHealthCar
   )
 }
 
-function BucketRow({ label, subtitle, count, color, dotColor }: {
+const COUNT_TEXT_COLOR: Record<StatusTone, string> = {
+  healthy: 'text-emerald-400',
+  degraded: 'text-amber-400',
+  alert: 'text-orange-400',
+  unhealthy: 'text-rose-400',
+  neutral: 'text-sky-400',
+  unknown: 'text-slate-400',
+}
+
+function BucketRow({ label, subtitle, count, tone }: {
   label: string
   subtitle?: string
   count: number
-  color: string
-  dotColor: string
+  tone: StatusTone
 }) {
   return (
     <div className="flex items-center gap-2">
-      <span className={clsx('w-2 h-2 rounded-full shrink-0', dotColor)} />
+      <StatusDot tone={tone} size="md" className="shrink-0" />
       <span className="text-xs text-theme-text-secondary flex-1">
         {label}
         {subtitle && <span className="text-theme-text-tertiary ml-1">{subtitle}</span>}
       </span>
-      <span className={clsx('text-sm font-semibold tabular-nums', count > 0 ? color : 'text-theme-text-tertiary')}>{count}</span>
+      <span className={clsx('text-sm font-semibold tabular-nums', count > 0 ? COUNT_TEXT_COLOR[tone] : 'text-theme-text-tertiary')}>{count}</span>
     </div>
   )
 }

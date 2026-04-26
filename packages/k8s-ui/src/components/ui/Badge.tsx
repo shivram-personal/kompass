@@ -6,7 +6,7 @@ import type { ReactNode } from 'react'
 // All class names are STATIC STRINGS (required for Tailwind content scanning)
 // =============================================================================
 
-export type BadgeSeverity = 'success' | 'warning' | 'error' | 'info' | 'neutral'
+export type BadgeSeverity = 'success' | 'warning' | 'alert' | 'error' | 'info' | 'neutral'
 export type BadgeSize = 'sm' | 'default'
 
 interface BadgeProps {
@@ -33,6 +33,7 @@ interface BadgeProps {
 const SEVERITY: Record<BadgeSeverity, string> = {
   success: 'bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-950/50 dark:text-emerald-400 dark:border-emerald-700/40',
   warning: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-700/40',
+  alert:   'bg-orange-100 text-orange-800 border-orange-300 dark:bg-orange-950/50 dark:text-orange-400 dark:border-orange-700/40',
   error:   'bg-red-100 text-red-700 border-red-300 dark:bg-red-950/50 dark:text-red-400 dark:border-red-700/40',
   info:    'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
   neutral: 'bg-theme-hover/50 text-theme-text-secondary border-theme-border',

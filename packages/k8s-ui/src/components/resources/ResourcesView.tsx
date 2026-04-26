@@ -181,12 +181,13 @@ interface Column {
 }
 
 /**
- * Extra column injected by the parent (e.g. Hub's "Cluster" column in
- * fleet mode). Self-contained: carries its own render/sort/filter
- * functions so the host code doesn't need to extend KNOWN_COLUMNS or
- * the per-kind cell renderers.
+ * Extra column injected by the parent — for example, a leading "Cluster"
+ * column when the table is rendered inside a multi-cluster host.
+ * Self-contained: carries its own render/sort/filter functions so the
+ * host code doesn't need to extend KNOWN_COLUMNS or the per-kind cell
+ * renderers.
  *
- * When extraLeadingColumns is undefined or empty (the OSS Radar
+ * When extraLeadingColumns is undefined or empty (the standard
  * single-cluster path), the rest of ResourcesView's behavior is
  * byte-identical to today.
  *
@@ -1653,19 +1654,21 @@ interface ResourcesViewProps {
   hideSidebar?: boolean
   /** Callback when the [+] create button is clicked. Receives the currently selected kind info. */
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
-  /** Columns prepended to KNOWN_COLUMNS for every kind (e.g. Hub's
-   *  Cluster column in fleet mode). Self-contained: each carries its
-   *  own render/sort/filter functions. When undefined, behavior is
-   *  byte-identical to single-cluster mode. */
+  /** Columns prepended to KNOWN_COLUMNS for every kind. For example, a
+   *  multi-cluster host can inject a leading Cluster column. Each extra
+   *  column is self-contained (own render/sort/filter), so the host
+   *  doesn't need to extend KNOWN_COLUMNS or per-kind cell renderers.
+   *  When undefined, behavior is byte-identical to single-cluster mode. */
   extraLeadingColumns?: ExtraColumn[]
-  /** Hub fleet escape hatch: receive the FULL resource object on row
-   *  click, instead of the stripped {kind, namespace, name, group}
-   *  shape onResourceClick gets. Lets the parent read injected fields
-   *  (e.g. `_cluster.id` for cross-tree drill-in nav) without a
-   *  parallel (kind, ns, name) → cluster lookup that wouldn't dedup
-   *  for resources sharing a namespaced name across clusters. When set,
-   *  this fires INSTEAD OF onResourceClick (the drawer-pattern handler
-   *  doesn't fit a full-page-nav drill-in). */
+  /** Escape hatch for full-page-nav row selection: receive the FULL
+   *  resource object on row click, instead of the stripped
+   *  {kind, namespace, name, group} shape onResourceClick gets. Lets the
+   *  parent read injected fields (e.g. multi-cluster row-level metadata
+   *  for cross-tree drill-in nav) without a parallel
+   *  (kind, ns, name) → owner lookup that wouldn't dedup for resources
+   *  sharing a namespaced name across cluster boundaries. When set, this
+   *  fires INSTEAD OF onResourceClick (the drawer-pattern handler doesn't
+   *  fit a full-page-nav drill-in). */
   onRowSelect?: (resource: any) => void
 }
 
@@ -1674,11 +1677,12 @@ const DEFAULT_KIND_INFO: SelectedKindInfo = { name: 'pods', kind: 'Pod', group: 
 
 // Read initial state from URL — kind is in the path: {basePath}/{kind}
 //
-// Hosts that own their own URL shape (Hub fleet view) pass a synthetic
+// Hosts that own their own URL shape (an embedding host with custom
+// routes outside the `{basePath}/{kind}` convention) pass a synthetic
 // pathname/search via the locationPathname/locationSearch props. When
 // those are provided, prefer them over window.location — otherwise the
-// host's URL (e.g. `/fleet/search?kind=deployment`) wouldn't resolve
-// against the synthetic basePath and we'd fall through to DEFAULT_KIND.
+// host's URL wouldn't resolve against the synthetic basePath and we'd
+// fall through to DEFAULT_KIND.
 function getInitialKindFromURL(
   basePath: string = '/resources',
   locationPathname?: string,
@@ -1856,7 +1860,7 @@ export function ResourcesView({
   }, [topPodMetrics, topNodeMetrics])
 
   // Load column settings from localStorage when kind changes
-  // Prepend extraLeadingColumns (Hub's fleet Cluster column) before
+  // Prepend extraLeadingColumns (host-injected leading columns) before
   // the kind-specific KNOWN_COLUMNS entries. When extras are undefined,
   // this collapses to the single-cluster behavior.
   const allColumns = useMemo(() => {
@@ -2387,8 +2391,8 @@ export function ResourcesView({
 
     // Route both push and replace through `navigate` (which honors the
     // onNavigate prop). The previous direct `window.history.replaceState`
-    // bypass meant a Hub-style host that wants to suppress URL writes
-    // (passing `onNavigate={() => {}}`) couldn't suppress filter-change
+    // bypass meant a host that wants to suppress URL writes (passing
+    // `onNavigate={() => {}}`) couldn't suppress filter-change
     // updates — they'd still rewrite the address bar through history.
     navigate({ pathname: newPath, search: queryStr }, { replace: !pushHistory })
   }, [navigate, basePath])
@@ -2440,7 +2444,7 @@ export function ResourcesView({
     hasProcessedInitialResource.current = true
 
     // If the URL has no kind segment (e.g., /resources), update to include the default kind.
-    // Route through `navigate` so an onNavigate-suppressing host (Hub fleet) can opt out.
+    // Route through `navigate` so an onNavigate-suppressing host can opt out.
     const base = basePath.replace(/\/$/, '')
     const path = window.location.pathname
     if (path === base || path === base + '/') {
@@ -2768,7 +2772,7 @@ export function ResourcesView({
     }
 
     // Apply column filters (generic, multi-select per column — OR within column, AND across columns)
-    // Extra columns (Hub fleet) override the built-in getCellFilterValue
+    // Extra columns override the built-in getCellFilterValue
     // when the parent supplied a custom getFilterValue.
     const activeColFilters = Object.entries(columnFilters).filter(([, vals]) => vals.length > 0)
     if (activeColFilters.length > 0) {
@@ -2833,7 +2837,7 @@ export function ResourcesView({
       })
     }
 
-    // Apply custom sorting if set. Extra columns (Hub fleet) override
+    // Apply custom sorting if set. Extra columns override
     // the built-in getSortValue for their key.
     if (sortColumn && sortDirection) {
       const extra = extraColumnsByKey.get(sortColumn)
@@ -3036,7 +3040,7 @@ export function ResourcesView({
     for (const col of columns) {
       if (SKIP_FILTER_COLUMNS.has(col.key)) continue
 
-      // Extra columns (Hub fleet) supply their own filter value extractor.
+      // Extra columns supply their own filter value extractor.
       // Skip the dropdown for extras that didn't supply one (no way to
       // build the unique-values list without it).
       const extra = extraColumnsByKey.get(col.key)
@@ -3170,7 +3174,7 @@ export function ResourcesView({
         : [...existing, pair]
       const newSelector = newLabels.join(',')
       // Sync to URL — route through `navigate` so the onNavigate prop
-      // can suppress the write (Hub fleet view).
+      // can suppress the write.
       const params = new URLSearchParams(window.location.search)
       if (newSelector) {
         params.set('labels', newSelector)
@@ -3403,7 +3407,7 @@ export function ResourcesView({
                   setOwnerKind('')
                   setOwnerName('')
                   // Route through `navigate` so onNavigate-suppressing hosts
-                  // (Hub fleet view) can opt out of the URL write.
+                  // can opt out of the URL write.
                   const params = new URLSearchParams(window.location.search)
                   params.delete('ownerKind')
                   params.delete('ownerName')
@@ -3764,8 +3768,10 @@ export function ResourcesView({
                     isHighlighted={isHighlighted}
                     majorityNodeMinorVersion={majorityNodeMinorVersion}
                     onClick={() => {
-                      // Fleet escape hatch wins: full resource object (with
-                      // injected _cluster fields) goes through onRowSelect.
+                      // Full-row escape hatch wins: when set, the parent
+                      // wants the whole resource object (e.g. multi-cluster
+                      // hosts that injected row-level metadata for cross-tree
+                      // navigation) and we skip the drawer-pattern handler.
                       // Otherwise the drawer-pattern onResourceClick handler
                       // gets the stripped SelectedResource shape.
                       if (onRowSelect) {
@@ -3877,7 +3883,7 @@ interface CellContentProps {
 
 function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn }: CellContentProps) {
   // Parent-injected extra columns short-circuit the built-in switch.
-  // Used by Hub's fleet view for the leading Cluster column.
+  // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
     return <>{extraColumn.render(resource)}</>
   }

@@ -17,7 +17,13 @@ export function parseContextName(name: string): ParsedContextName {
   // We require the middle segment to contain at least one digit; that rules
   // out garbage like `gke_a_b_c` and `gke_proj_notazone_cluster` while
   // matching all real GCP zone shapes without enumerating them.
-  const gkeMatch = name.match(/^gke_([a-z][a-z0-9-]+)_([a-z][a-z0-9-]*\d[a-z0-9-]*)_(.+)$/)
+  //
+  // Linear-time form: a non-consuming lookahead asserts "this segment
+  // contains a digit" up to the next `_`, then a single greedy capture
+  // consumes the segment. The earlier `[a-z0-9-]*\d[a-z0-9-]*` shape had
+  // overlapping repeats around the digit, which CodeQL flagged as a
+  // polynomial backtracking risk.
+  const gkeMatch = name.match(/^gke_([a-z][a-z0-9-]+)_(?=[a-z0-9-]*\d)([a-z][a-z0-9-]*)_(.+)$/)
   if (gkeMatch) {
     const [, project, region, cluster] = gkeMatch
     return {

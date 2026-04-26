@@ -17,7 +17,13 @@ import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternal
 // STATUS & HEALTH UTILITIES
 // ============================================================================
 
-export type HealthLevel = 'healthy' | 'degraded' | 'unhealthy' | 'unknown' | 'neutral'
+// Six health levels in escalating urgency order:
+//   healthy < neutral < unknown < degraded < alert < unhealthy
+// `alert` (orange) is the intermediate tier between degraded (amber) and
+// unhealthy (red). Used for severity gradients like Problems/Audit
+// (critical/high/medium → unhealthy/alert/degraded), where collapsing
+// `high` into either neighbor erases real signal.
+export type HealthLevel = 'healthy' | 'degraded' | 'alert' | 'unhealthy' | 'unknown' | 'neutral'
 
 export interface StatusBadge {
   text: string
@@ -29,6 +35,7 @@ export interface StatusBadge {
 export const healthColors: Record<HealthLevel, string> = {
   healthy: 'status-healthy',
   degraded: 'status-degraded',
+  alert: 'status-alert',
   unhealthy: 'status-unhealthy',
   unknown: 'status-unknown',
   neutral: 'status-neutral',

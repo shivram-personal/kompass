@@ -5,11 +5,8 @@ import { Tooltip } from './Tooltip'
 
 // FilterPill is a single-button toggle filter — clickable pill that
 // communicates an active/inactive state. Used in horizontal filter rows
-// where each pill toggles one filter on/off.
-//
-// This is the toggle counterpart of FilterChip (combobox-with-dropdown).
-// Both live in this same family; they're disambiguated by name because
-// they serve different UI patterns.
+// where each pill toggles one filter on/off (no dropdown — this is the
+// toggle pattern, not a combobox).
 //
 // Tone-encoded active state: when tone='danger' and active=true, the
 // pill bg+text use rose; tone='warn' uses amber; etc. Matches the
@@ -41,8 +38,8 @@ interface Props {
 }
 
 const TONE_ACTIVE: Record<FilterPillTone, string> = {
-  // Neutral matches Radar's pre-existing style — preserve back-compat
-  // when migrating AuditFindingsTable's local FilterChip to this.
+  // Neutral matches Radar's pre-existing style (preserves back-compat with
+  // AuditFindingsTable's previous local toggle).
   neutral: 'bg-theme-text-primary/10 text-theme-text-primary font-medium',
   danger:  'bg-red-500/15 text-red-700 dark:text-red-300 font-medium',
   warn:    'bg-amber-500/15 text-amber-800 dark:text-amber-300 font-medium',

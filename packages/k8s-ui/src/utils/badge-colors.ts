@@ -36,6 +36,7 @@ export const OPERATION_BADGE_COLORS: Record<string, string> = {
 export const HEALTH_BADGE_COLORS: Record<string, string> = {
   healthy: BADGE_SEVERITY_COLORS.success,
   degraded: BADGE_SEVERITY_COLORS.warning,
+  alert: BADGE_SEVERITY_COLORS.alert,
   unhealthy: BADGE_SEVERITY_COLORS.error,
   unknown: BADGE_SEVERITY_COLORS.neutral,
 }

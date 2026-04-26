@@ -8,8 +8,8 @@ import { clsx } from 'clsx'
 // trigger element unmounts/remounts during an in-progress hover (React
 // re-render, HMR, rapid cursor movement between adjacent triggers),
 // because the old trigger's mouseleave never fires so its visible
-// state stays stuck. Observed in the multi-cluster fleet visual test
-// on Packages source-chip hovers.
+// state stays stuck. Observed in multi-cluster visual tests on
+// densely-populated source-chip hovers.
 //
 // Each visible Tooltip registers a `hide` callback. When the next
 // Tooltip becomes visible, it calls the previous active tooltip's

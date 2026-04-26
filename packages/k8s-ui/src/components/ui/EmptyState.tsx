@@ -28,7 +28,7 @@ interface Props {
   tone?: EmptyStateTone
   variant?: EmptyStateVariant
   /** Optional Lucide icon. Defaults to none for inline; not auto-set for card either —
-   *  callers pass icons that match their context (CheckCircle2 for healthy fleet, etc.). */
+   *  callers pass icons that match their context (e.g. CheckCircle2 for a healthy state). */
   icon?: LucideIcon
   headline: string
   body?: ReactNode
