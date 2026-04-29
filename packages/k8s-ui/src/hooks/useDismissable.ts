@@ -61,11 +61,12 @@ export function useDismissable({
       return false
     }
 
-    // pointerdown rather than click so we beat any onClick handler the
-    // user's intended target wires up. The behaviour is the same as
-    // mousedown on traditional pointer devices but also covers touch
-    // and pen interactions.
-    const handlePointerDown = (e: MouseEvent) => {
+    // `pointerdown` rather than `click` so we beat any onClick handler
+    // the user's intended target wires up; `pointerdown` rather than
+    // `mousedown` so we also catch touch and pen interactions in a
+    // single listener. PointerEvent is supported in every browser
+    // radar targets (Chromium, Safari 13+, Firefox 59+).
+    const handlePointerDown = (e: PointerEvent) => {
       if (isInsideContainers(e.target)) return
       onDismiss()
     }
@@ -83,12 +84,12 @@ export function useDismissable({
     // covers both paths.
     const handlePopState = onRouteChange ? () => onDismiss() : null
 
-    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('pointerdown', handlePointerDown)
     if (handleKeyDown) document.addEventListener('keydown', handleKeyDown)
     if (handlePopState) window.addEventListener('popstate', handlePopState)
 
     return () => {
-      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('pointerdown', handlePointerDown)
       if (handleKeyDown) document.removeEventListener('keydown', handleKeyDown)
       if (handlePopState) window.removeEventListener('popstate', handlePopState)
     }
