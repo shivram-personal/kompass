@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, useContext } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { useNow } from '../../hooks/useNow'
 import { PaneLoader } from '../ui/PaneLoader'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
 import {
@@ -2624,12 +2625,31 @@ export function ResourcesView({
 
   const [refetch, isRefreshAnimating, refreshPhase] = useRefreshAnimation(() => refetchFn?.())
 
-  // Track last updated time
+  // Track last updated time.
+  //
+  // React Query bumps `dataUpdatedAt` every time it records a successful
+  // fetch — even when the response is byte-identical to what's already
+  // cached and structural sharing returns the same `data` reference.
+  // Mounting / focusing windows / a sibling subscriber issuing the same
+  // queryKey can all trigger a no-op refetch. Resetting the user-visible
+  // "Updated Xs" timer on those events is misleading: it suggests fresh
+  // data arrived when nothing actually changed, and the user reads the
+  // "<1s" jump as evidence that opening a filter drawer triggered a real
+  // network round-trip. Gate the bump on data-reference change so we only
+  // bump when the cache actually mutated. (SKY-820 / bug 16)
+  const lastDataRef = useRef<unknown>(undefined)
   useEffect(() => {
-    if (dataUpdatedAt) {
+    if (dataUpdatedAt && resources !== lastDataRef.current) {
+      lastDataRef.current = resources
       setLastUpdated(new Date(dataUpdatedAt))
     }
-  }, [dataUpdatedAt])
+  }, [dataUpdatedAt, resources])
+
+  // Tick once per second so the "Updated Xs" label advances smoothly
+  // instead of feeling frozen until some unrelated re-render.
+  // `formatAge(lastUpdated)` re-reads Date.now(); without this tick the
+  // label only updates when the parent re-renders for another reason.
+  useNow(1000)
 
   // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
@@ -3953,7 +3973,19 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     )
   }
   if (column === 'age') {
-    return <span className="text-sm text-theme-text-secondary">{formatAge(meta.creationTimestamp)}</span>
+    // Tooltip with the absolute creationTimestamp gives users a stable
+    // reference. Reported in SKY-820: relative-age values felt like they
+    // shifted between refreshes, eroding trust in the column. The
+    // absolute timestamp is the ground truth — exposing it on hover
+    // lets users self-verify without leaving the table.
+    if (!meta.creationTimestamp) {
+      return <span className="text-sm text-theme-text-secondary">-</span>
+    }
+    return (
+      <Tooltip content={new Date(meta.creationTimestamp).toLocaleString()}>
+        <span className="text-sm text-theme-text-secondary">{formatAge(meta.creationTimestamp)}</span>
+      </Tooltip>
+    )
   }
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
