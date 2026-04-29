@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { User, LogOut } from 'lucide-react'
 import { useAuthMe } from '../api/client'
 import { useQueryClient } from '@tanstack/react-query'
+import { computeUserInitials } from '@skyhook-io/k8s-ui/utils/user-initials'
 
 export function UserMenu() {
   const { data: authMe } = useAuthMe()
@@ -40,12 +41,7 @@ export function UserMenu() {
     return null
   }
 
-  const initials = authMe.username
-    .split('@')[0]
-    .split(/[._-]/)
-    .slice(0, 2)
-    .map(s => s[0]?.toUpperCase() || '')
-    .join('')
+  const initials = computeUserInitials(authMe.username)
 
   return (
     <div ref={menuRef} className="relative">
