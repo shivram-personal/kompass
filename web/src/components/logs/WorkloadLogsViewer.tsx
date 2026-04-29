@@ -13,7 +13,7 @@ interface WorkloadLogsViewerProps {
 
 export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewerProps) {
   const desktopDownload = useDesktopDownload()
-  const { theme } = useTheme()
+  const { effectiveTheme } = useTheme()
 
   const fetchAll = useCallback(async (params: WorkloadLogsFetchParams): Promise<WorkloadLogsResult> => {
     const query = new URLSearchParams()
@@ -37,7 +37,7 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
       fetchAll={fetchAll}
       createStream={makeStream}
       overrideDownload={desktopDownload}
-      forceDark={theme === 'dark' ? true : undefined}
+      forceDark={effectiveTheme === 'dark' ? true : undefined}
     />
   )
 }

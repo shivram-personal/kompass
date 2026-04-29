@@ -1600,15 +1600,18 @@ function GitHubStarButton() {
 
 // Theme toggle button component
 function ThemeToggle() {
-  const { theme, toggleTheme } = useTheme()
+  // The icon and tooltip should reflect what the user actually sees,
+  // not their stored preference — otherwise on 'system' the button
+  // would display the wrong icon. (SKY-823 bug 13)
+  const { effectiveTheme, toggleTheme } = useTheme()
 
   return (
     <button
       onClick={toggleTheme}
       className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-      title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+      title={`Switch to ${effectiveTheme === 'dark' ? 'light' : 'dark'} mode`}
     >
-      {theme === 'dark' ? (
+      {effectiveTheme === 'dark' ? (
         <Sun className="w-4 h-4" />
       ) : (
         <Moon className="w-4 h-4" />

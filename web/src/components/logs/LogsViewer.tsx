@@ -14,7 +14,7 @@ interface LogsViewerProps {
 
 export function LogsViewer({ namespace, podName, containers, initialContainer }: LogsViewerProps) {
   const desktopDownload = useDesktopDownload()
-  const { theme } = useTheme()
+  const { effectiveTheme } = useTheme()
 
   const fetchLogs = useCallback(async (params: LogsFetchParams) => {
     const query = new URLSearchParams()
@@ -41,7 +41,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
       fetchLogs={fetchLogs}
       createStream={makeStream}
       overrideDownload={desktopDownload}
-      forceDark={theme === 'dark' ? true : undefined}
+      forceDark={effectiveTheme === 'dark' ? true : undefined}
     />
   )
 }
