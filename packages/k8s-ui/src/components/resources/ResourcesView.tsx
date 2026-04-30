@@ -1750,6 +1750,26 @@ function getInitialFiltersFromURL() {
 // Sort state type
 type SortDirection = 'asc' | 'desc' | null
 
+/**
+ * "Updated Xs" / "Updated 1m" badge in the toolbar.
+ *
+ * Lives in its own component so the 1Hz `useNow` tick re-renders only
+ * this tiny label, NOT the entire ResourcesView (which is ~4000 lines
+ * and contains a virtualized table). Without this, every visible
+ * row's React render would run once per second just to advance one
+ * label by 1s. (Cursor Bugbot caught this on PR #572.)
+ */
+function LastUpdatedLabel({ lastUpdated }: { lastUpdated: Date }) {
+  // Read the ticking clock here so only this subtree re-renders.
+  useNow(1000)
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
+      <Clock className="w-3.5 h-3.5" />
+      <span>Updated {formatAge(lastUpdated.toISOString())}</span>
+    </div>
+  )
+}
+
 export function ResourcesView({
   namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange,
   apiResources: apiResourcesProp,
@@ -2645,11 +2665,11 @@ export function ResourcesView({
     }
   }, [dataUpdatedAt, resources])
 
-  // Tick once per second so the "Updated Xs" label advances smoothly
-  // instead of feeling frozen until some unrelated re-render.
-  // `formatAge(lastUpdated)` re-reads Date.now(); without this tick the
-  // label only updates when the parent re-renders for another reason.
-  useNow(1000)
+  // The 1Hz tick that advances "Updated Xs" lives in `LastUpdatedLabel`
+  // below — extracted to its own tiny component on purpose, so we
+  // don't re-render this ~4000-line ResourcesView (and every visible
+  // virtualized row) once per second just to update one label.
+  // (Cursor Bugbot caught this on PR #572.)
 
   // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
@@ -3488,12 +3508,7 @@ export function ResourcesView({
             </span>
           )}
 
-          {lastUpdated && (
-            <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
-              <Clock className="w-3.5 h-3.5" />
-              <span>Updated {formatAge(lastUpdated.toISOString())}</span>
-            </div>
-          )}
+          {lastUpdated && <LastUpdatedLabel lastUpdated={lastUpdated} />}
           {/* Column picker */}
           <div className="relative" ref={columnPickerRef}>
             <button
