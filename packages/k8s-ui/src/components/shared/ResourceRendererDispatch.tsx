@@ -354,17 +354,13 @@ export function ResourceRendererDispatch({
   resolvedEnvFrom,
   rendererOverrides,
 }: ResourceRendererDispatchProps) {
-  // Normalize the incoming `kind` to the lowercase plural form the
-  // dispatch table is keyed on. Without this, a caller that passes
-  // "CronJob" (PascalCase singular — e.g. from a topology node click,
-  // or any code path that hands the registry the singular kind name)
-  // produces `kind = 'cronjob'` after lowercasing, which doesn't
-  // match `'cronjobs'` and so silently renders nothing — the user
-  // saw the URL update but no detail panel. (SKY-826 bug 9)
-  //
-  // `kindToPlural` is idempotent: it returns already-plural inputs
-  // unchanged, so callers that already pass `'cronjobs'` are not
-  // double-pluralised.
+  // Callers reach this dispatch from two shapes: lowercase plural
+  // (resource list rows: 'cronjobs') and PascalCase singular
+  // (topology node clicks: 'CronJob'). The dispatch table is keyed
+  // only on lowercase plurals, so a raw .toLowerCase() leaves the
+  // singular form mismatched and nothing renders. kindToPlural
+  // covers both shapes idempotently (already-plural inputs return
+  // unchanged), so this single normalisation handles every caller.
   const kind = kindToPlural(resource.kind)
 
   const isKnownKind = KNOWN_KINDS.has(kind)
@@ -567,9 +563,8 @@ export function ResourceRendererDispatch({
 
 export function getResourceStatus(kind: string, data: any): { text: string; color: string } | null {
   if (!data) return null
-  // Normalise to lowercase plural for the same reason the renderer
-  // dispatch does — singular kinds like "CronJob" otherwise produce
-  // a no-match here too. (SKY-826 bug 9)
+  // Same normalisation as the renderer dispatch above — singular
+  // kinds like "CronJob" otherwise produce a no-match here too.
   const k = kindToPlural(kind)
 
   if (k === 'pods') return getPodStatus(data)

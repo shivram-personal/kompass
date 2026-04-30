@@ -173,21 +173,8 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
-/**
- * Format a zoom-window value (in hours) for display next to the
- * timeline. Pure helper so the popover and the rest of the toolbar
- * agree on the same string. (SKY-826 bug 12)
- *
- * Rules:
- *   <  1h → "<m>m"
- *   <  24h → "<n>h"
- *   >= 24h → "<n>d"
- */
-export function formatZoomLabel(zoom: number): string {
-  if (zoom < 1) return `${Math.round(zoom * 60)}m`
-  if (zoom >= 24) return `${Math.round(zoom / 24)}d`
-  return `${zoom}h`
-}
+import { formatZoomLabel } from '@skyhook-io/k8s-ui/utils/zoom-label'
+export { formatZoomLabel }
 
 interface ZoomWindowPickerProps {
   zoom: number

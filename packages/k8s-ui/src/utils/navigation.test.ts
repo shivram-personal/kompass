@@ -56,6 +56,19 @@ describe('kindToPlural', () => {
     expect(kindToPlural('horizontalpodautoscalers')).toBe('horizontalpodautoscalers')
   })
 
+  test('idempotent on dispatch-keyed shortnames (hpas)', () => {
+    // Bugbot regression for PR #585: ResourcesSidebar uses
+    // `{ kind: 'hpas' }` as a primary key (not a query alias) and the
+    // dispatch table at ResourceRendererDispatch matches both 'hpas'
+    // AND 'horizontalpodautoscalers'. Without an explicit entry in
+    // BUILTIN_PLURAL_TO_KIND, kindToPlural('hpas') falls through to
+    // englishPlural which sees a trailing 's' and adds 'es' →
+    // 'hpases', matching nothing. The detail panel then silently
+    // renders empty for HPAs — the exact CronJob-shaped bug this
+    // PR exists to prevent, just for a different kind. Pin it.
+    expect(kindToPlural('hpas')).toBe('hpas')
+  })
+
   test('handles aliases', () => {
     expect(kindToPlural('HorizontalPodAutoscaler')).toBe('horizontalpodautoscalers')
     expect(kindToPlural('pvc')).toBe('persistentvolumeclaims')

@@ -34,6 +34,13 @@ const BUILTIN_PLURAL_TO_KIND: Record<string, string> = {
   clusterrolebindings: 'ClusterRoleBinding',
   serviceaccounts: 'ServiceAccount',
   networkpolicies: 'NetworkPolicy',
+  // The codebase uses the kubectl shortname `hpas` as a *primary* dispatch
+  // key (see ResourcesSidebar `{ kind: 'hpas' }` and the dispatch table in
+  // ResourceRendererDispatch). Listing it here makes `kindToPlural('hpas')`
+  // return `'hpas'` unchanged via the idempotence check below — without
+  // this entry, `englishPlural('hpas')` adds "es" → `'hpases'` (ends in s)
+  // and the HPA detail panel renders nothing.
+  hpas: 'HorizontalPodAutoscaler',
 }
 
 // Dynamic map built from API discovery — populated by initNavigationMap().
