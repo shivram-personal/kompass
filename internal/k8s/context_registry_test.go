@@ -538,11 +538,11 @@ func TestRefreshContextRegistry_NoOpWhenNothingChanged(t *testing.T) {
 }
 
 func TestRefreshContextRegistry_NilMtimeMapNoOp(t *testing.T) {
-	// Defensive: if perFileMtimes is nil (e.g. a code path forgot
-	// to initialise it after MergeAndSwitchContext promoted
+	// Defensive: if perFileMtimes is nil (e.g. a future code path
+	// forgets to initialise it after MergeAndSwitchContext promoted
 	// single-file → isolated-load), refresh must not panic. The
-	// original v1 of this PR wrote `fileMtimes[path] = mtime` and
-	// would have hit "assignment to entry in nil map".
+	// production path already nil-inits before calling, but the
+	// helper is exported and we want depth.
 	dir := t.TempDir()
 	f1 := writeKubeconfig(t, dir, "a.yaml", "ctx-a", []kubeEntry{
 		{ctxName: "ctx-a", userName: "u", clusterName: "c1"},
@@ -553,22 +553,54 @@ func TestRefreshContextRegistry_NilMtimeMapNoOp(t *testing.T) {
 			t.Fatalf("refresh panicked on nil mtimes: %v", r)
 		}
 	}()
-	// Pass nil — refresh must initialise it OR no-op cleanly. The
-	// PRODUCTION code seeds it before calling refresh; this test
-	// is the belt-and-braces guard that the helper itself doesn't
-	// crash if a future caller forgets.
 	var nilMtimes map[string]time.Time
-	if nilMtimes != nil {
-		t.Fatal("setup: nilMtimes should be nil")
+	changed := refreshContextRegistry(registry, fileConfigs, nilMtimes)
+	if changed {
+		t.Errorf("refresh on nil mtimes should report no-op (changed=false)")
 	}
-	// Production wraps refresh in a nil-init, but if a future
-	// refactor stops doing that we want refresh itself to survive.
-	// We simulate that by passing an empty map (refresh always
-	// writes, never reads as a precondition).
-	emptyMtimes := make(map[string]time.Time)
-	refreshContextRegistry(registry, fileConfigs, emptyMtimes)
-	if _, ok := emptyMtimes[f1]; !ok {
-		t.Errorf("refresh should have populated emptyMtimes for %s", filepath.Base(f1))
+	// Registry must be untouched on the nil-mtimes no-op path.
+	if _, ok := registry["ctx-a"]; !ok {
+		t.Errorf("nil-mtimes refresh should not have modified the registry")
+	}
+}
+
+func TestRefreshContextRegistry_SeedsByFileFromMtimesEvenWhenRegistryEmptyForFile(t *testing.T) {
+	// Regression: if every context in a file got removed by a
+	// previous refresh, the file path stayed in fileMtimes but
+	// wasn't in the registry — so the next refresh's byFile only
+	// included paths still represented in the registry, and the
+	// emptied file would never be re-stat'd. Any new contexts
+	// later added to that file would be invisible until restart.
+	dir := t.TempDir()
+	f1 := writeKubeconfig(t, dir, "a.yaml", "ctx-a", []kubeEntry{
+		{ctxName: "ctx-a", userName: "u", clusterName: "c1"},
+	})
+	registry, fileConfigs := buildContextRegistry([]string{f1})
+	mtimes := map[string]time.Time{}
+	for _, p := range []string{f1} {
+		if info, err := os.Stat(p); err == nil {
+			mtimes[p] = info.ModTime()
+		}
+	}
+	// Simulate "all contexts in f1 were removed by a prior refresh"
+	// while leaving the mtime cache intact.
+	delete(registry, "ctx-a")
+	if len(registry) != 0 {
+		t.Fatalf("setup: expected empty registry, got %v", registry)
+	}
+	// Wait, then rewrite f1 to add a brand-new context. The mtime
+	// cache will still hold the OLD timestamp, so refresh should
+	// see the file as changed and rebuild it.
+	rewriteKubeconfig(t, f1, []kubeEntry{
+		{ctxName: "ctx-a-fresh", userName: "u", clusterName: "c1"},
+		{ctxName: "ctx-b-fresh", userName: "u", clusterName: "c1"},
+	})
+	refreshContextRegistry(registry, fileConfigs, mtimes)
+	if _, ok := registry["ctx-a-fresh"]; !ok {
+		t.Errorf("refresh should have picked up ctx-a-fresh; got %v", registry)
+	}
+	if _, ok := registry["ctx-b-fresh"]; !ok {
+		t.Errorf("refresh should have picked up ctx-b-fresh; got %v", registry)
 	}
 }
 

@@ -205,12 +205,31 @@ func refreshContextRegistry(
 	if registry == nil {
 		return false
 	}
+	// Defensive nil-check on fileMtimes: callers (GetAvailableContexts)
+	// already lazy-init this, but the helper is exported and a future
+	// caller that forgets would otherwise panic on the first
+	// `fileMtimes[path] = mtime` write below.
+	if fileMtimes == nil {
+		return false
+	}
 	changed := false
 	// Group registry entries by source file so we can decide
 	// per-file: keep, re-parse, or drop everything pointing at it.
+	// Seed byFile from BOTH the registry AND fileMtimes — if a
+	// previous refresh dropped every context for a file (e.g. user
+	// removed all kubectl-config-delete-context'd from a single
+	// file), the file's path stays in fileMtimes but no longer
+	// appears in registry. Without seeding from fileMtimes, that
+	// file would never be re-stat'd and any newly-added contexts
+	// to it would be invisible until the user restarted Radar.
 	byFile := make(map[string][]string)
 	for qName, entry := range registry {
 		byFile[entry.SourceFile] = append(byFile[entry.SourceFile], qName)
+	}
+	for path := range fileMtimes {
+		if _, ok := byFile[path]; !ok {
+			byFile[path] = nil
+		}
 	}
 	for path, qNames := range byFile {
 		info, statErr := os.Stat(path)

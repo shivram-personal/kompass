@@ -943,9 +943,17 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	if existingPath, ok := capiKubeconfigs[contextName]; ok {
 		if err := clientcmd.WriteToFile(*newConfig, existingPath); err == nil {
 			// Refresh the cached parsed config so subsequent GetAvailableContexts
-			// calls reflect any changes in the incoming YAML.
+			// calls reflect any changes in the incoming YAML. Also bump the
+			// cached mtime so the next refresh doesn't see a stale value
+			// (the WriteToFile above just changed the file's mtime) and
+			// uselessly re-parse a file we've already re-parsed here.
 			if parsed, perr := clientcmd.LoadFromFile(existingPath); perr == nil {
 				perFileConfigs[existingPath] = parsed
+				if perFileMtimes != nil {
+					if info, serr := os.Stat(existingPath); serr == nil {
+						perFileMtimes[existingPath] = info.ModTime()
+					}
+				}
 			}
 			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
 			if qName == "" {
