@@ -173,6 +173,98 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
   return breakdown
 }
 
+/**
+ * Format a zoom-window value (in hours) for display next to the
+ * timeline. Pure helper so the popover and the rest of the toolbar
+ * agree on the same string. (SKY-826 bug 12)
+ *
+ * Rules:
+ *   <  1h → "<m>m"
+ *   <  24h → "<n>h"
+ *   >= 24h → "<n>d"
+ */
+export function formatZoomLabel(zoom: number): string {
+  if (zoom < 1) return `${Math.round(zoom * 60)}m`
+  if (zoom >= 24) return `${Math.round(zoom / 24)}d`
+  return `${zoom}h`
+}
+
+interface ZoomWindowPickerProps {
+  zoom: number
+  levels: ReadonlyArray<number>
+  onSelect: (next: number) => void
+  formatLabel: (zoom: number) => string
+}
+
+/**
+ * Button + popover for the timeline zoom window. Replaces a static
+ * `<span>` users tried to click and got nothing from. Click-outside
+ * and Escape both close. (SKY-826 bug 12)
+ */
+function ZoomWindowPicker({ zoom, levels, onSelect, formatLabel }: ZoomWindowPickerProps) {
+  const [open, setOpen] = useState(false)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (e: PointerEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  return (
+    <div ref={containerRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title="Choose time window"
+        className="text-xs text-theme-text-tertiary hover:text-theme-text-primary inline-flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-theme-elevated"
+      >
+        <span>{formatLabel(zoom)} window</span>
+        <svg className="w-3 h-3" viewBox="0 0 12 12" aria-hidden>
+          <path d="M3 5l3 3 3-3" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <ul
+          role="listbox"
+          className="absolute left-0 top-full mt-1 z-30 min-w-[120px] bg-theme-surface border border-theme-border rounded shadow-lg py-1 max-h-64 overflow-y-auto"
+        >
+          {levels.map(level => (
+            <li key={level}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={level === zoom}
+                onClick={() => { onSelect(level); setOpen(false) }}
+                className={clsx(
+                  'w-full text-left px-3 py-1 text-xs hover:bg-theme-elevated transition-colors',
+                  level === zoom ? 'text-theme-text-primary font-medium bg-theme-elevated/50' : 'text-theme-text-secondary',
+                )}
+              >
+                {formatLabel(level)}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces }: TimelineSwimlanesProps) {
   const hasLimitedAccess = useHasLimitedAccess()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -484,9 +576,18 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
               >
                 <ZoomOut className="w-4 h-4" />
               </button>
-              <span className="text-xs text-theme-text-tertiary">
-                {zoom < 1 ? `${Math.round(zoom * 60)}m` : zoom >= 24 ? `${Math.round(zoom / 24)}d` : `${zoom}h`} window
-              </span>
+              {/*
+                Used to be a static <span>; users tried to click it
+                expecting a dropdown of preset windows and got
+                nothing. Now it's a real button + popover with the
+                full ZOOM_LEVELS palette. (SKY-826 bug 12)
+              */}
+              <ZoomWindowPicker
+                zoom={zoom}
+                levels={ZOOM_LEVELS}
+                onSelect={setZoom}
+                formatLabel={formatZoomLabel}
+              />
               {panOffset > 0 && (
                 <button
                   onClick={() => setPanOffset(0)}

@@ -35,7 +35,15 @@ describe('kindToPlural', () => {
   })
 
   test('idempotent on known plurals (prevents double-pluralization)', () => {
-    // This was the original bug: "secrets" → "secretses"
+    // This was the original bug: "secrets" → "secretses".
+    // ResourceRendererDispatch (SKY-826 bug 9) now also depends on
+    // this idempotence — it normalises every incoming kind through
+    // kindToPlural at the top of the dispatch so PascalCase-singular
+    // callers (e.g. topology node clicks: node.kind === 'CronJob')
+    // and lowercase-plural callers (resources view: 'cronjobs')
+    // both land on the same renderer. If this idempotence breaks,
+    // every drawer-reopen that re-feeds the dispatcher its own
+    // already-plural kind would silently render nothing.
     expect(kindToPlural('secrets')).toBe('secrets')
     expect(kindToPlural('services')).toBe('services')
     expect(kindToPlural('ingresses')).toBe('ingresses')

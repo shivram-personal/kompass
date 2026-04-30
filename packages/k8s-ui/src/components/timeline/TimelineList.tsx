@@ -8,6 +8,7 @@ import {
   Search,
   RefreshCw,
   ChevronRight,
+  ChevronDown,
   Filter,
   Plus,
   Trash2,
@@ -336,31 +337,53 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
         </div>
 
         {/* Kind filter */}
-        <select
-          value={kindFilter}
-          onChange={(e) => setKindFilter(e.target.value)}
-          className="appearance-none bg-theme-elevated text-theme-text-primary text-sm rounded-lg px-3 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option value="">All Kinds</option>
-          {RESOURCE_KINDS.map((kind) => (
-            <option key={kind} value={kind}>
-              {kind}
-            </option>
-          ))}
-        </select>
+        {/*
+          appearance-none strips the native dropdown arrow, so without
+          a visible chevron the select read as a non-interactive
+          badge — users reported they couldn't get the dropdown to
+          open. Wrap in a relative container with a ChevronDown
+          overlay; cursor-pointer makes the affordance unambiguous.
+          (SKY-826 bug 11)
+        */}
+        <div className="relative">
+          <select
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value)}
+            aria-label="Filter by Kind"
+            className="appearance-none cursor-pointer bg-theme-elevated text-theme-text-primary text-sm rounded-lg pl-3 pr-8 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">All Kinds</option>
+            {RESOURCE_KINDS.map((kind) => (
+              <option key={kind} value={kind}>
+                {kind}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary"
+            aria-hidden
+          />
+        </div>
 
         {/* Time range */}
-        <select
-          value={timeRange}
-          onChange={(e) => setTimeRange(e.target.value as TimeRange)}
-          className="appearance-none bg-theme-elevated text-theme-text-primary text-sm rounded-lg px-3 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          {TIME_RANGES.map((range) => (
-            <option key={range.value} value={range.value}>
-              {range.label}
-            </option>
-          ))}
-        </select>
+        <div className="relative">
+          <select
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value as TimeRange)}
+            aria-label="Time range"
+            className="appearance-none cursor-pointer bg-theme-elevated text-theme-text-primary text-sm rounded-lg pl-3 pr-8 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            {TIME_RANGES.map((range) => (
+              <option key={range.value} value={range.value}>
+                {range.label}
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary"
+            aria-hidden
+          />
+        </div>
 
         {/* View toggle */}
         {onViewChange && (
