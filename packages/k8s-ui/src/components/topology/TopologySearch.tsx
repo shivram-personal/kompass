@@ -9,6 +9,20 @@ interface TopologySearchProps {
   nodes: TopologyNode[]
   onNodeSelect?: (node: TopologyNode) => void
   onZoomToNode?: (nodeId: string) => void
+  /**
+   * Optional unfiltered node set. When the parent has applied a
+   * view-mode filter (e.g. Fleet mode hides Pods/Deployments and
+   * only shows CAPI kinds), it should still pass the full topology
+   * here so the empty-state can tell users "your query matches X
+   * resources hidden by the current view" rather than the
+   * misleading "No resources found." (SKY-828 bug 45)
+   */
+  allNodes?: TopologyNode[]
+  /**
+   * Human-readable label for the current view mode. Used in the
+   * empty-state hint above. Defaults to "current view".
+   */
+  viewModeLabel?: string
 }
 
 // Icon mapping for different resource kinds
@@ -50,33 +64,47 @@ function getKindColor(kind: string): string {
   }
 }
 
-export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySearchProps) {
+export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, viewModeLabel }: TopologySearchProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
 
+  const matchesQuery = useCallback((node: TopologyNode, lowerQuery: string) => {
+    const name = node.name.toLowerCase()
+    const kind = node.kind.toLowerCase()
+    const namespace = (node.data.namespace as string || '').toLowerCase()
+    return (
+      name.includes(lowerQuery) ||
+      kind.includes(lowerQuery) ||
+      namespace.includes(lowerQuery) ||
+      `${kind}/${name}`.includes(lowerQuery) ||
+      `${namespace}/${name}`.includes(lowerQuery)
+    )
+  }, [])
+
   // Filter nodes based on query
   const filteredNodes = useMemo(() => {
     if (!query.trim()) return []
-
     const lowerQuery = query.toLowerCase()
     return nodes
-      .filter(node => {
-        const name = node.name.toLowerCase()
-        const kind = node.kind.toLowerCase()
-        const namespace = (node.data.namespace as string || '').toLowerCase()
-        return (
-          name.includes(lowerQuery) ||
-          kind.includes(lowerQuery) ||
-          namespace.includes(lowerQuery) ||
-          `${kind}/${name}`.includes(lowerQuery) ||
-          `${namespace}/${name}`.includes(lowerQuery)
-        )
-      })
+      .filter(node => matchesQuery(node, lowerQuery))
       .slice(0, 10) // Limit results
-  }, [nodes, query])
+  }, [nodes, query, matchesQuery])
+
+  // Count of matches in the unfiltered topology that the current
+  // view-mode filter is hiding. We only compute this when there's
+  // a query AND the visible set returned zero results, so the cost
+  // is bounded to actual no-result interactions.
+  // (SKY-828 bug 45: Fleet view hides Pods, so searching pod names
+  // returned "No resources found" — misleading.)
+  const hiddenMatchCount = useMemo(() => {
+    if (!query.trim() || filteredNodes.length > 0 || !allNodes) return 0
+    const lowerQuery = query.toLowerCase()
+    const visibleIds = new Set(nodes.map(n => n.id))
+    return allNodes.filter(n => !visibleIds.has(n.id) && matchesQuery(n, lowerQuery)).length
+  }, [query, filteredNodes.length, allNodes, nodes, matchesQuery])
 
   // Reset selection when results change
   useEffect(() => {
@@ -216,7 +244,12 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
               {query && filteredNodes.length === 0 && (
                 <div className="px-4 py-8 text-center text-theme-text-tertiary">
                   <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p>No resources found for "{query}"</p>
+                  <p>No resources found for "{query}"{viewModeLabel ? ` in ${viewModeLabel}` : ''}</p>
+                  {hiddenMatchCount > 0 && (
+                    <p className="mt-2 text-xs text-amber-400">
+                      {hiddenMatchCount} {hiddenMatchCount === 1 ? 'match is' : 'matches are'} hidden by the current view{viewModeLabel ? ` (${viewModeLabel})` : ''}. Switch view to see them.
+                    </p>
+                  )}
                 </div>
               )}
 

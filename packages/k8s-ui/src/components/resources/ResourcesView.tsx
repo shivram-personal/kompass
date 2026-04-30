@@ -3578,6 +3578,24 @@ export function ResourcesView({
                   <X className="w-3.5 h-3.5" />
                 </button>
               )}
+              {/*
+                The sidebar's count badge shows the cluster-wide
+                total for the selected kind (from resourceCounts) and
+                deliberately stays unfiltered — making the filter
+                state survivable across kind switches. When a search
+                yields zero results the user can think the badge is
+                lying. Spell out that the badge is the cluster total,
+                not the filtered count. (SKY-828 bug 46)
+              */}
+              {searchTerm && (() => {
+                const totalForKind = counts[selectedKind.group ? `${selectedKind.group}/${selectedKind.kind}` : selectedKind.kind] ?? 0
+                if (totalForKind === 0) return null
+                return (
+                  <p className="text-xs mt-1 text-theme-text-disabled">
+                    The sidebar shows {totalForKind} {totalForKind === 1 ? selectedKind.kind : `${selectedKind.kind}s`} in the cluster — the count is unfiltered.
+                  </p>
+                )
+              })()}
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
               {/* Show active filters as dismissible badges so user can clear them */}
               {(() => {
