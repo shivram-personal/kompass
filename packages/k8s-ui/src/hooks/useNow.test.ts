@@ -39,9 +39,12 @@ describe('shouldScheduleNow', () => {
 
 describe('scheduleNowTicks (the pure body of useNow)', () => {
   function fakeTimers() {
-    const setInterval = vi.fn(() => 'TIMER_ID' as unknown)
-    const clearInterval = vi.fn()
-    const now = vi.fn(() => 1700000000000)
+    // Type the spies explicitly so TS knows .mock.calls has the
+    // (cb, ms) shape — vi.fn() inference defaults to a 0-arity
+    // signature otherwise.
+    const setInterval = vi.fn<(cb: () => void, ms: number) => unknown>(() => 'TIMER_ID' as unknown)
+    const clearInterval = vi.fn<(id: unknown) => void>()
+    const now = vi.fn<() => number>(() => 1700000000000)
     return {
       timers: { setInterval, clearInterval, now },
       setInterval,
