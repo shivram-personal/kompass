@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -441,21 +443,33 @@ func TestRefreshContextRegistry_DropsRemovedFile(t *testing.T) {
 		t.Fatalf("remove fixture: %v", err)
 	}
 
-	changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, newFileConfigs, newMtimes, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
 	if !changed {
 		t.Errorf("expected refresh to report a change after deleting %s", filepath.Base(f2))
 	}
-	if _, ok := registry["ctx-doomed"]; ok {
-		t.Errorf("ctx-doomed still in registry after file removed: %v", keysOf(registry))
+	if _, ok := newRegistry["ctx-doomed"]; ok {
+		t.Errorf("ctx-doomed still in registry after file removed: %v", keysOf(newRegistry))
 	}
-	if _, ok := registry["ctx-alive"]; !ok {
-		t.Errorf("ctx-alive should still be in registry: %v", keysOf(registry))
+	if _, ok := newRegistry["ctx-alive"]; !ok {
+		t.Errorf("ctx-alive should still be in registry: %v", keysOf(newRegistry))
 	}
-	if _, ok := fileConfigs[f2]; ok {
+	if _, ok := newFileConfigs[f2]; ok {
 		t.Errorf("perFileConfigs still has entry for removed file %s", filepath.Base(f2))
 	}
-	if _, ok := mtimes[f2]; ok {
+	if _, ok := newMtimes[f2]; ok {
 		t.Errorf("perFileMtimes still has entry for removed file %s", filepath.Base(f2))
+	}
+	// Original maps must be untouched — refresh returns fresh maps so
+	// snapshot readers (SwitchContext, WriteKubeconfigForCurrentContext)
+	// can iterate the captured maps without locking.
+	if _, ok := registry["ctx-doomed"]; !ok {
+		t.Errorf("input registry was mutated; expected immutability")
+	}
+	if _, ok := fileConfigs[f2]; !ok {
+		t.Errorf("input fileConfigs was mutated; expected immutability")
+	}
+	if _, ok := mtimes[f2]; !ok {
+		t.Errorf("input mtimes was mutated; expected immutability")
 	}
 }
 
@@ -478,15 +492,18 @@ func TestRefreshContextRegistry_DropsContextRemovedFromFile(t *testing.T) {
 		{ctxName: "ctx-keep", userName: "u", clusterName: "c1"},
 	})
 
-	changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
 	if !changed {
 		t.Errorf("expected refresh to report a change after rewriting %s", filepath.Base(f1))
 	}
-	if _, ok := registry["ctx-delete"]; ok {
-		t.Errorf("ctx-delete still in registry after rewrite: %v", keysOf(registry))
+	if _, ok := newRegistry["ctx-delete"]; ok {
+		t.Errorf("ctx-delete still in registry after rewrite: %v", keysOf(newRegistry))
 	}
-	if _, ok := registry["ctx-keep"]; !ok {
-		t.Errorf("ctx-keep should still be in registry: %v", keysOf(registry))
+	if _, ok := newRegistry["ctx-keep"]; !ok {
+		t.Errorf("ctx-keep should still be in registry: %v", keysOf(newRegistry))
+	}
+	if _, ok := registry["ctx-delete"]; !ok {
+		t.Errorf("input registry was mutated; expected immutability")
 	}
 }
 
@@ -505,15 +522,15 @@ func TestRefreshContextRegistry_PicksUpNewContextInSameFile(t *testing.T) {
 		{ctxName: "ctx-new", userName: "u", clusterName: "c2"},
 	})
 
-	changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
 	if !changed {
 		t.Errorf("expected refresh to report a change after add")
 	}
-	if _, ok := registry["ctx-new"]; !ok {
-		t.Errorf("ctx-new not picked up after refresh: %v", keysOf(registry))
+	if _, ok := newRegistry["ctx-new"]; !ok {
+		t.Errorf("ctx-new not picked up after refresh: %v", keysOf(newRegistry))
 	}
-	if _, ok := registry["ctx-original"]; !ok {
-		t.Errorf("ctx-original disappeared from registry: %v", keysOf(registry))
+	if _, ok := newRegistry["ctx-original"]; !ok {
+		t.Errorf("ctx-original disappeared from registry: %v", keysOf(newRegistry))
 	}
 }
 
@@ -525,11 +542,11 @@ func TestRefreshContextRegistry_NoOpWhenNothingChanged(t *testing.T) {
 	registry, fileConfigs, mtimes := loadFixture(t, []string{f1})
 	before := keysOf(registry)
 
-	changed := refreshContextRegistry(registry, fileConfigs, mtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, mtimes)
 	if changed {
 		t.Errorf("expected no change on stable disk state, got changed=true")
 	}
-	after := keysOf(registry)
+	after := keysOf(newRegistry)
 	sort.Strings(before)
 	sort.Strings(after)
 	if len(before) != len(after) {
@@ -554,12 +571,12 @@ func TestRefreshContextRegistry_NilMtimeMapNoOp(t *testing.T) {
 		}
 	}()
 	var nilMtimes map[string]time.Time
-	changed := refreshContextRegistry(registry, fileConfigs, nilMtimes)
+	newRegistry, _, _, changed := refreshContextRegistry(registry, fileConfigs, nilMtimes)
 	if changed {
 		t.Errorf("refresh on nil mtimes should report no-op (changed=false)")
 	}
 	// Registry must be untouched on the nil-mtimes no-op path.
-	if _, ok := registry["ctx-a"]; !ok {
+	if _, ok := newRegistry["ctx-a"]; !ok {
 		t.Errorf("nil-mtimes refresh should not have modified the registry")
 	}
 }
@@ -595,12 +612,12 @@ func TestRefreshContextRegistry_SeedsByFileFromMtimesEvenWhenRegistryEmptyForFil
 		{ctxName: "ctx-a-fresh", userName: "u", clusterName: "c1"},
 		{ctxName: "ctx-b-fresh", userName: "u", clusterName: "c1"},
 	})
-	refreshContextRegistry(registry, fileConfigs, mtimes)
-	if _, ok := registry["ctx-a-fresh"]; !ok {
-		t.Errorf("refresh should have picked up ctx-a-fresh; got %v", registry)
+	newRegistry, _, _, _ := refreshContextRegistry(registry, fileConfigs, mtimes)
+	if _, ok := newRegistry["ctx-a-fresh"]; !ok {
+		t.Errorf("refresh should have picked up ctx-a-fresh; got %v", newRegistry)
 	}
-	if _, ok := registry["ctx-b-fresh"]; !ok {
-		t.Errorf("refresh should have picked up ctx-b-fresh; got %v", registry)
+	if _, ok := newRegistry["ctx-b-fresh"]; !ok {
+		t.Errorf("refresh should have picked up ctx-b-fresh; got %v", newRegistry)
 	}
 }
 
@@ -620,9 +637,9 @@ func TestRefreshContextRegistry_BadParseDoesNotDropExisting(t *testing.T) {
 		t.Fatalf("rewrite: %v", err)
 	}
 
-	refreshContextRegistry(registry, fileConfigs, mtimes)
-	if _, ok := registry["ctx-a"]; !ok {
-		t.Errorf("ctx-a was dropped on parse failure; expected to keep it: %v", keysOf(registry))
+	newRegistry, _, _, _ := refreshContextRegistry(registry, fileConfigs, mtimes)
+	if _, ok := newRegistry["ctx-a"]; !ok {
+		t.Errorf("ctx-a was dropped on parse failure; expected to keep it: %v", keysOf(newRegistry))
 	}
 }
 
@@ -667,6 +684,120 @@ func rewriteKubeconfig(t *testing.T, path string, entries []kubeEntry) {
 	if err := os.Chtimes(path, now, now); err != nil {
 		t.Fatalf("chtimes %s: %v", path, err)
 	}
+}
+
+// Regression: GetAvailableContexts triggers refreshContextRegistry under
+// the write lock; concurrent callers that snapshot the live maps under
+// RLock and iterate after unlocking must not race with the refresh. The
+// previous shape mutated maps in place, so a refresh during another
+// caller's post-RLock iteration triggered Go's "concurrent map read and
+// map write" panic. The fix swaps maps atomically rather than mutating —
+// this test runs both patterns concurrently with the race detector.
+func TestGetAvailableContexts_ConcurrentRefreshAndSnapshotIterate(t *testing.T) {
+	dir := t.TempDir()
+	f1 := writeKubeconfig(t, dir, "a.yaml", "ctx-a", []kubeEntry{
+		{ctxName: "ctx-a", userName: "u", clusterName: "c1"},
+	})
+	f2 := writeKubeconfig(t, dir, "b.yaml", "ctx-b", []kubeEntry{
+		{ctxName: "ctx-b", userName: "u", clusterName: "c2"},
+	})
+
+	// Stand up the package globals to look like multi-file isolated-load
+	// mode. Restore them after the test so other tests in this package
+	// don't see a polluted state.
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevName := contextName
+	registry, fileConfigs := buildContextRegistry([]string{f1, f2})
+	mtimes := make(map[string]time.Time, 2)
+	for _, p := range []string{f1, f2} {
+		if info, err := os.Stat(p); err == nil {
+			mtimes[p] = info.ModTime()
+		}
+	}
+	contextRegistry = registry
+	perFileConfigs = fileConfigs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{f1, f2}
+	contextName = "ctx-a"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		contextName = prevName
+		clientMu.Unlock()
+	})
+
+	const iterations = 200
+	const writers = 4
+	const snapshotters = 4
+	var wg sync.WaitGroup
+	var stop atomic.Bool
+
+	// Writer goroutines: rewrite kubeconfig files on disk so the next
+	// GetAvailableContexts call observes a changed mtime and re-parses,
+	// exercising the refresh path that previously mutated maps in place.
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			for j := 0; j < iterations && !stop.Load(); j++ {
+				target := f1
+				if j%2 == 1 {
+					target = f2
+				}
+				ctxBase := "ctx-a"
+				if target == f2 {
+					ctxBase = "ctx-b"
+				}
+				rewriteKubeconfig(t, target, []kubeEntry{
+					{ctxName: ctxBase, userName: "u", clusterName: "c1"},
+				})
+				if _, err := GetAvailableContexts(); err != nil {
+					t.Errorf("GetAvailableContexts: %v", err)
+					stop.Store(true)
+					return
+				}
+			}
+		}(i)
+	}
+
+	// Snapshotter goroutines: replicate SwitchContext /
+	// WriteKubeconfigForCurrentContext's bare-reference snapshot pattern,
+	// then iterate after releasing the lock. Without map immutability
+	// this races with refresh and panics.
+	for i := 0; i < snapshotters; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < iterations && !stop.Load(); j++ {
+				clientMu.RLock()
+				snapReg := contextRegistry
+				snapConfigs := perFileConfigs
+				clientMu.RUnlock()
+
+				// Iterate outside the lock — same shape as SwitchContext.
+				for qName, entry := range snapReg {
+					_ = qName
+					cfg, ok := snapConfigs[entry.SourceFile]
+					if !ok {
+						continue
+					}
+					for name := range cfg.Contexts {
+						_ = name
+					}
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
 }
 
 func TestAggregateExecPluginCommands_UniqueAcrossFiles(t *testing.T) {

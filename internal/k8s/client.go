@@ -706,33 +706,45 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 	// startup keep showing up in the dropdown until the user
 	// restarts Radar (the "junk clusters" complaint).
 	//
-	// CRITICAL: refresh, snapshot, AND iterate must all happen under
-	// the same lock. The previous shape released the lock and then
-	// iterated, but `registry` and `fileConfigs` still pointed at the
-	// LIVE maps that a second concurrent caller could be mutating
-	// via refreshContextRegistry — Go's "fatal error: concurrent map
-	// read and map write". Hold the write lock through the snapshot,
-	// then iterate over a private []ContextInfo we've already built.
+	// refreshContextRegistry returns NEW maps when anything changes,
+	// so we publish them atomically under the write lock. Snapshot
+	// readers (SwitchContext, WriteKubeconfigForCurrentContext) take
+	// bare references under RLock and use them after the unlock — that
+	// pattern is only safe as long as the maps they captured are never
+	// mutated. Returning fresh maps preserves that invariant.
 	clientMu.Lock()
 	if contextRegistry != nil {
-		// Lazy init: MergeAndSwitchContext promotes single-file mode
-		// to isolated-load mode without touching perFileMtimes, so a
-		// CAPI promotion can leave it nil. Seeding it here is safe
-		// because we always hold the write lock.
+		// Lazy init: a future code path that promotes single-file mode
+		// to isolated-load without touching perFileMtimes would leave
+		// it nil. Seeding it here is safe because we always hold the
+		// write lock and refresh's nil guard catches it too.
 		if perFileMtimes == nil {
 			perFileMtimes = make(map[string]time.Time, len(perFileConfigs))
 		}
-		refreshContextRegistry(contextRegistry, perFileConfigs, perFileMtimes)
+		newRegistry, newFileConfigs, newFileMtimes, changed := refreshContextRegistry(
+			contextRegistry, perFileConfigs, perFileMtimes,
+		)
+		if changed {
+			contextRegistry = newRegistry
+			perFileConfigs = newFileConfigs
+			perFileMtimes = newFileMtimes
+		}
 	}
+	registry := contextRegistry
+	fileConfigs := perFileConfigs
 	currentCtx := contextName
+	clientMu.Unlock()
 
-	if contextRegistry != nil {
+	if registry != nil {
 		// Isolated-load mode: enumerate every registered context, pulling
 		// cluster/user/namespace from the file it originally lives in.
 		// No merge happens — shared names across files stay distinct.
-		contexts := make([]ContextInfo, 0, len(contextRegistry))
-		for qName, entry := range contextRegistry {
-			cfg, ok := perFileConfigs[entry.SourceFile]
+		// Iterating outside the lock is safe because refresh publishes
+		// fresh maps on change rather than mutating in place, so the
+		// snapshot we captured is frozen.
+		contexts := make([]ContextInfo, 0, len(registry))
+		for qName, entry := range registry {
+			cfg, ok := fileConfigs[entry.SourceFile]
 			if !ok {
 				continue
 			}
@@ -748,10 +760,8 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 				IsCurrent: qName == currentCtx,
 			})
 		}
-		clientMu.Unlock()
 		return contexts, nil
 	}
-	clientMu.Unlock()
 
 	// Single-file fallback: load the one file and enumerate its contexts.
 	kubeconfig := kubeconfigPath
