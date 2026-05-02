@@ -3,6 +3,7 @@ package k8score
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -436,6 +437,121 @@ func TestPendingPromotedKinds(t *testing.T) {
 	pending := rc.PendingPromotedKinds()
 	if len(promoted) > 0 && len(pending) > 0 && &promoted[0] == &pending[0] {
 		t.Error("PromotedKinds and PendingPromotedKinds must not share backing array")
+	}
+}
+
+// TestPendingPromotedKinds_Drains verifies the live-filtering claim: as
+// a promoted informer eventually catches up and reports HasSynced=true,
+// it leaves PendingPromotedKinds. PromotedKinds (the snapshot) does not
+// change. Without this, a UI banner would list kinds forever even after
+// they finished loading.
+func TestPendingPromotedKinds_Drains(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	// Toggle: fail Ingress LIST until we flip the flag, then succeed.
+	// The reflector retries on backoff so HasSynced flips when LIST
+	// stops failing.
+	var failIngress atomic.Bool
+	failIngress.Store(true)
+	client.PrependReactor("list", "ingresses", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		if failIngress.Load() {
+			return true, nil, fmt.Errorf("simulated transient failure")
+		}
+		return false, nil, nil // pass through to default tracker
+	})
+
+	rc, err := NewResourceCache(CacheConfig{
+		Client: client,
+		ResourceTypes: map[string]bool{
+			Pods:      true,
+			Services:  true,
+			Ingresses: true,
+		},
+		PatienceWindow: 200 * time.Millisecond,
+		MinimalSet: map[string]bool{
+			Pods:     true,
+			Services: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache failed: %v", err)
+	}
+	defer rc.Stop()
+
+	// Sanity: at construction, Ingress is pending.
+	if got := rc.PendingPromotedKinds(); len(got) != 1 || got[0] != "Ingress" {
+		t.Fatalf("PendingPromotedKinds at start: expected [Ingress], got %v", got)
+	}
+
+	// Flip the reactor to succeed, then poll for the live view to drain.
+	failIngress.Store(false)
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(rc.PendingPromotedKinds()) == 0 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if got := rc.PendingPromotedKinds(); len(got) != 0 {
+		t.Errorf("PendingPromotedKinds did not drain after Ingress LIST began succeeding; still pending: %v", got)
+	}
+
+	// PromotedKinds is the snapshot — must NOT shrink.
+	if got := rc.PromotedKinds(); len(got) != 1 || got[0] != "Ingress" {
+		t.Errorf("PromotedKinds (snapshot) should not shrink; expected [Ingress], got %v", got)
+	}
+}
+
+// TestNewResourceCache_MinimalSet_BackstopFires covers the worst case on
+// the patience+minimal-set path: a kind that's IN the minimal set never
+// syncs. Without a backstop the cache would block in NewResourceCache
+// forever, trapping the caller on a connecting screen. SyncTimeout is
+// the safety net — it must promote everything still pending (including
+// minimal-set members) and let the cache return.
+func TestNewResourceCache_MinimalSet_BackstopFires(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	// Pods is in MinimalSet — make its LIST fail forever.
+	client.PrependReactor("list", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		return true, nil, fmt.Errorf("simulated permanently-stuck API")
+	})
+
+	start := time.Now()
+	rc, err := NewResourceCache(CacheConfig{
+		Client: client,
+		ResourceTypes: map[string]bool{
+			Pods:     true,
+			Services: true,
+		},
+		PatienceWindow: 100 * time.Millisecond,
+		MinimalSet: map[string]bool{
+			Pods:     true,
+			Services: true,
+		},
+		SyncTimeout: 500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache failed: %v", err)
+	}
+	defer rc.Stop()
+
+	elapsed := time.Since(start)
+	if elapsed < 500*time.Millisecond {
+		t.Errorf("expected return after at least SyncTimeout (500ms), got %v", elapsed)
+	}
+	if elapsed > 3*time.Second {
+		t.Errorf("returned far later than SyncTimeout — backstop didn't fire? elapsed=%v", elapsed)
+	}
+
+	// Pods stuck → must be promoted; Services synced → must not be promoted.
+	promoted := rc.PromotedKinds()
+	if len(promoted) != 1 || promoted[0] != "Pod" {
+		t.Errorf("expected only Pod to be promoted by backstop, got %v", promoted)
+	}
+
+	// Lister still available (it's just empty).
+	if rc.Pods() == nil {
+		t.Error("expected Pods() lister to be available even after backstop promotion")
 	}
 }
 

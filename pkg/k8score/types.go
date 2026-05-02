@@ -143,8 +143,9 @@ type CacheConfig struct {
 
 	// SyncTimeout is a hard cap on the critical-informer wait. When it
 	// fires, unsynced critical informers are promoted to deferred and the
-	// cache returns. Used when PatienceWindow is zero. Zero means wait
-	// indefinitely.
+	// cache returns. Always applies, including when PatienceWindow is set
+	// — in that case it acts as a backstop so a permanently-stuck informer
+	// doesn't trap the caller forever. Zero means wait indefinitely.
 	SyncTimeout time.Duration
 
 	// PatienceWindow is the soft deadline after which the cache returns as

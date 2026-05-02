@@ -117,6 +117,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	// Clone caller-owned maps to prevent mutation after construction.
 	cfg.ResourceTypes = maps.Clone(cfg.ResourceTypes)
 	cfg.DeferredTypes = maps.Clone(cfg.DeferredTypes)
+	cfg.MinimalSet = maps.Clone(cfg.MinimalSet)
 
 	stopCh := make(chan struct{})
 	changes := make(chan ResourceChange, channelSize)
@@ -278,14 +279,14 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 
 	// Phase 1: Wait for critical informers.
 	//
-	// Two modes:
+	// Two modes (combinable):
 	//   - Patience+MinimalSet: wait for ALL critical until the patience
 	//     window elapses. Once elapsed, return as soon as the minimal set
-	//     is ready; promote the rest of critical to deferred. Keep waiting
-	//     indefinitely until MinimalSet is satisfied — there is no hard
-	//     timeout, the loading UI handles the wait.
-	//   - SyncTimeout: wait for ALL critical, hard-cap at the timeout,
-	//     promote everything still pending.
+	//     is ready; promote the rest of critical to deferred.
+	//   - SyncTimeout: hard upper bound. When it fires, promote everything
+	//     still pending and return. Acts as a backstop on the minimal-set
+	//     path so a permanently-stuck informer doesn't trap the caller
+	//     forever (caller still gets to render with whatever synced).
 	useMinimalSet := cfg.PatienceWindow > 0 && len(cfg.MinimalSet) > 0
 	timedOut := false
 	patienceElapsed := false
@@ -337,7 +338,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		}
 
 		var deadlineCh <-chan time.Time
-		if !useMinimalSet && cfg.SyncTimeout > 0 {
+		if cfg.SyncTimeout > 0 {
 			deadline := time.NewTimer(cfg.SyncTimeout)
 			defer deadline.Stop()
 			deadlineCh = deadline.C

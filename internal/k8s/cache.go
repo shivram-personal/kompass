@@ -86,6 +86,15 @@ var minimalFirstPaintSet = map[string]bool{
 // gate and render with whatever is ready then.
 const firstPaintPatience = 8 * time.Second
 
+// firstPaintBackstop is the hard upper bound on the critical-sync wait.
+// If the minimal set still hasn't synced after this long, give up and
+// render with whatever's available — the user gets the same partial-data
+// experience they'd see today (zeros + "Still loading: …" hint) instead
+// of being trapped on the connecting screen indefinitely. Picked to be
+// much longer than a healthy cluster's sync time but short enough that
+// a permanently-throttled API server doesn't make Radar feel broken.
+const firstPaintBackstop = 5 * time.Minute
+
 // ResourceChange is a type alias for the canonical definition in pkg/k8score.
 type ResourceChange = k8score.ResourceChange
 
@@ -162,6 +171,7 @@ func InitResourceCache(ctx context.Context) error {
 			TimingLogger:        logTiming,
 			PatienceWindow:      firstPaintPatience,
 			MinimalSet:          minimalFirstPaintSet,
+			SyncTimeout:         firstPaintBackstop,
 			SyncProgress:        emitSyncProgress,
 			DeferredSyncTimeout: 3 * time.Minute,
 
