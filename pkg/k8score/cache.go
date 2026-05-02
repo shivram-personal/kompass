@@ -482,14 +482,20 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	}
 
 	if cfg.SyncProgress != nil {
+		// Count via e.synced() (same source as the Phase 1 loop) rather than
+		// informerStatuses[].Synced, which is set asynchronously by per-informer
+		// tracking goroutines and can lag by ~10ms after HasSynced() flips. On
+		// the all-synced happy path the lag would otherwise produce synced<total
+		// here even though we just exited the loop on allSynced — surfaced to
+		// callers as a misleading "showing partial" final message.
 		rc.informerMu.RLock()
 		var synced, total int
-		for _, s := range rc.informerStatuses {
-			if s.Deferred {
+		for i, e := range allEntries {
+			if rc.informerStatuses[i].Deferred {
 				continue
 			}
 			total++
-			if s.Synced {
+			if e.synced() {
 				synced++
 			}
 		}
