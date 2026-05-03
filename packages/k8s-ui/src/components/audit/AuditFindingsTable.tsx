@@ -66,6 +66,13 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
     })
   }
 
+  const clearAllFilters = () => {
+    setCategoryFilter(new Set())
+    setSeverityFilter(new Set())
+    setFrameworkFilter(new Set())
+    setSearchTerm('')
+  }
+
   // "/" keyboard shortcut to focus search
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -258,7 +265,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
             Each chip is an independent toggle. Multiple chips within a dimension OR together;
             dimensions AND together. */}
         <div className="flex flex-wrap items-center gap-1.5">
-          <FilterPill label="All" active={!hasActiveFilters} onClick={() => { setCategoryFilter(new Set()); setSeverityFilter(new Set()); setFrameworkFilter(new Set()); setSearchTerm('') }} />
+          <FilterPill label="All" active={!hasActiveFilters} onClick={clearAllFilters} />
           <span className="w-px h-5 bg-theme-border mx-2" />
           {CATEGORIES.map(cat => (
             <FilterPill key={cat} label={cat} active={categoryFilter.has(cat)} onClick={() => toggleInSet(setCategoryFilter, cat)} />
@@ -305,7 +312,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
             action={
               <button
                 type="button"
-                onClick={() => { setCategoryFilter(new Set()); setSeverityFilter(new Set()); setFrameworkFilter(new Set()); setSearchTerm('') }}
+                onClick={clearAllFilters}
                 className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary hover:bg-theme-hover transition-colors"
               >
                 Clear all filters
