@@ -6,14 +6,15 @@ import (
 
 // HelmRelease represents a Helm release in the list view
 type HelmRelease struct {
-	Name         string    `json:"name"`
-	Namespace    string    `json:"namespace"`
-	Chart        string    `json:"chart"`
-	ChartVersion string    `json:"chartVersion"`
-	AppVersion   string    `json:"appVersion"`
-	Status       string    `json:"status"`
-	Revision     int       `json:"revision"`
-	Updated      time.Time `json:"updated"`
+	Name             string    `json:"name"`
+	Namespace        string    `json:"namespace"`
+	StorageNamespace string    `json:"storageNamespace,omitempty"`
+	Chart            string    `json:"chart"`
+	ChartVersion     string    `json:"chartVersion"`
+	AppVersion       string    `json:"appVersion"`
+	Status           string    `json:"status"`
+	Revision         int       `json:"revision"`
+	Updated          time.Time `json:"updated"`
 	// Health summary from owned resources
 	ResourceHealth string `json:"resourceHealth,omitempty"` // healthy, degraded, unhealthy, unknown
 	HealthIssue    string `json:"healthIssue,omitempty"`    // Primary issue if unhealthy (e.g., "OOMKilled")
@@ -32,21 +33,22 @@ type HelmRevision struct {
 
 // HelmReleaseDetail contains full details of a Helm release
 type HelmReleaseDetail struct {
-	Name         string            `json:"name"`
-	Namespace    string            `json:"namespace"`
-	Chart        string            `json:"chart"`
-	ChartVersion string            `json:"chartVersion"`
-	AppVersion   string            `json:"appVersion"`
-	Status       string            `json:"status"`
-	Revision     int               `json:"revision"`
-	Updated      time.Time         `json:"updated"`
-	Description  string            `json:"description"`
-	Notes        string            `json:"notes"`
-	History      []HelmRevision    `json:"history"`
-	Resources    []OwnedResource   `json:"resources"`
-	Hooks        []HelmHook        `json:"hooks,omitempty"`
-	Readme       string            `json:"readme,omitempty"`
-	Dependencies []ChartDependency `json:"dependencies,omitempty"`
+	Name             string            `json:"name"`
+	Namespace        string            `json:"namespace"`
+	StorageNamespace string            `json:"storageNamespace,omitempty"`
+	Chart            string            `json:"chart"`
+	ChartVersion     string            `json:"chartVersion"`
+	AppVersion       string            `json:"appVersion"`
+	Status           string            `json:"status"`
+	Revision         int               `json:"revision"`
+	Updated          time.Time         `json:"updated"`
+	Description      string            `json:"description"`
+	Notes            string            `json:"notes"`
+	History          []HelmRevision    `json:"history"`
+	Resources        []OwnedResource   `json:"resources"`
+	Hooks            []HelmHook        `json:"hooks,omitempty"`
+	Readme           string            `json:"readme,omitempty"`
+	Dependencies     []ChartDependency `json:"dependencies,omitempty"`
 }
 
 // HelmHook represents a Helm hook (pre/post install, upgrade, etc.)

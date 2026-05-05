@@ -439,6 +439,7 @@ export interface APIResource {
 export interface HelmRelease {
   name: string
   namespace: string
+  storageNamespace?: string
   chart: string
   chartVersion: string
   appVersion: string
@@ -463,6 +464,7 @@ export interface HelmRevision {
 export interface HelmReleaseDetail {
   name: string
   namespace: string
+  storageNamespace?: string
   chart: string
   chartVersion: string
   appVersion: string
@@ -520,6 +522,7 @@ export interface ManifestDiff {
 export interface SelectedHelmRelease {
   namespace: string
   name: string
+  storageNamespace?: string
 }
 
 // Upgrade availability info

@@ -1,6 +1,12 @@
 package helm
 
-import "testing"
+import (
+	"testing"
+
+	"helm.sh/helm/v3/pkg/chart"
+	"helm.sh/helm/v3/pkg/release"
+	helmtime "helm.sh/helm/v3/pkg/time"
+)
 
 func TestFindBestUpgradeVersion(t *testing.T) {
 	tests := []struct {
@@ -221,6 +227,36 @@ func TestMarkCurrentVersion_DoesNotMutateBaseOrLeakAcrossReleases(t *testing.T) 
 	}
 	if base[0].hasCurrentVersion || base[1].hasCurrentVersion {
 		t.Errorf("base slice was mutated; per-release flags would leak across releases sharing a chart name: %+v", base)
+	}
+}
+
+func TestToHelmRelease_StorageNamespace(t *testing.T) {
+	rel := &release.Release{
+		Name:      "podinfo",
+		Namespace: "demo-flux-helm",
+		Version:   1,
+		Info: &release.Info{
+			Status:       release.StatusDeployed,
+			LastDeployed: helmtime.Unix(0, 0),
+		},
+		Chart: &chart.Chart{Metadata: &chart.Metadata{
+			Name:       "podinfo",
+			Version:    "6.11.2",
+			AppVersion: "6.11.2",
+		}},
+	}
+
+	same := toHelmRelease(rel, "demo-flux-helm")
+	if same.StorageNamespace != "" {
+		t.Fatalf("same storage namespace should be omitted, got %q", same.StorageNamespace)
+	}
+
+	different := toHelmRelease(rel, "flux-system")
+	if different.Namespace != "demo-flux-helm" {
+		t.Fatalf("target namespace changed: got %q", different.Namespace)
+	}
+	if different.StorageNamespace != "flux-system" {
+		t.Fatalf("storage namespace = %q, want flux-system", different.StorageNamespace)
 	}
 }
 

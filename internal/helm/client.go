@@ -2,8 +2,12 @@ package helm
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -25,7 +29,9 @@ import (
 	"helm.sh/helm/v3/pkg/release"
 	"helm.sh/helm/v3/pkg/releaseutil"
 	"helm.sh/helm/v3/pkg/repo"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
 
@@ -260,7 +266,7 @@ func (c *Client) ListReleasesAsUser(namespace, username string, groups []string)
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace)
+	return listReleasesWith(actionConfig, namespace, username, groups)
 }
 
 // ListReleases returns all Helm releases, optionally filtered by namespace
@@ -269,10 +275,10 @@ func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
 	if err != nil {
 		return nil, err
 	}
-	return listReleasesWith(actionConfig, namespace)
+	return listReleasesWith(actionConfig, namespace, "", nil)
 }
 
-func listReleasesWith(actionConfig *action.Configuration, namespace string) ([]HelmRelease, error) {
+func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {
 	listAction := action.NewList(actionConfig)
 	listAction.All = true
 	listAction.AllNamespaces = namespace == ""
@@ -283,9 +289,10 @@ func listReleasesWith(actionConfig *action.Configuration, namespace string) ([]H
 		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
 
+	storageNamespaces := helmReleaseStorageNamespaces(username, groups)
 	result := make([]HelmRelease, 0, len(releases))
 	for _, rel := range releases {
-		result = append(result, toHelmRelease(rel))
+		result = append(result, toHelmRelease(rel, storageNamespaces[releaseStorageKey(rel)]))
 	}
 
 	// Sort by namespace, then name
@@ -349,7 +356,7 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	})
 
 	// Parse manifest to get owned resources
-	resources := parseManifestResources(rel.Manifest, namespace)
+	resources := parseManifestResources(rel.Manifest, rel.Namespace)
 
 	// Enrich resources with live status from k8s cache
 	enrichResourcesWithStatus(resources)
@@ -364,21 +371,25 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	dependencies := extractDependencies(rel)
 
 	detail := &HelmReleaseDetail{
-		Name:         rel.Name,
-		Namespace:    rel.Namespace,
-		Chart:        rel.Chart.Metadata.Name,
-		ChartVersion: rel.Chart.Metadata.Version,
-		AppVersion:   rel.Chart.Metadata.AppVersion,
-		Status:       rel.Info.Status.String(),
-		Revision:     rel.Version,
-		Updated:      rel.Info.LastDeployed.Time,
-		Description:  rel.Info.Description,
-		Notes:        rel.Info.Notes,
-		History:      revisions,
-		Resources:    resources,
-		Hooks:        hooks,
-		Readme:       readme,
-		Dependencies: dependencies,
+		Name:             rel.Name,
+		Namespace:        rel.Namespace,
+		StorageNamespace: namespace,
+		Chart:            rel.Chart.Metadata.Name,
+		ChartVersion:     rel.Chart.Metadata.Version,
+		AppVersion:       rel.Chart.Metadata.AppVersion,
+		Status:           rel.Info.Status.String(),
+		Revision:         rel.Version,
+		Updated:          rel.Info.LastDeployed.Time,
+		Description:      rel.Info.Description,
+		Notes:            rel.Info.Notes,
+		History:          revisions,
+		Resources:        resources,
+		Hooks:            hooks,
+		Readme:           readme,
+		Dependencies:     dependencies,
+	}
+	if detail.StorageNamespace == detail.Namespace {
+		detail.StorageNamespace = ""
 	}
 
 	return detail, nil
@@ -497,17 +508,31 @@ func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 in
 	}, nil
 }
 
+// releaseStorageKey identifies a release independent of where Helm stored the
+// record. Flux commonly stores the release secret in its controller namespace
+// while the release targets a different namespace.
+func releaseStorageKey(rel *release.Release) string {
+	if rel == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s/%d", rel.Namespace, rel.Name, rel.Version)
+}
+
 // toHelmRelease converts a helm release to our API type
-func toHelmRelease(rel *release.Release) HelmRelease {
+func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
 	hr := HelmRelease{
-		Name:         rel.Name,
-		Namespace:    rel.Namespace,
-		Chart:        rel.Chart.Metadata.Name,
-		ChartVersion: rel.Chart.Metadata.Version,
-		AppVersion:   rel.Chart.Metadata.AppVersion,
-		Status:       rel.Info.Status.String(),
-		Revision:     rel.Version,
-		Updated:      rel.Info.LastDeployed.Time,
+		Name:             rel.Name,
+		Namespace:        rel.Namespace,
+		StorageNamespace: storageNamespace,
+		Chart:            rel.Chart.Metadata.Name,
+		ChartVersion:     rel.Chart.Metadata.Version,
+		AppVersion:       rel.Chart.Metadata.AppVersion,
+		Status:           rel.Info.Status.String(),
+		Revision:         rel.Version,
+		Updated:          rel.Info.LastDeployed.Time,
+	}
+	if hr.StorageNamespace == hr.Namespace {
+		hr.StorageNamespace = ""
 	}
 
 	// Compute health from owned resources
@@ -519,6 +544,67 @@ func toHelmRelease(rel *release.Release) HelmRelease {
 	hr.HealthSummary = summary
 
 	return hr
+}
+
+func helmReleaseStorageNamespaces(username string, groups []string) map[string]string {
+	var client kubernetes.Interface = k8s.GetClient()
+	if username != "" {
+		impersonated, err := k8s.ImpersonatedClient(username, groups)
+		if err != nil {
+			log.Printf("[helm] failed to build impersonated client for release storage lookup: %v", err)
+			return nil
+		}
+		client = impersonated
+	}
+	if client == nil {
+		return nil
+	}
+
+	secrets, err := client.CoreV1().Secrets("").List(context.Background(), metav1.ListOptions{
+		LabelSelector: "owner=helm",
+	})
+	if err != nil {
+		log.Printf("[helm] failed to inspect release storage namespaces: %v", err)
+		return nil
+	}
+
+	result := make(map[string]string, len(secrets.Items))
+	for _, secret := range secrets.Items {
+		encoded := secret.Data["release"]
+		if len(encoded) == 0 {
+			continue
+		}
+		rel, err := decodeHelmReleaseData(string(encoded))
+		if err != nil {
+			log.Printf("[helm] failed to decode release secret %s/%s: %v", secret.Namespace, secret.Name, err)
+			continue
+		}
+		result[releaseStorageKey(rel)] = secret.Namespace
+	}
+	return result
+}
+
+func decodeHelmReleaseData(data string) (*release.Release, error) {
+	b, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(b) > 3 && bytes.Equal(b[0:3], []byte{0x1f, 0x8b, 0x08}) {
+		r, err := gzip.NewReader(bytes.NewReader(b))
+		if err != nil {
+			return nil, err
+		}
+		defer r.Close()
+		b, err = io.ReadAll(r)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var rel release.Release
+	if err := json.Unmarshal(b, &rel); err != nil {
+		return nil, err
+	}
+	return &rel, nil
 }
 
 // computeResourceHealth analyzes owned resources and returns overall health status
@@ -1323,7 +1409,7 @@ func (c *Client) UpgradeWithProgress(namespace, name, targetVersion string, prog
 	if err != nil {
 		return err
 	}
-	return c.upgradeWith(actionConfig, namespace, name, targetVersion, sendProgress)
+	return c.upgradeWith(actionConfig, name, targetVersion, sendProgress)
 }
 
 // UpgradeAsUser upgrades a release with K8s impersonation.
@@ -1333,10 +1419,10 @@ func (c *Client) UpgradeAsUser(namespace, name, targetVersion string, username s
 		return err
 	}
 	noop := func(phase, message, detail string) {}
-	return c.upgradeWith(actionConfig, namespace, name, targetVersion, noop)
+	return c.upgradeWith(actionConfig, name, targetVersion, noop)
 }
 
-func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name, targetVersion string, sendProgress func(phase, message, detail string)) error {
+func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVersion string, sendProgress func(phase, message, detail string)) error {
 	// First, get the current release to find chart info
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -1392,7 +1478,7 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name
 	// shows real-time resource status via SSE. Waiting blocks the dialog
 	// for minutes with zero feedback; users can monitor the rollout in the UI.
 	upgradeAction := action.NewUpgrade(actionConfig)
-	upgradeAction.Namespace = namespace
+	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.ReuseValues = true // Keep existing values
 
@@ -1574,7 +1660,7 @@ func (c *Client) PreviewValuesChange(namespace, name string, newValues map[strin
 
 	// Perform a dry-run upgrade with the new values
 	upgradeAction := action.NewUpgrade(actionConfig)
-	upgradeAction.Namespace = namespace
+	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.DryRun = true
 	upgradeAction.DryRunOption = "client"
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
@@ -1601,7 +1687,7 @@ func (c *Client) ApplyValues(namespace, name string, newValues map[string]any) e
 	if err != nil {
 		return err
 	}
-	return c.applyValuesWith(actionConfig, namespace, name, newValues)
+	return c.applyValuesWith(actionConfig, name, newValues)
 }
 
 // ApplyValuesAsUser applies values with K8s impersonation.
@@ -1610,10 +1696,10 @@ func (c *Client) ApplyValuesAsUser(namespace, name string, newValues map[string]
 	if err != nil {
 		return err
 	}
-	return c.applyValuesWith(actionConfig, namespace, name, newValues)
+	return c.applyValuesWith(actionConfig, name, newValues)
 }
 
-func (c *Client) applyValuesWith(actionConfig *action.Configuration, namespace, name string, newValues map[string]any) error {
+func (c *Client) applyValuesWith(actionConfig *action.Configuration, name string, newValues map[string]any) error {
 	// Get the current release to reuse its chart
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -1623,7 +1709,7 @@ func (c *Client) applyValuesWith(actionConfig *action.Configuration, namespace, 
 
 	// Create upgrade action — no Wait, Radar shows resource status in real-time
 	upgradeAction := action.NewUpgrade(actionConfig)
-	upgradeAction.Namespace = namespace
+	upgradeAction.Namespace = rel.Namespace
 	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
 

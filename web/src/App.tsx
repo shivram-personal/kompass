@@ -676,7 +676,7 @@ function AppInner() {
       if (slashIdx > 0) {
         const ns = releaseParam.slice(0, slashIdx)
         const name = releaseParam.slice(slashIdx + 1)
-        setSelectedHelmRelease({ namespace: ns, name })
+        setSelectedHelmRelease({ namespace: ns, name, storageNamespace: searchParams.get('releaseStorage') || undefined })
       }
     }
   }, [searchParams])
@@ -1220,10 +1220,15 @@ function AppInner() {
           <HelmView
             namespace=""
             selectedRelease={selectedHelmRelease}
-            onReleaseClick={(ns, name) => {
-              setSelectedHelmRelease({ namespace: ns, name })
+            onReleaseClick={(ns, name, storageNamespace) => {
+              setSelectedHelmRelease({ namespace: ns, name, storageNamespace })
               const params = new URLSearchParams(window.location.search)
               params.set('release', `${ns}/${name}`)
+              if (storageNamespace) {
+                params.set('releaseStorage', storageNamespace)
+              } else {
+                params.delete('releaseStorage')
+              }
               setSearchParams(params, { replace: true })
             }}
           />
@@ -1305,6 +1310,7 @@ function AppInner() {
             setSelectedHelmRelease(null)
             const params = new URLSearchParams(window.location.search)
             params.delete('release')
+            params.delete('releaseStorage')
             setSearchParams(params, { replace: true })
           }}
           onNavigateToResource={(resource) => {

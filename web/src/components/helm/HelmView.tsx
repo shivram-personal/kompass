@@ -17,7 +17,7 @@ type ViewTab = 'releases' | 'charts'
 interface HelmViewProps {
   namespace: string
   selectedRelease?: SelectedHelmRelease | null
-  onReleaseClick?: (namespace: string, name: string) => void
+  onReleaseClick?: (namespace: string, name: string, storageNamespace?: string) => void
 }
 
 export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmViewProps) {
@@ -132,7 +132,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
       scope: 'helm',
       handler: () => {
         const release = getHighlightedRelease()
-        if (release) onReleaseClick?.(release.namespace, release.name)
+        if (release) onReleaseClick?.(release.namespace, release.name, release.storageNamespace)
       },
       enabled: highlightedIndex >= 0,
     },
@@ -300,7 +300,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                           selectedRelease?.name === release.name
                         }
                         isHighlighted={index === highlightedIndex}
-                        onClick={() => onReleaseClick?.(release.namespace, release.name)}
+                        onClick={() => onReleaseClick?.(release.namespace, release.name, release.storageNamespace)}
                         onMouseEnter={() => setHighlightedIndex(-1)}
                       />
                     ))}
