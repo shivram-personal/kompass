@@ -298,6 +298,7 @@ export function useAudit(namespaces: string[] = []) {
     queryFn: () => fetchJSON(`/audit${params}`),
     staleTime: 30000,
     refetchInterval: 60000,
+    placeholderData: (prev) => prev,
   })
 }
 

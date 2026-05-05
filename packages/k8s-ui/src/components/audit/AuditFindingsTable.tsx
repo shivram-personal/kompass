@@ -333,9 +333,16 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
             const nsWarning = nsGroups.reduce((n, g) => n + g.warning, 0)
             return (
               <div key={ns}>
-                <button
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-expanded={nsExpanded}
                   onClick={() => toggleNS(ns)}
-                  className="group flex items-center gap-3 w-full px-4 py-2 rounded-lg hover:bg-theme-hover/30 transition-colors text-left"
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget) return
+                    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleNS(ns) }
+                  }}
+                  className="group flex items-center gap-3 w-full px-4 py-2 rounded-lg hover:bg-theme-hover/30 transition-colors text-left cursor-pointer focus-visible:ring-2 focus-visible:ring-theme-text-primary/20 focus-visible:outline-none"
                 >
                   <ChevronRight className={clsx('w-4 h-4 text-theme-text-tertiary shrink-0 transition-transform duration-200', nsExpanded && 'rotate-90')} />
                   <span className="text-sm font-semibold text-theme-text-primary">{ns}</span>
@@ -348,7 +355,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
                   {onHideNamespace && ns !== '(cluster-scoped)' && (
                     <ContextMenu items={[{ label: `Hide ${ns} namespace`, onClick: () => onHideNamespace(ns) }]} />
                   )}
-                </button>
+                </div>
                 <div
                   className="grid transition-[grid-template-rows] duration-200 ease-out"
                   style={{ gridTemplateRows: nsExpanded ? '1fr' : '0fr' }}
@@ -446,9 +453,16 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
 
   return (
     <div>
-      <button
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
         onClick={() => onToggle(key)}
-        className="group flex items-center gap-3 w-full px-4 py-2.5 rounded-lg hover:bg-theme-hover/50 transition-colors text-left focus-visible:ring-2 focus-visible:ring-theme-text-primary/20 focus-visible:outline-none"
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(key) }
+        }}
+        className="group flex items-center gap-3 w-full px-4 py-2.5 rounded-lg hover:bg-theme-hover/50 transition-colors text-left cursor-pointer focus-visible:ring-2 focus-visible:ring-theme-text-primary/20 focus-visible:outline-none"
       >
         <ChevronRight className={clsx('w-3.5 h-3.5 text-theme-text-tertiary shrink-0 transition-transform duration-200', isExpanded && 'rotate-90')} />
         {hasDanger ? (
@@ -458,16 +472,14 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
         )}
         <span className="text-xs text-theme-text-tertiary shrink-0">{g.kind}</span>
         {onResourceClick ? (
-          <span
-            role="link"
-            tabIndex={0}
+          <button
+            type="button"
             onClick={(e) => { e.stopPropagation(); onResourceClick(g.kind, g.namespace, g.name) }}
-            onKeyDown={(e) => { if (e.key === 'Enter') { e.stopPropagation(); onResourceClick(g.kind, g.namespace, g.name) } }}
-            className="text-sm font-medium text-skyhook-500 hover:text-skyhook-400 hover:underline cursor-pointer truncate max-w-[300px] inline-flex items-center gap-1"
+            className="text-sm font-medium text-skyhook-500 hover:text-skyhook-400 hover:underline cursor-pointer truncate max-w-[300px] inline-flex items-center gap-1 text-left"
           >
             {showNamespace && g.namespace ? `${g.namespace} / ` : ''}{g.name}
             <ExternalLink className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
-          </span>
+          </button>
         ) : (
           <span className="text-sm font-medium text-theme-text-primary truncate max-w-[300px]">
             {showNamespace && g.namespace ? `${g.namespace} / ` : ''}{g.name}
@@ -481,7 +493,7 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
         {showNamespace && onHideNamespace && g.namespace && (
           <ContextMenu items={[{ label: `Hide ${g.namespace} namespace`, onClick: () => onHideNamespace(g.namespace) }]} />
         )}
-      </button>
+      </div>
       <div
         className="grid transition-[grid-template-rows] duration-200 ease-out"
         style={{ gridTemplateRows: isExpanded ? '1fr' : '0fr' }}
