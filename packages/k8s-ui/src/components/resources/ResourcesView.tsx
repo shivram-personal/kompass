@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useCallback, useRef, useContext } 
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useNow } from '../../hooks/useNow'
+import { nextLastUpdatedTimestamp } from './last-updated'
 import { PaneLoader } from '../ui/PaneLoader'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
 import {
@@ -2645,23 +2646,15 @@ export function ResourcesView({
 
   const [refetch, isRefreshAnimating, refreshPhase] = useRefreshAnimation(() => refetchFn?.())
 
-  // Track last updated time.
-  //
-  // React Query bumps `dataUpdatedAt` every time it records a successful
-  // fetch — even when the response is byte-identical to what's already
-  // cached and structural sharing returns the same `data` reference.
-  // Mounting / focusing windows / a sibling subscriber issuing the same
-  // queryKey can all trigger a no-op refetch. Resetting the user-visible
-  // "Updated Xs" timer on those events is misleading: it suggests fresh
-  // data arrived when nothing actually changed, and the user reads the
-  // "<1s" jump as evidence that opening a filter drawer triggered a real
-  // network round-trip. Gate the bump on data-reference change so we only
-  // bump when the cache actually mutated.
+  // Gate the user-visible "Updated Xs" timer on a real cache mutation —
+  // see `nextLastUpdatedTimestamp` for the full rationale (no-op refetches
+  // from focus/mount/sibling subscribers must not reset the timer).
   const lastDataRef = useRef<unknown>(undefined)
   useEffect(() => {
-    if (dataUpdatedAt && resources !== lastDataRef.current) {
+    const next = nextLastUpdatedTimestamp(dataUpdatedAt, resources, lastDataRef.current)
+    if (next !== null) {
       lastDataRef.current = resources
-      setLastUpdated(new Date(dataUpdatedAt))
+      setLastUpdated(new Date(next))
     }
   }, [dataUpdatedAt, resources])
 
