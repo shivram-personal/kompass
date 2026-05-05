@@ -399,9 +399,9 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
             availableKindKeys: availableKinds.map(k => k.kind),
             visibleKindKeys: visibleKinds,
           })
-          const hiddenKinds = availableKinds.filter(k => !visibleKinds.has(k.kind) && (kindCounts.get(k.kind) || 0) > 0)
-          const hiddenSummary = hiddenKinds.length > 0
-            ? `${hiddenCount} hidden by kind filter (${hiddenKinds.map(k => `${kindCounts.get(k.kind)} ${k.kind}`).join(', ')})`
+          const userHiddenKinds = availableKinds.filter(k => !visibleKinds.has(k.kind) && (kindCounts.get(k.kind) || 0) > 0)
+          const hiddenSummary = userHiddenKinds.length > 0
+            ? `${hiddenCount} hidden by kind filter (${userHiddenKinds.map(k => `${kindCounts.get(k.kind)} ${k.kind}`).join(', ')})`
             : ''
           return (
             <div
