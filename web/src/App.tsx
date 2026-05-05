@@ -309,34 +309,51 @@ function AppInner() {
   // Suppress the mainView-change clear effect during controlled expand/collapse transitions.
   const suppressViewClearRef = useRef(false)
 
-  // Close resource drawer when switching workload kind in URL (/resources/pods → /resources/deployments).
-  // Keeps stale Pod drawer from masking the table after sidebar navigation (Radar Hub / app.radarhq.io).
-  const prevResourcesKindSlugRef = useRef<string | null>(null)
+  // Close resource drawer when the /resources route no longer matches the
+  // selected drawer resource. This covers both in-view kind switches and
+  // cross-kind navigations from expanded drawers (for example Node -> View Pods).
+  const prevResourcesKindKeyRef = useRef<string | null>(null)
+  const currentResourceKindSlug = normalizedResourcesKindSlug.toLowerCase()
+  const currentResourceGroup = searchParams.get('apiGroup') ?? ''
+  const selectedResourceKindSlug = selectedResource ? kindToPlural(selectedResource.kind).toLowerCase() : ''
+  const selectedResourceGroup = selectedResource?.group ?? ''
+  const selectedResourceRouteMismatch = mainView === 'resources' && !!selectedResource && (
+    selectedResourceKindSlug !== currentResourceKindSlug ||
+    selectedResourceGroup !== currentResourceGroup
+  )
+  const resourcesKindRouteChanged = mainView === 'resources' &&
+    prevResourcesKindKeyRef.current !== null &&
+    prevResourcesKindKeyRef.current !== `${currentResourceGroup}/${currentResourceKindSlug}`
+  const routeSelectedResource = resourcesKindRouteChanged && selectedResourceRouteMismatch
+    ? null
+    : selectedResource
+
   useEffect(() => {
     if (mainView !== 'resources') {
-      prevResourcesKindSlugRef.current = null
+      prevResourcesKindKeyRef.current = null
       return
     }
-    const slug = normalizedResourcesKindSlug
-    const prev = prevResourcesKindSlugRef.current
-    prevResourcesKindSlugRef.current = slug
-    if (prev !== null && prev !== slug) {
+    const key = `${currentResourceGroup}/${currentResourceKindSlug}`
+    const prev = prevResourcesKindKeyRef.current
+    prevResourcesKindKeyRef.current = key
+
+    if (prev !== null && prev !== key && selectedResourceRouteMismatch) {
       setSelectedResource(null)
       setDrawerExpanded(false)
     }
-  }, [mainView, normalizedResourcesKindSlug])
+  }, [mainView, currentResourceKindSlug, currentResourceGroup, selectedResourceRouteMismatch])
 
   // Animation hooks for smooth mount/unmount transitions
-  const resourceDrawer = useAnimatedUnmount(!!selectedResource, 300)
+  const resourceDrawer = useAnimatedUnmount(!!routeSelectedResource, 300)
   const helmDrawer = useAnimatedUnmount(!!(mainView === 'helm' && selectedHelmRelease), 300)
   const helpOverlay = useAnimatedUnmount(showHelp, 300)
   const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, 300)
   const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, 300)
 
   // Hold last valid values so drawers can animate out before data disappears
-  const lastResourceRef = useRef(selectedResource)
-  if (selectedResource) lastResourceRef.current = selectedResource
-  const drawerResource = selectedResource || lastResourceRef.current
+  const lastResourceRef = useRef(routeSelectedResource)
+  if (routeSelectedResource) lastResourceRef.current = routeSelectedResource
+  const drawerResource = routeSelectedResource || lastResourceRef.current
 
   const lastHelmReleaseRef = useRef(selectedHelmRelease)
   if (selectedHelmRelease) lastHelmReleaseRef.current = selectedHelmRelease
@@ -1197,7 +1214,7 @@ function AppInner() {
         {mainView === 'resources' && (
           <ResourcesView
             namespaces={namespaces}
-            selectedResource={selectedResource}
+            selectedResource={routeSelectedResource}
             onResourceClick={(res) => res ? navigateToResource(res) : setSelectedResource(null)}
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
