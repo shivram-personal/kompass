@@ -893,7 +893,12 @@ function AppInner() {
           {/* Namespace selector with search */}
           <NamespaceSelector
             value={namespaces}
-            onChange={setNamespaces}
+            onChange={(next) => {
+              setNamespaces(next)
+              if (forceNamespaceFilter !== undefined) {
+                setForceNamespaceFilter(next.length > 0 ? next : undefined)
+              }
+            }}
             namespaces={availableNamespaces}
             namespacesError={namespacesError}
             disabled={mainView === 'helm'}
