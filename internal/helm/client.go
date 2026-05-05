@@ -991,6 +991,7 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 			if latestInRepo != "" {
 				candidates = append(candidates, repoVersionInfo{
 					repoName:          r.Name,
+					repoURL:           r.URL,
 					latestVersion:     latestInRepo,
 					hasCurrentVersion: hasCurrentVersion,
 				})
@@ -998,9 +999,15 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 		}
 	}
 
-	latestVersion, repoName := findBestUpgradeVersion(candidates)
-	if latestVersion == "" {
+	if len(candidates) == 0 {
 		info.Error = "chart not found in configured repositories"
+		return info, nil
+	}
+
+	sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
+	latestVersion, repoName := findBestUpgradeVersion(candidates, sourceHosts)
+	if latestVersion == "" {
+		info.Error = "could not identify upstream chart repository"
 		return info, nil
 	}
 
@@ -1014,34 +1021,131 @@ func (c *Client) checkForUpgrade(namespace, name, username string, groups []stri
 // repoVersionInfo holds version information from a single repository for upgrade comparison.
 type repoVersionInfo struct {
 	repoName          string
+	repoURL           string
 	latestVersion     string
 	hasCurrentVersion bool
 }
 
-// findBestUpgradeVersion picks the best upgrade version for a chart.
-// It prefers repos that contain the currently installed version (source repo heuristic),
-// which avoids suggesting upgrades from unrelated charts that share the same name.
-func findBestUpgradeVersion(candidates []repoVersionInfo) (latestVersion, repoName string) {
-	// First: try repos that have the current version (likely the source repo)
+// findBestUpgradeVersion picks the upstream repo for a release whose chart name
+// may collide across configured repos (e.g. Bitnami ships an `argo-cd` chart
+// that's unrelated to argoproj's `argo-cd`). Tiers, in order:
+//
+//  1. A repo that lists the currently installed version — strongest signal that
+//     the release came from there. Among ties, take the highest latest.
+//  2. A repo whose URL host matches the chart's declared Home/Sources hosts.
+//     Catches the "installed version was pruned from index.yaml" case without
+//     letting an unrelated mirror win.
+//  3. Single candidate — only one configured repo lists this chart name, so
+//     there is nothing to confuse it with.
+//
+// If none of these apply we return empty strings; the caller surfaces an
+// "upstream not detected" state rather than guessing.
+func findBestUpgradeVersion(candidates []repoVersionInfo, sourceHosts []string) (latestVersion, repoName string) {
 	for _, c := range candidates {
-		if c.hasCurrentVersion {
-			if latestVersion == "" || compareVersions(c.latestVersion, latestVersion) > 0 {
-				latestVersion = c.latestVersion
-				repoName = c.repoName
-			}
+		if !c.hasCurrentVersion {
+			continue
 		}
-	}
-	if latestVersion != "" {
-		return
-	}
-	// Fallback: pick highest across all repos (stale index case)
-	for _, c := range candidates {
 		if latestVersion == "" || compareVersions(c.latestVersion, latestVersion) > 0 {
 			latestVersion = c.latestVersion
 			repoName = c.repoName
 		}
 	}
-	return
+	if latestVersion != "" {
+		return
+	}
+
+	if len(sourceHosts) > 0 {
+		for _, c := range candidates {
+			if !repoURLMatchesAny(c.repoURL, sourceHosts) {
+				continue
+			}
+			if latestVersion == "" || compareVersions(c.latestVersion, latestVersion) > 0 {
+				latestVersion = c.latestVersion
+				repoName = c.repoName
+			}
+		}
+		if latestVersion != "" {
+			return
+		}
+	}
+
+	if len(candidates) == 1 {
+		return candidates[0].latestVersion, candidates[0].repoName
+	}
+
+	return "", ""
+}
+
+// chartSourceHosts collects the hostnames (and their registered domains)
+// declared on a chart's Home and Sources URLs, used to disambiguate which
+// configured Helm repo is actually upstream when chart names collide.
+func chartSourceHosts(home string, sources []string) []string {
+	urls := make([]string, 0, 1+len(sources))
+	if home != "" {
+		urls = append(urls, home)
+	}
+	urls = append(urls, sources...)
+
+	hosts := make([]string, 0, len(urls)*2)
+	seen := make(map[string]struct{}, len(urls)*2)
+	add := func(h string) {
+		if h == "" {
+			return
+		}
+		if _, dup := seen[h]; dup {
+			return
+		}
+		seen[h] = struct{}{}
+		hosts = append(hosts, h)
+	}
+	for _, raw := range urls {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			continue
+		}
+		h := strings.ToLower(u.Hostname())
+		add(h)
+		add(registeredDomain(h))
+	}
+	return hosts
+}
+
+// repoURLMatchesAny reports whether repoURL's host (or registered domain)
+// equals any of the supplied source hosts. Coarse on purpose — the goal is
+// to reject unrelated mirrors, not RFC-correct domain matching.
+func repoURLMatchesAny(repoURL string, hosts []string) bool {
+	if repoURL == "" || len(hosts) == 0 {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(repoURL))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	candidates := []string{h}
+	if reg := registeredDomain(h); reg != "" && reg != h {
+		candidates = append(candidates, reg)
+	}
+	for _, c := range candidates {
+		for _, want := range hosts {
+			if c == want {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// registeredDomain returns a coarse "registered domain" form by taking the
+// last two host labels. Doesn't consult the Public Suffix List, but matching
+// is one-shot host equality so the worst case is a missed match (Tier 2
+// falls through to Tier 3 / bail-out), never a wrong one.
+func registeredDomain(host string) string {
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-2] + "." + parts[len(parts)-1]
 }
 
 // compareVersions compares two semver strings
@@ -1286,39 +1390,54 @@ func (c *Client) BatchCheckUpgradesAsUser(namespace, username string, groups []s
 }
 
 func (c *Client) batchCheckUpgrades(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
-	// Get all releases
-	releases, err := c.ListReleasesAsUser(namespace, username, groups)
+	var actionConfig *action.Configuration
+	var err error
+	if username != "" {
+		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
+	} else {
+		actionConfig, err = c.getActionConfig(namespace)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to list releases: %w", err)
+		return nil, err
+	}
+
+	// We need full *release.Release objects (Chart.Metadata.Home/Sources are
+	// used for source-affinity disambiguation), so call action.NewList here
+	// instead of going through ListReleases which projects to HelmRelease.
+	listAction := action.NewList(actionConfig)
+	listAction.All = true
+	listAction.AllNamespaces = namespace == ""
+	listAction.StateMask = action.ListAll
+	releases, err := listAction.Run()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
 
 	result := &BatchUpgradeInfo{
 		Releases: make(map[string]*UpgradeInfo),
 	}
-
 	if len(releases) == 0 {
 		return result, nil
 	}
 
-	// Load repo indexes once
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
-		// No repos configured - return empty results with error
 		for _, rel := range releases {
 			key := rel.Namespace + "/" + rel.Name
 			result.Releases[key] = &UpgradeInfo{
-				CurrentVersion: rel.ChartVersion,
+				CurrentVersion: rel.Chart.Metadata.Version,
 				Error:          "no helm repositories configured",
 			}
 		}
 		return result, nil
 	}
 
-	// Build a map of chart name -> per-repo version info (including all versions for source detection)
+	// chartName -> per-repo summary; chartName -> repoName -> all versions
+	// (used to test whether a release's currently installed version is in
+	// that repo's index).
 	chartRepoVersions := make(map[string][]repoVersionInfo)
-	// Also track all available versions per chart per repo, for current-version matching
-	chartAllVersions := make(map[string]map[string][]string) // chartName -> repoName -> []versions
+	chartAllVersions := make(map[string]map[string][]string)
 
 	cacheDir := c.settings.RepositoryCache
 	for _, r := range f.Repositories {
@@ -1343,6 +1462,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 
 			chartRepoVersions[chartName] = append(chartRepoVersions[chartName], repoVersionInfo{
 				repoName:      r.Name,
+				repoURL:       r.URL,
 				latestVersion: latestInRepo,
 			})
 			if chartAllVersions[chartName] == nil {
@@ -1352,30 +1472,38 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 		}
 	}
 
-	// Check each release against the chart versions map
 	for _, rel := range releases {
 		key := rel.Namespace + "/" + rel.Name
-		info := &UpgradeInfo{
-			CurrentVersion: rel.ChartVersion,
+		currentVersion := rel.Chart.Metadata.Version
+		info := &UpgradeInfo{CurrentVersion: currentVersion}
+
+		baseCandidates, ok := chartRepoVersions[rel.Chart.Metadata.Name]
+		if !ok {
+			info.Error = "chart not found in configured repositories"
+			result.Releases[key] = info
+			continue
 		}
 
-		if candidates, ok := chartRepoVersions[rel.Chart]; ok {
-			// Mark which repos contain the current version
-			for i := range candidates {
-				if repoVersions, ok := chartAllVersions[rel.Chart][candidates[i].repoName]; ok {
-					if slices.Contains(repoVersions, rel.ChartVersion) {
-						candidates[i].hasCurrentVersion = true
-					}
-				}
+		// Per-release copy: hasCurrentVersion depends on this release's own
+		// installed version, so the shared slice must not be mutated.
+		candidates := make([]repoVersionInfo, len(baseCandidates))
+		copy(candidates, baseCandidates)
+		for i := range candidates {
+			versionsInRepo := chartAllVersions[rel.Chart.Metadata.Name][candidates[i].repoName]
+			if slices.Contains(versionsInRepo, currentVersion) {
+				candidates[i].hasCurrentVersion = true
 			}
-			latestVersion, repoName := findBestUpgradeVersion(candidates)
+		}
+
+		sourceHosts := chartSourceHosts(rel.Chart.Metadata.Home, rel.Chart.Metadata.Sources)
+		latestVersion, repoName := findBestUpgradeVersion(candidates, sourceHosts)
+		if latestVersion == "" {
+			info.Error = "could not identify upstream chart repository"
+		} else {
 			info.LatestVersion = latestVersion
 			info.RepositoryName = repoName
-			info.UpdateAvailable = compareVersions(latestVersion, rel.ChartVersion) > 0
-		} else {
-			info.Error = "chart not found in configured repositories"
+			info.UpdateAvailable = compareVersions(latestVersion, currentVersion) > 0
 		}
-
 		result.Releases[key] = info
 	}
 
