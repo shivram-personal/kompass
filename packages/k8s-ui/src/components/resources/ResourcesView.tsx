@@ -156,7 +156,7 @@ const WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets'])
 
 // Columns to skip for auto-detected filters (high cardinality, text-like, or non-filterable)
 const SKIP_FILTER_COLUMNS = new Set([
-  'name', 'namespace', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
+  'name', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
   'ports', 'message', 'url', 'ref', 'revision', 'path', 'selector', 'ready', 'restarts',
   'completions', 'duration', 'schedule', 'lastRun', 'target', 'replicas', 'metrics',
   'capacity', 'accessModes', 'volume', 'step', 'progress', 'template', 'expires',
@@ -3471,7 +3471,7 @@ export function ResourcesView({
           {lastUpdated && (
             <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
               <Clock className="w-3.5 h-3.5" />
-              <span>Updated {formatAge(lastUpdated.toISOString())}</span>
+              <span>Updated <span className="inline-block min-w-[4ch] tabular-nums">{formatAge(lastUpdated.toISOString())}</span></span>
             </div>
           )}
           {/* Column picker */}

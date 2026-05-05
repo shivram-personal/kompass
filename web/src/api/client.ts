@@ -272,7 +272,7 @@ export interface DashboardResponse {
   audit: DashboardAudit | null
   nodeVersionSkew: { versions: Record<string, string[]>; minVersion: string; maxVersion: string } | null
   deferredLoading?: boolean // True while deferred informers (secrets, events, etc.) are still syncing
-  partialData?: string[] // Resource kinds still loading after first paint (slow-cluster fallback)
+  partialData?: string[] // Critical kinds promoted at first paint that haven't yet finished syncing (live-filtered)
   accessRestricted?: boolean // True when user has no namespace access (RBAC)
 }
 
@@ -2603,6 +2603,31 @@ export interface DiagErrorEntry {
   level: string
 }
 
+export type DiagSyncPhase = 'not_started' | 'syncing_critical' | 'syncing_deferred' | 'complete'
+
+export interface DiagInformerSyncStatus {
+  kind: string
+  key: string
+  deferred: boolean
+  synced: boolean
+  syncedAt?: string
+  items: number
+}
+
+export interface DiagCacheSyncStatus {
+  phase: DiagSyncPhase
+  syncStarted?: string
+  elapsedSec: number
+  criticalTotal: number
+  criticalSynced: number
+  deferredTotal: number
+  deferredSynced: number
+  informers: DiagInformerSyncStatus[]
+  pendingCritical?: string[]
+  pendingDeferred?: string[]
+  promotedKinds?: string[]
+}
+
 export interface DiagnosticsSnapshot {
   timestamp: string
   radarVersion: string
@@ -2666,6 +2691,7 @@ export interface DiagnosticsSnapshot {
     typedCount: number
     dynamicCount: number
     watchedCRDs: string[]
+    syncStatus?: DiagCacheSyncStatus
   }
   prometheus?: {
     connected: boolean

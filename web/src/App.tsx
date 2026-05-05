@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from './hooks/useRefreshAnimation'
+import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
@@ -345,8 +346,13 @@ function AppInner() {
   // Navigate to a resource — uses View Transitions cross-fade when drawer is already open
   const navigateToResource = useCallback((res: SelectedResource, tab: 'detail' | 'yaml' = 'detail') => {
     const update = () => { setDrawerInitialTab(tab); setSelectedResource(res) }
-    if (selectedResource && document.startViewTransition) {
-      document.startViewTransition(() => flushSync(update))
+    // Skip the cross-fade animation entirely on first open (no
+    // `selectedResource`); otherwise route through
+    // startViewTransitionSafe to swallow the InvalidStateError that
+    // the API rejects with on rapid back-to-back navigations.
+    // (SKY-833 bug 49)
+    if (selectedResource) {
+      startViewTransitionSafe(() => flushSync(update))
     } else {
       update()
     }
@@ -366,7 +372,7 @@ function AppInner() {
   const switchContext = useSwitchContext()
 
   // View switching keyboard shortcuts
-  const views: ExtendedMainView[] = ['home', 'topology', 'resources', 'timeline', 'helm', 'traffic']
+  const views: ExtendedMainView[] = ['home', 'topology', 'resources', 'timeline', 'helm', 'traffic', 'cost', 'audit']
   useRegisterShortcuts([
     ...views.map((view, i) => ({
       id: `view-${view}`,

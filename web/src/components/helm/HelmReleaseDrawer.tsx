@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
 import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2 } from 'lucide-react'
@@ -148,12 +149,10 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   }, [])
 
   const switchTab = useCallback((tab: TabId) => {
-    const update = () => flushSync(() => setActiveTab(tab))
-    if (document.startViewTransition) {
-      document.startViewTransition(update)
-    } else {
-      setActiveTab(tab)
-    }
+    // Swallow the InvalidStateError the API rejects with on rapid
+    // tab clicks (SKY-833 bug 49); fall back synchronously when the
+    // API isn't available.
+    startViewTransitionSafe(() => flushSync(() => setActiveTab(tab)))
   }, [])
 
   const handleCompareRevisions = (rev1: number, rev2: number) => {

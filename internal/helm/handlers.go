@@ -822,11 +822,8 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 		release, installErr = client.Install(&req)
 	}
 	if err := installErr; err != nil {
-		if IsForbiddenError(err) {
-			writeError(w, http.StatusForbidden, "insufficient permissions to install Helm release")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("[helm] install %q/%q (chart=%q repo=%q) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, err)
+		writeInstallError(w, err)
 		return
 	}
 
@@ -924,11 +921,8 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 
 		case result := <-resultCh:
 			if result.err != nil {
-				event := map[string]any{
-					"type":    "error",
-					"message": result.err.Error(),
-				}
-				data, _ := json.Marshal(event)
+				log.Printf("[helm] install %q/%q (chart=%q repo=%q) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, result.err)
+				data, _ := json.Marshal(installStreamErrorEvent(result.err))
 				w.Write([]byte("data: " + string(data) + "\n\n"))
 			} else {
 				event := map[string]any{

@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { startViewTransitionSafe } from '../../utils/view-transition'
 import { PaneLoader } from '../ui/PaneLoader'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
@@ -212,12 +213,11 @@ export function WorkloadView({
   }, [kindProp, namespace, name, initialTab])
 
   const switchView = useCallback((yaml: boolean) => {
-    const update = () => flushSync(() => setShowYaml(yaml))
-    if (document.startViewTransition) {
-      document.startViewTransition(update)
-    } else {
-      setShowYaml(yaml)
-    }
+    // startViewTransitionSafe handles the API-missing fallback AND
+    // swallows the InvalidStateError that the API rejects with when
+    // a new transition supersedes an in-flight one (rapid clicks).
+    // (SKY-833 bug 49)
+    startViewTransitionSafe(() => flushSync(() => setShowYaml(yaml)))
   }, [])
 
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)

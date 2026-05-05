@@ -34,7 +34,11 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
   function toggleReveal(key: string) {
     setRevealed(prev => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
       return next
     })
   }
@@ -153,6 +157,16 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
         </>
       )}
 
+      {dataKeys.length > 0 && (
+        <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            Secret values are sensitive. Reveal carefully — anyone who can see your
+            screen will see the plaintext.
+          </span>
+        </div>
+      )}
+
       <Section title="Data" defaultExpanded>
         <div className="space-y-2">
           {dataKeys.map((key) => {
@@ -249,11 +263,6 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
           )}
         </div>
       </Section>
-
-      <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-sm">
-        <AlertTriangle className="w-4 h-4" />
-        Secret values are sensitive. Be careful when revealing.
-      </div>
 
       {editingKey && (
         <ConfirmDialog

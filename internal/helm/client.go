@@ -1885,28 +1885,27 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		}
 	}
 
-	// Create install action
-	installAction := action.NewInstall(actionConfig)
-	installAction.ReleaseName = req.ReleaseName
-	installAction.Namespace = req.Namespace
-	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Timeout = 120 * time.Second
-	installAction.Version = req.Version
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
 
-	// Locate/download chart
-	cp, err := installAction.ChartPathOptions.LocateChart(chartURL, c.settings)
+	// action.Install carries ChartPathOptions; instantiated here as a locator only.
+	locator := action.NewInstall(actionConfig)
+	locator.Version = req.Version
+	cp, err := locator.ChartPathOptions.LocateChart(chartURL, c.settings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
 	}
-
-	// Load chart
 	chart, err := loader.Load(cp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	// Run install
-	rel, err := installAction.Run(chart, req.Values)
+	if mode != installFresh {
+		log.Printf("[helm] install %q/%q: prior release record exists, recovering via %s", req.Namespace, req.ReleaseName, recoveryMode(mode))
+	}
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
@@ -2071,6 +2070,14 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		}
 	}
 
+	// Pre-flight before downloading: a deployed/pending release is knowable
+	// from local Helm storage and we shouldn't waste bandwidth + show
+	// "Downloading..." progress to a user who'll get a 409 anyway.
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
 	sendProgress("downloading", fmt.Sprintf("Downloading chart %s-%s...", req.ChartName, req.Version), chartURL)
 
 	// Download the chart archive directly via HTTP, bypassing the Helm SDK's
@@ -2106,19 +2113,19 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	installAction := action.NewInstall(actionConfig)
-	installAction.ReleaseName = req.ReleaseName
-	installAction.Namespace = req.Namespace
-	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Timeout = 120 * time.Second
-
-	sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
-
-	if req.CreateNamespace {
-		sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
+	switch mode {
+	case installFresh:
+		sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
+		if req.CreateNamespace {
+			sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
+		}
+	case installReplace:
+		sendProgress("installing", fmt.Sprintf("Replacing prior uninstalled release %s in %s...", req.ReleaseName, req.Namespace), "")
+	case installUpgrade:
+		sendProgress("installing", fmt.Sprintf("Recovering prior failed release %s in %s...", req.ReleaseName, req.Namespace), "")
 	}
 
-	rel, err := installAction.Run(chart, req.Values)
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}

@@ -6,6 +6,14 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps(go):"
+    groups:
+      k8s:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      otel:
+        patterns:
+          - "go.opentelemetry.io/*"
 
   - package-ecosystem: npm
     directory: /

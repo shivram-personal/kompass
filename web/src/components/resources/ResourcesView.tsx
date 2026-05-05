@@ -13,7 +13,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import type { ResourceQueryResult } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
-import type { NavigateToResource } from '../../utils/navigation'
+import { kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { getSkeletonYaml } from '../../utils/skeleton-yaml'
 
@@ -204,7 +204,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       initialYaml={createDialogYaml}
       title={createDialogTitle}
       onCreated={(result) => {
-        onResourceClick?.({ kind: result.kind, namespace: result.namespace, name: result.name, group: '' })
+        onResourceClick?.({ kind: kindToPlural(result.kind), namespace: result.namespace, name: result.name, group: '' })
       }}
     />
     </>

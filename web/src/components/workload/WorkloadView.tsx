@@ -8,7 +8,7 @@ import {
   type RendererOverrides,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource, ResourceRef, ResolvedEnvFrom } from '../../types'
-import type { NavigateToResource } from '../../utils/navigation'
+import { kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import {
   useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
   useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob,
@@ -383,7 +383,7 @@ export function WorkloadView({
       initialYaml={duplicateYaml}
       title="Duplicate Resource"
       onCreated={(result) => {
-        rest.onNavigateToResource?.({ kind: result.kind, namespace: result.namespace, name: result.name, group: '' })
+        rest.onNavigateToResource?.({ kind: kindToPlural(result.kind), namespace: result.namespace, name: result.name, group: '' })
       }}
     />
     </>

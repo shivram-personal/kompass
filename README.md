@@ -1,7 +1,11 @@
 # Radar
 
+<a href="https://www.producthunt.com/products/radar-7?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1130618&theme=neutral&period=daily" alt="Radar - The missing open-source Kubernetes UI | Product Hunt" width="250" height="54" /></a>
+
 **Modern Kubernetes visibility.**
 <br>Local-first. No account. No cloud dependency. Blazing Fast.
+
+🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Releases](https://github.com/skyhook-io/radar/releases)
 
 Topology, event timeline, and service traffic — plus resource browsing, Helm management, and GitOps support for FluxCD and ArgoCD.
 
@@ -20,7 +24,7 @@ Visualize your cluster topology, browse resources, stream logs, exec into pods, 
 
 **Install and run in 30 seconds:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/skyhook-io/radar/main/install.sh | bash && kubectl radar
+curl -fsSL https://get.radarhq.io | sh && kubectl radar
 ```
 [More installation options ↓](#installation)
 
@@ -41,7 +45,7 @@ curl -fsSL https://raw.githubusercontent.com/skyhook-io/radar/main/install.sh | 
 
 **Quick Install:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/skyhook-io/radar/main/install.sh | bash
+curl -fsSL https://get.radarhq.io | sh
 ```
 
 **Homebrew:**
@@ -69,7 +73,7 @@ scoop install radar
 
 **PowerShell (Windows):**
 ```powershell
-irm https://raw.githubusercontent.com/skyhook-io/radar/main/install.ps1 | iex
+irm https://get.radarhq.io/install.ps1 | iex
 ```
 
 **Direct download** — [GitHub Releases](https://github.com/skyhook-io/radar/releases) for macOS, Linux, or Windows.
@@ -383,6 +387,14 @@ make watch-backend
 ## Contributing
 
 Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on the development workflow, pull request process, and coding standards.
+
+---
+
+## About
+
+Radar is built and maintained by [Skyhook](https://skyhook.io) (YC W23) and is open source under Apache-2.0. The OSS version is fully featured and the recommended way to run Radar.
+
+For teams that want hosted multi-cluster Radar with SSO and shared dashboards, we also offer [Radar Cloud](https://radarhq.io).
 
 ---
 

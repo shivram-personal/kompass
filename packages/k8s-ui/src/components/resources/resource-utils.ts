@@ -130,6 +130,114 @@ export function getPodStatus(pod: any): StatusBadge {
   }
 }
 
+/**
+ * Pod phase enriched with readiness/restart/crash signals so the Phase
+ * row doesn't show a bare "Running" on a 0/1 or crash-looping pod.
+ */
+export interface PodPhaseDisplay {
+  /** Verbatim `pod.status.phase` (or "Unknown") — never lost. */
+  phase: string
+  /** Phase + derived qualifier, e.g. "Running — Not Ready (0/1)". */
+  text: string
+  /** Severity tier for tinting / icon choice, mirrors getPodStatus. */
+  level: HealthLevel
+  /** Optional one-line explanation surfaced as a tooltip / muted suffix. */
+  hint?: string
+}
+
+const RESTART_CYCLING_THRESHOLD = 5
+
+export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
+  const phase: string = pod?.status?.phase || 'Unknown'
+  const containerStatuses: any[] = pod?.status?.containerStatuses || []
+  const totalContainers = containerStatuses.length
+  const readyContainers = containerStatuses.filter((c) => c?.ready).length
+  const restartTotal = containerStatuses.reduce(
+    (sum, c) => sum + (c?.restartCount || 0),
+    0
+  )
+
+  if (pod?.metadata?.deletionTimestamp) {
+    return {
+      phase,
+      text: `${phase} — Terminating`,
+      level: 'degraded',
+      hint: 'Pod has a deletionTimestamp set; awaiting graceful termination.',
+    }
+  }
+
+  // Container-state failures take precedence over phase: a CrashLoopBackOff
+  // pod can still report phase: Running. Skip for Succeeded — a Job pod whose
+  // sidecar was OOMKilled before the main container completed should not be
+  // shown as unhealthy after the pod has reached terminal success.
+  if (phase !== 'Succeeded') {
+    for (const cs of containerStatuses) {
+      const waitingReason = cs?.state?.waiting?.reason
+      if (
+        waitingReason === 'CrashLoopBackOff' ||
+        waitingReason === 'ImagePullBackOff' ||
+        waitingReason === 'ErrImagePull' ||
+        waitingReason === 'CreateContainerConfigError'
+      ) {
+        return {
+          phase,
+          text: `${phase} — ${waitingReason}`,
+          level: 'unhealthy',
+          hint: `Container "${cs.name}" is stuck in ${waitingReason}.`,
+        }
+      }
+      if (cs?.state?.terminated?.reason === 'OOMKilled') {
+        return {
+          phase,
+          text: `${phase} — OOMKilled`,
+          level: 'unhealthy',
+          hint: `Container "${cs.name}" was OOMKilled.`,
+        }
+      }
+    }
+  }
+
+  switch (phase) {
+    case 'Running': {
+      const notReady = totalContainers > 0 && readyContainers < totalContainers
+      const cycling = restartTotal > RESTART_CYCLING_THRESHOLD
+      if (notReady && cycling) {
+        return {
+          phase,
+          text: `Running — Not Ready (${readyContainers}/${totalContainers}), ${restartTotal} restarts`,
+          level: 'unhealthy',
+          hint: 'Containers report not-ready and have restarted many times — likely crash-looping.',
+        }
+      }
+      if (notReady) {
+        return {
+          phase,
+          text: `Running — Not Ready (${readyContainers}/${totalContainers})`,
+          level: 'degraded',
+          hint: 'Pod is in the Running phase but at least one container is not ready (probes failing or still starting).',
+        }
+      }
+      if (cycling) {
+        return {
+          phase,
+          text: `Running — Restarting (${restartTotal} restarts)`,
+          level: 'degraded',
+          hint: 'Containers are ready right now but have restarted many times — investigate stability.',
+        }
+      }
+      return { phase, text: 'Running', level: 'healthy' }
+    }
+    case 'Succeeded':
+      return { phase, text: 'Completed', level: 'neutral' }
+    case 'Pending':
+      return { phase, text: 'Pending', level: 'degraded' }
+    case 'Failed':
+      return { phase, text: 'Failed', level: 'unhealthy' }
+    default:
+      return { phase, text: phase, level: 'unknown' }
+  }
+}
+
 export function getPodProblems(pod: any): PodProblem[] {
   const problems: PodProblem[] = []
   const containerStatuses = pod.status?.containerStatuses || []
@@ -1528,6 +1636,8 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   const kindLower = kind.toLowerCase()
 
   switch (column) {
+    case 'namespace':
+      return resource.metadata?.namespace || ''
     case 'type':
       if (kindLower === 'secrets' || kindLower === 'sealedsecrets') return getSecretType(resource).type
       if (kindLower === 'services') return resource.spec?.type || ''
