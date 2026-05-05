@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useRef, useEffect, type Dispatch, type SetStateAction } from 'react'
 import { ShieldAlert, AlertTriangle, ChevronRight, CheckCircle2, Search, ExternalLink, MoreHorizontal, EyeOff, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { AuditFinding } from './AuditAlerts'
@@ -48,14 +48,34 @@ export interface AuditFindingsTableProps {
 }
 
 export function AuditFindingsTable({ groups, findings, checks, onResourceClick, onHideCheck, onHideCategory, onHideNamespace, multiCluster, onClusterClick }: AuditFindingsTableProps) {
-  const [categoryFilter, setCategoryFilter] = useState<string | null>(null)
-  const [severityFilter, setSeverityFilter] = useState<string | null>(null)
-  const [frameworkFilter, setFrameworkFilter] = useState<string | null>(null)
+  const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set())
+  const [severityFilter, setSeverityFilter] = useState<Set<string>>(new Set())
+  const [frameworkFilter, setFrameworkFilter] = useState<Set<string>>(new Set())
   const [searchTerm, setSearchTerm] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [expandedNS, setExpandedNS] = useState<Set<string>>(new Set())
   const [groupByNS, setGroupByNS] = useState(false)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  const toggleInSet = (setter: Dispatch<SetStateAction<Set<string>>>, value: string) => {
+    setter(prev => {
+      const next = new Set(prev)
+      if (next.has(value)) next.delete(value)
+      else next.add(value)
+      return next
+    })
+  }
+
+  const clearChipFilters = () => {
+    setCategoryFilter(new Set())
+    setSeverityFilter(new Set())
+    setFrameworkFilter(new Set())
+  }
+
+  const clearAllFilters = () => {
+    clearChipFilters()
+    setSearchTerm('')
+  }
 
   // "/" keyboard shortcut to focus search
   useEffect(() => {
@@ -88,13 +108,14 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
 
   const searchLower = searchTerm.toLowerCase()
 
-  // Match a finding against category/severity/framework filters
+  // Match a finding against category/severity/framework filters.
+  // Within a dimension, multiple selected values are OR'd. Across dimensions, AND.
   const matchesFinding = (f: AuditFinding) => {
-    if (categoryFilter && f.category !== categoryFilter) return false
-    if (severityFilter && f.severity !== severityFilter) return false
-    if (frameworkFilter && checks) {
-      const meta = checks[f.checkID]
-      if (!meta?.frameworks?.includes(frameworkFilter)) return false
+    if (categoryFilter.size > 0 && !categoryFilter.has(f.category)) return false
+    if (severityFilter.size > 0 && !severityFilter.has(f.severity)) return false
+    if (frameworkFilter.size > 0 && checks) {
+      const fws = checks[f.checkID]?.frameworks
+      if (!fws || !fws.some(fw => frameworkFilter.has(fw))) return false
     }
     return true
   }
@@ -141,7 +162,8 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
   }
 
   // Compute counts from filtered results (so summary reflects active filters)
-  const hasActiveFilters = !!(categoryFilter || severityFilter || frameworkFilter || searchTerm)
+  const hasActiveChipFilters = categoryFilter.size > 0 || severityFilter.size > 0 || frameworkFilter.size > 0
+  const hasActiveFilters = hasActiveChipFilters || searchTerm !== ''
   const filteredAllFindings = filteredGroups
     ? filteredGroups.flatMap(g => g.findings)
     : filteredFindings ?? []
@@ -243,28 +265,30 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
           )}
         </div>
 
-        {/* Row 2: Filter chips — three groups separated by dividers (All | Categories | Severities | Frameworks). */}
+        {/* Row 2: Filter chips — three groups separated by dividers (All | Categories | Severities | Frameworks).
+            Each chip is an independent toggle. Multiple chips within a dimension OR together;
+            dimensions AND together. */}
         <div className="flex flex-wrap items-center gap-1.5">
-          <FilterPill label="All" active={!categoryFilter && !severityFilter && !frameworkFilter} onClick={() => { setCategoryFilter(null); setSeverityFilter(null); setFrameworkFilter(null) }} />
+          <FilterPill label="All" active={!hasActiveChipFilters} onClick={clearChipFilters} />
           <span className="w-px h-5 bg-theme-border mx-2" />
           {CATEGORIES.map(cat => (
-            <FilterPill key={cat} label={cat} active={categoryFilter === cat} onClick={() => setCategoryFilter(categoryFilter === cat ? null : cat)} />
+            <FilterPill key={cat} label={cat} active={categoryFilter.has(cat)} onClick={() => toggleInSet(setCategoryFilter, cat)} />
           ))}
           <span className="w-px h-5 bg-theme-border mx-2" />
           {SEVERITIES.map(sev => (
             <FilterPill
               key={sev}
               label={sev === 'danger' ? 'Critical' : 'Warning'}
-              active={severityFilter === sev}
+              active={severityFilter.has(sev)}
               tone={sev === 'danger' ? 'danger' : 'warn'}
-              onClick={() => setSeverityFilter(severityFilter === sev ? null : sev)}
+              onClick={() => toggleInSet(setSeverityFilter, sev)}
             />
           ))}
           {frameworks.length > 0 && (
             <>
               <span className="w-px h-5 bg-theme-border mx-2" />
               {frameworks.map(fw => (
-                <FilterPill key={fw} label={fw} active={frameworkFilter === fw} onClick={() => setFrameworkFilter(frameworkFilter === fw ? null : fw)} />
+                <FilterPill key={fw} label={fw} active={frameworkFilter.has(fw)} onClick={() => toggleInSet(setFrameworkFilter, fw)} />
               ))}
             </>
           )}
@@ -292,7 +316,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
             action={
               <button
                 type="button"
-                onClick={() => { setCategoryFilter(null); setSeverityFilter(null); setFrameworkFilter(null); setSearchTerm('') }}
+                onClick={clearAllFilters}
                 className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary hover:bg-theme-hover transition-colors"
               >
                 Clear all filters
