@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
@@ -22,7 +23,9 @@ import (
 // (timeline, metrics) are injected via DynamicCacheConfig.
 type DynamicResourceCache struct {
 	factory         dynamicinformer.DynamicSharedInformerFactory
+	nsFactory       dynamicinformer.DynamicSharedInformerFactory
 	informers       map[schema.GroupVersionResource]cache.SharedIndexInformer
+	informerScopes  map[schema.GroupVersionResource]string
 	syncComplete    map[schema.GroupVersionResource]bool
 	stopCh          chan struct{}
 	stopOnce        sync.Once
@@ -46,22 +49,28 @@ func NewDynamicResourceCache(cfg DynamicCacheConfig) (*DynamicResourceCache, err
 		return nil, fmt.Errorf("namespace must be set when NamespaceScoped is true")
 	}
 
-	var factory dynamicinformer.DynamicSharedInformerFactory
+	factory := dynamicinformer.NewDynamicSharedInformerFactory(
+		cfg.DynamicClient,
+		0, // no resync — updates come via watch
+	)
+	var nsFactory dynamicinformer.DynamicSharedInformerFactory
 	if cfg.NamespaceScoped && cfg.Namespace != "" {
-		factory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
+		nsFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
 			cfg.DynamicClient, 0, cfg.Namespace, nil,
 		)
 		log.Printf("Using namespace-scoped dynamic informers for namespace %q", cfg.Namespace)
-	} else {
-		factory = dynamicinformer.NewDynamicSharedInformerFactory(
-			cfg.DynamicClient,
-			0, // no resync — updates come via watch
+	} else if cfg.NamespaceFallback != "" {
+		nsFactory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
+			cfg.DynamicClient, 0, cfg.NamespaceFallback, nil,
 		)
+		log.Printf("Using namespace fallback for dynamic informers: %q", cfg.NamespaceFallback)
 	}
 
 	d := &DynamicResourceCache{
 		factory:         factory,
+		nsFactory:       nsFactory,
 		informers:       make(map[schema.GroupVersionResource]cache.SharedIndexInformer),
+		informerScopes:  make(map[schema.GroupVersionResource]string),
 		syncComplete:    make(map[schema.GroupVersionResource]bool),
 		stopCh:          make(chan struct{}),
 		config:          cfg,
@@ -130,7 +139,8 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource) er
 		return nil
 	}
 
-	informer := d.factory.ForResource(gvr).Informer()
+	factory := d.factoryForGVR(gvr)
+	informer := factory.ForResource(gvr).Informer()
 	// Apply the dynamic-cache transform BEFORE informer.Run so every
 	// object entering the store is shrunk in place. SetTransform must
 	// be called pre-Run (returns ErrRunning otherwise). If it ever
@@ -183,22 +193,101 @@ func (d *DynamicResourceCache) probeAccess(gvr schema.GroupVersionResource) erro
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var err error
 	if d.config.NamespaceScoped && d.config.Namespace != "" {
-		_, err = d.config.DynamicClient.Resource(gvr).Namespace(d.config.Namespace).List(ctx, metav1.ListOptions{Limit: 1})
-	} else {
-		_, err = d.config.DynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
-	}
-
-	if err != nil {
-		errLower := strings.ToLower(err.Error())
-		if strings.Contains(errLower, "forbidden") || strings.Contains(errLower, "unauthorized") {
-			return err
+		err := d.listProbe(ctx, gvr, d.config.Namespace)
+		if err == nil {
+			d.setInformerScope(gvr, d.config.Namespace)
+			return nil
 		}
-		log.Printf("[dynamic cache] Probe for %s.%s/%s returned non-auth error (allowing): %v", gvr.Resource, gvr.Group, gvr.Version, err)
+		return d.classifyProbeError(gvr, err, d.config.Namespace)
 	}
 
+	err := d.listProbe(ctx, gvr, "")
+	if err == nil {
+		d.setInformerScope(gvr, "")
+		return nil
+	}
+	if isAuthProbeError(err) && d.config.NamespaceFallback != "" && d.gvrIsNamespaced(gvr) {
+		nsErr := d.listProbe(ctx, gvr, d.config.NamespaceFallback)
+		if nsErr == nil {
+			d.setInformerScope(gvr, d.config.NamespaceFallback)
+			return nil
+		}
+		return d.classifyProbeError(gvr, nsErr, d.config.NamespaceFallback)
+	}
+	return d.classifyProbeError(gvr, err, "")
+}
+
+func (d *DynamicResourceCache) listProbe(ctx context.Context, gvr schema.GroupVersionResource, namespace string) error {
+	if namespace != "" {
+		_, err := d.config.DynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{Limit: 1})
+		return err
+	}
+	_, err := d.config.DynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+	return err
+}
+
+func (d *DynamicResourceCache) classifyProbeError(gvr schema.GroupVersionResource, err error, namespace string) error {
+	if err == nil {
+		return nil
+	}
+	if isAuthProbeError(err) {
+		return err
+	}
+	log.Printf("[dynamic cache] Probe for %s.%s/%s returned non-auth error (allowing): %v", gvr.Resource, gvr.Group, gvr.Version, err)
+	d.setInformerScope(gvr, namespace)
 	return nil
+}
+
+// isAuthProbeError classifies an error as an auth (403/401) failure as
+// opposed to a transient or NotFound error. Uses the typed K8s helpers only —
+// substring matching on "forbidden"/"unauthorized" misclassifies admission-
+// webhook denials and optimistic-concurrency conflicts ("Operation cannot be
+// fulfilled ... forbidden") on proxy-fronted clusters, permanently disabling
+// CRDs for the session.
+func isAuthProbeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err)
+}
+
+func (d *DynamicResourceCache) gvrIsNamespaced(gvr schema.GroupVersionResource) bool {
+	if d.config.Discovery == nil {
+		return true
+	}
+	resources, err := d.config.Discovery.GetAPIResources()
+	if err != nil {
+		return true
+	}
+	for _, res := range resources {
+		if res.Group == gvr.Group && res.Version == gvr.Version && res.Name == gvr.Resource {
+			return res.Namespaced
+		}
+	}
+	return true
+}
+
+func (d *DynamicResourceCache) setInformerScope(gvr schema.GroupVersionResource, namespace string) {
+	d.mu.Lock()
+	d.informerScopes[gvr] = namespace
+	d.mu.Unlock()
+}
+
+func (d *DynamicResourceCache) factoryForGVR(gvr schema.GroupVersionResource) dynamicinformer.DynamicSharedInformerFactory {
+	if d == nil {
+		return nil
+	}
+	if d.config.NamespaceScoped && d.config.Namespace != "" {
+		if d.nsFactory != nil {
+			return d.nsFactory
+		}
+		return d.factory
+	}
+	if d.nsFactory != nil && d.informerScopes[gvr] != "" {
+		return d.nsFactory
+	}
+	return d.factory
 }
 
 // probeCount does a quick list with limit=1 and returns the approximate resource count.
@@ -210,15 +299,10 @@ func (d *DynamicResourceCache) probeCount(gvr schema.GroupVersionResource) int {
 
 	var list *unstructured.UnstructuredList
 	var err error
-	if d.config.NamespaceScoped && d.config.Namespace != "" {
-		list, err = d.config.DynamicClient.Resource(gvr).Namespace(d.config.Namespace).List(ctx, metav1.ListOptions{Limit: 1})
-	} else {
-		list, err = d.config.DynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
-	}
+	list, err = d.probeCountList(ctx, gvr)
 
 	if err != nil {
-		errLower := strings.ToLower(err.Error())
-		if strings.Contains(errLower, "forbidden") || strings.Contains(errLower, "unauthorized") {
+		if isAuthProbeError(err) {
 			return -1
 		}
 		log.Printf("[dynamic cache] probeCount for %s.%s/%s returned non-auth error (deferring): %v",
@@ -231,6 +315,30 @@ func (d *DynamicResourceCache) probeCount(gvr schema.GroupVersionResource) int {
 		count += int(*list.GetRemainingItemCount())
 	}
 	return count
+}
+
+func (d *DynamicResourceCache) probeCountList(ctx context.Context, gvr schema.GroupVersionResource) (*unstructured.UnstructuredList, error) {
+	if d.config.NamespaceScoped && d.config.Namespace != "" {
+		list, err := d.config.DynamicClient.Resource(gvr).Namespace(d.config.Namespace).List(ctx, metav1.ListOptions{Limit: 1})
+		if err == nil {
+			d.setInformerScope(gvr, d.config.Namespace)
+		}
+		return list, err
+	}
+
+	list, err := d.config.DynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+	if err == nil {
+		d.setInformerScope(gvr, "")
+		return list, nil
+	}
+	if isAuthProbeError(err) && d.config.NamespaceFallback != "" && d.gvrIsNamespaced(gvr) {
+		list, nsErr := d.config.DynamicClient.Resource(gvr).Namespace(d.config.NamespaceFallback).List(ctx, metav1.ListOptions{Limit: 1})
+		if nsErr == nil {
+			d.setInformerScope(gvr, d.config.NamespaceFallback)
+		}
+		return list, nsErr
+	}
+	return list, err
 }
 
 // gvrToKind converts a GVR to a Kind name using resource discovery.
@@ -964,6 +1072,9 @@ func (d *DynamicResourceCache) Stop() {
 			done := make(chan struct{})
 			go func() {
 				d.factory.Shutdown()
+				if d.nsFactory != nil {
+					d.nsFactory.Shutdown()
+				}
 				close(done)
 			}()
 			select {

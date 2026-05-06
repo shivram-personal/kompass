@@ -179,14 +179,16 @@ rbac:
 
 ### Graceful RBAC Degradation
 
-Radar works with whatever permissions are available — it does not require full cluster-admin access. At startup, Radar checks which resource types are accessible using `SelfSubjectAccessReview` and only starts informers for permitted resources.
+You see what you have access to — Radar doesn't require cluster-admin. Whatever your ServiceAccount (or the impersonated user, when auth is enabled) can list, Radar shows. Resource types you can't list show an "Access Restricted" message; namespaces you can't access don't appear.
 
-**What this means in practice:**
+A namespace-scoped ServiceAccount (RoleBinding without a ClusterRole) is fully supported — Radar detects this at startup and works within the permitted namespace.
 
-- If your ServiceAccount can only list Pods and Services, Radar shows those — other resource types display an "Access Restricted" message
-- Cluster-scoped resources (Nodes, Namespaces) require a ClusterRole; if unavailable, those sections are gracefully hidden
-- For namespace-scoped ServiceAccounts (RoleBinding instead of ClusterRoleBinding), Radar automatically detects this and scopes its informers to the permitted namespace
-- The UI clearly indicates which resources are restricted vs simply empty
+**RBAC granularity (auth enabled):**
+
+- Namespaced resources (Pods, Deployments, Services, …) are filtered by namespace: read access is granted in any namespace where the user has list-pods or list-deployments. Per-resource gating *within* a namespace is currently coarse — if a user has any namespace-level read access, they can see all namespaced resources Radar's pod ServiceAccount caches in that namespace. Where you need finer control (e.g. denying Secrets in a shared namespace), enforce it via the pod ServiceAccount's RBAC instead.
+- Cluster-scoped resources (Nodes, PVs, StorageClasses, ClusterRoles, cluster-scoped CRDs, …) are gated per-kind via SubjectAccessReview. Cluster-wide pod visibility does NOT imply Node visibility — every cluster-scoped read goes through its own RBAC check, with results cached per user.
+
+The same RBAC boundary applies to MCP — read tools intersect with each user's allowed namespaces, write tools impersonate the user against the apiserver, and cluster-scoped reads run the same per-kind SAR. The pod ServiceAccount's permissions are the upper bound for both REST and MCP; per-user RBAC narrows that to what each user can see.
 
 **Example: Namespace-scoped deployment**
 

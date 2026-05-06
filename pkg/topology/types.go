@@ -25,6 +25,11 @@ import (
 // - dashboard.go: resource counting (if applicable)
 // - capabilities.go: ResourcePermissions struct + permCheck array (if needs RBAC)
 // - dynamic_cache.go: warmup list (if CRD)
+// - if the kind is cluster-scoped: add an entry to clusterScopedTopologyKinds
+//   in BOTH internal/server/server.go and internal/mcp/tools.go so the
+//   topology strip helpers can SAR-gate it. Missing the strip table leaks
+//   the cluster-scoped node to namespace-restricted users via /api/topology
+//   and the get_topology MCP tool.
 type NodeKind string
 
 const (
@@ -166,6 +171,38 @@ type Topology struct {
 	HiddenKinds             []string `json:"hiddenKinds,omitempty"`             // Resource kinds auto-hidden for performance
 	RequiresNamespaceFilter bool     `json:"requiresNamespaceFilter,omitempty"` // True if cluster is too large for all-namespace topology
 	CRDDiscoveryStatus      string   `json:"crdDiscoveryStatus,omitempty"`      // CRD discovery status: idle, discovering, ready
+}
+
+// StripNodeKinds removes nodes whose Kind is in deny, plus every edge that
+// references one of the dropped node IDs. Used to hide cluster-scoped
+// resources (Nodes, Karpenter NodePool, GatewayClass, …) from users who
+// lack the per-kind RBAC to list them — the topology builder pulls those
+// from the SA-populated cache regardless of the caller's namespace scope.
+func (t *Topology) StripNodeKinds(deny map[NodeKind]bool) {
+	if t == nil || len(deny) == 0 {
+		return
+	}
+	dropped := make(map[string]bool)
+	kept := t.Nodes[:0]
+	for _, n := range t.Nodes {
+		if deny[n.Kind] {
+			dropped[n.ID] = true
+			continue
+		}
+		kept = append(kept, n)
+	}
+	t.Nodes = kept
+	if len(dropped) == 0 {
+		return
+	}
+	keptEdges := t.Edges[:0]
+	for _, e := range t.Edges {
+		if dropped[e.Source] || dropped[e.Target] {
+			continue
+		}
+		keptEdges = append(keptEdges, e)
+	}
+	t.Edges = keptEdges
 }
 
 // ViewMode determines how the topology is built

@@ -20,6 +20,10 @@ export interface ResourcePermissions {
   hpas: boolean
   gateways: boolean
   httpRoutes: boolean
+  roles: boolean
+  clusterRoles: boolean
+  roleBindings: boolean
+  clusterRoleBindings: boolean
 }
 
 // Feature capabilities based on RBAC permissions

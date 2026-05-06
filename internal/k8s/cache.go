@@ -48,8 +48,7 @@ var initialSyncComplete bool
 // deferredResources lists informer keys that are NOT required for the initial
 // dashboard render. These sync in the background after the critical informers
 // complete, so the UI can render immediately with core resources.
-// Critical: pods, deployments, services, statefulsets, daemonsets, nodes,
-//           namespaces, ingresses, jobs, cronjobs
+// Critical: pods, deployments, services, statefulsets, daemonsets, nodes, namespaces, ingresses, jobs, cronjobs.
 var deferredResources = map[string]bool{
 	"secrets":                  true,
 	"events":                   true,
@@ -122,51 +121,33 @@ func InitResourceCache(ctx context.Context) error {
 			return
 		}
 
-		// Check RBAC permissions for all resource types before creating informers.
+		// Probe per-resource list access before creating informers. The
+		// returned scope map is authoritative for both enablement and
+		// per-kind namespace scoping (some kinds may be cluster-wide while
+		// others are namespace-scoped to the same fallback namespace).
 		rbacStart := time.Now()
 		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		permResult := CheckResourcePermissions(rbacCtx)
 		cancel()
-		logTiming("    RBAC permission checks: %v", time.Since(rbacStart))
+		logTiming("    Resource access probes: %v", time.Since(rbacStart))
 
 		if ctx.Err() != nil {
 			initErr = ctx.Err()
 			return
 		}
 
-		perms := permResult.Perms
-
-		enabled := map[string]bool{
-			"pods":                     perms.Pods,
-			"services":                 perms.Services,
-			"deployments":              perms.Deployments,
-			"daemonsets":               perms.DaemonSets,
-			"statefulsets":             perms.StatefulSets,
-			"replicasets":              perms.ReplicaSets,
-			"ingresses":                perms.Ingresses,
-			"configmaps":               perms.ConfigMaps,
-			"secrets":                  perms.Secrets,
-			"events":                   perms.Events,
-			"persistentvolumeclaims":   perms.PersistentVolumeClaims,
-			"nodes":                    perms.Nodes,
-			"namespaces":               perms.Namespaces,
-			"jobs":                     perms.Jobs,
-			"cronjobs":                 perms.CronJobs,
-			"horizontalpodautoscalers": perms.HorizontalPodAutoscalers,
-			"persistentvolumes":        perms.PersistentVolumes,
-			"storageclasses":           perms.StorageClasses,
-			"poddisruptionbudgets":     perms.PodDisruptionBudgets,
-			"networkpolicies":          perms.NetworkPolicies,
-			"serviceaccounts":          perms.ServiceAccounts,
-			"limitranges":              perms.LimitRanges,
+		// scopes drives which informers are created and at what scope.
+		// k8score routes each kind through the matching factory (cluster-wide
+		// or namespace-scoped) based on these per-kind decisions.
+		scopes := permResult.Scopes
+		if scopes == nil {
+			scopes = map[string]k8score.ResourceScope{}
 		}
 
 		cfg := k8score.CacheConfig{
 			Client:              k8sClient,
-			ResourceTypes:       enabled,
+			ResourceScopes:      scopes,
 			DeferredTypes:       deferredResources,
-			NamespaceScoped:     permResult.NamespaceScoped,
-			Namespace:           permResult.Namespace,
 			DebugEvents:         DebugEvents,
 			TimingLogger:        logTiming,
 			PatienceWindow:      firstPaintPatience,
@@ -222,7 +203,7 @@ func InitResourceCache(ctx context.Context) error {
 
 		resourceCache = &ResourceCache{
 			ResourceCache:  core,
-			secretsEnabled: enabled["secrets"],
+			secretsEnabled: scopes["secrets"].Enabled,
 		}
 	})
 	return initErr
@@ -645,6 +626,10 @@ var knownKinds = map[string]bool{
 	"storageclass": true, "storageclasses": true, "sc": true,
 	"poddisruptionbudget": true, "poddisruptionbudgets": true, "pdb": true, "pdbs": true,
 	"networkpolicy": true, "networkpolicies": true, "netpol": true,
+	"role": true, "roles": true,
+	"clusterrole": true, "clusterroles": true,
+	"rolebinding": true, "rolebindings": true,
+	"clusterrolebinding": true, "clusterrolebindings": true,
 }
 
 // IsKnownKind returns true if the kind is handled by the typed cache
@@ -930,6 +915,42 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		return &ResourceStatus{
 			Status: "Active",
 		}
+
+	case "role", "roles":
+		if c.Roles() == nil {
+			return nil
+		}
+		if _, err := c.Roles().Roles(namespace).Get(name); err != nil {
+			return nil
+		}
+		return &ResourceStatus{Status: "Active"}
+
+	case "clusterrole", "clusterroles":
+		if c.ClusterRoles() == nil {
+			return nil
+		}
+		if _, err := c.ClusterRoles().Get(name); err != nil {
+			return nil
+		}
+		return &ResourceStatus{Status: "Active"}
+
+	case "rolebinding", "rolebindings":
+		if c.RoleBindings() == nil {
+			return nil
+		}
+		if _, err := c.RoleBindings().RoleBindings(namespace).Get(name); err != nil {
+			return nil
+		}
+		return &ResourceStatus{Status: "Active"}
+
+	case "clusterrolebinding", "clusterrolebindings":
+		if c.ClusterRoleBindings() == nil {
+			return nil
+		}
+		if _, err := c.ClusterRoleBindings().Get(name); err != nil {
+			return nil
+		}
+		return &ResourceStatus{Status: "Active"}
 
 	case "configmap", "configmaps":
 		if c.ConfigMaps() == nil {

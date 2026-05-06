@@ -35,12 +35,12 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 			return
 		}
 
-		// Build namespace scope from permission result
-		var nsScoped bool
-		var ns string
+		// The cache always boots cluster-wide (or kubeconfig-fallback when
+		// cluster-wide is denied); per-user namespace filtering happens at
+		// the HTTP layer (see internal/server/namespace_scope.go).
+		var nsFallback string
 		if permResult := GetCachedPermissionResult(); permResult != nil && permResult.NamespaceScoped && permResult.Namespace != "" {
-			nsScoped = true
-			ns = permResult.Namespace
+			nsFallback = permResult.Namespace
 		}
 
 		discovery := GetResourceDiscovery()
@@ -50,12 +50,11 @@ func InitDynamicResourceCache(changeCh chan k8score.ResourceChange) error {
 		}
 
 		core, err := k8score.NewDynamicResourceCache(k8score.DynamicCacheConfig{
-			DynamicClient:   client,
-			Discovery:       sharedDiscovery,
-			Changes:         changeCh,
-			NamespaceScoped: nsScoped,
-			Namespace:       ns,
-			DebugEvents:     DebugEvents,
+			DynamicClient:     client,
+			Discovery:         sharedDiscovery,
+			Changes:           changeCh,
+			NamespaceFallback: nsFallback,
+			DebugEvents:       DebugEvents,
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
 			},
@@ -203,7 +202,7 @@ func WarmupCommonCRDs() {
 		"IngressRoute",                 // Traefik
 		"IngressRouteTCP",              // Traefik
 		"IngressRouteUDP",              // Traefik
-		"Middleware",                    // Traefik
+		"Middleware",                   // Traefik
 		"MiddlewareTCP",                // Traefik
 		"TraefikService",               // Traefik
 		"ServersTransport",             // Traefik

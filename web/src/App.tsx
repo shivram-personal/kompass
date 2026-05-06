@@ -21,6 +21,7 @@ import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './c
 import { DockProvider, BottomDock, useDock, useOpenLocalTerminal } from './components/dock'
 import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
+import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
 import { useNavCustomization } from './context/NavCustomization'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
@@ -34,7 +35,7 @@ import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { useNamespaces, useSwitchContext, useAuthMe } from './api/client'
+import { useNamespaces, useNamespaceScope, useSwitchContext, useAuthMe } from './api/client'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
@@ -391,6 +392,7 @@ function AppInner() {
 
   // Refs for dropdown components to trigger them via shortcuts
   const namespaceSelectorRef = useRef<NamespaceSelectorHandle>(null)
+  const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
   const contextSwitcherRef = useRef<ContextSwitcherHandle>(null)
 
   // View switching keyboard shortcuts
@@ -410,7 +412,7 @@ function AppInner() {
       description: 'Switch namespace',
       category: 'Navigation' as const,
       scope: 'global' as const,
-      handler: () => namespaceSelectorRef.current?.open(),
+      handler: () => (namespaceSwitcherRef.current ?? namespaceSelectorRef.current)?.open(),
     },
     {
       id: 'switch-context',
@@ -491,6 +493,11 @@ function AppInner() {
 
   // Fetch available namespaces
   const { data: availableNamespaces, error: namespacesError } = useNamespaces()
+
+  // Per-user view filter served by the backend. Loaded eagerly so the
+  // picker can render its current state without showing the multi-select
+  // fallback during the initial scope fetch.
+  const { data: namespaceScope } = useNamespaceScope()
 
   // Context switch state
   const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch } = useContextSwitch()
@@ -929,16 +936,26 @@ function AppInner() {
 
         {/* Right: Controls */}
         <div className="flex items-center gap-3 shrink-0">
-          {/* Namespace selector with search */}
-          <NamespaceSelector
-            ref={namespaceSelectorRef}
-            value={namespaces}
-            onChange={setNamespaces}
-            namespaces={availableNamespaces}
-            namespacesError={namespacesError}
-            disabled={mainView === 'helm'}
-            disabledTooltip="Helm view always shows all namespaces"
-          />
+          {/* Namespace control. The 'n' shortcut targets a single ref —
+              both branches expose the same `open()` handle so the shortcut
+              works regardless of which control is rendered. */}
+          {namespaceScope ? (
+            <NamespaceSwitcher
+              ref={namespaceSwitcherRef}
+              disabled={mainView === 'helm'}
+              disabledTooltip="Helm view always shows all namespaces"
+            />
+          ) : (
+            <NamespaceSelector
+              ref={namespaceSelectorRef}
+              value={namespaces}
+              onChange={setNamespaces}
+              namespaces={availableNamespaces}
+              namespacesError={namespacesError}
+              disabled={mainView === 'helm'}
+              disabledTooltip="Helm view always shows all namespaces"
+            />
+          )}
 
           {/* Command palette trigger */}
           <button

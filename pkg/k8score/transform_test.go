@@ -84,7 +84,7 @@ func TestDropUnstructuredManagedFields_CRD(t *testing.T) {
 					"webhook": map[string]any{
 						"clientConfig": map[string]any{
 							"caBundle": "LS0tLS1CRUdJTi...a 4KB base64 blob...",
-							"service": map[string]any{"name": "cert-manager-webhook"},
+							"service":  map[string]any{"name": "cert-manager-webhook"},
 						},
 					},
 				},

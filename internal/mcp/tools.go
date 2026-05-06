@@ -14,10 +14,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -254,11 +254,13 @@ type dashboardInput struct {
 
 type listResourcesInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind to list, e.g. pods, deployments, services, configmaps"`
+	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
 }
 
 type getResourceInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind, e.g. pod, deployment, service"`
+	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: events, relationships, metrics, logs"`
@@ -300,7 +302,19 @@ func handleGetDashboard(ctx context.Context, req *mcp.CallToolRequest, input das
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}
 
-	dashboard := buildDashboard(ctx, cache, input.Namespace)
+	// Dashboard summary doesn't currently take a multi-namespace input, so we
+	// gate on the requested namespace, or on cluster-wide namespaced access
+	// when the caller doesn't pin a namespace. Cluster-scoped dashboard fields
+	// are still gated per kind below.
+	if input.Namespace != "" {
+		if !checkNamespaceAccess(ctx, input.Namespace) {
+			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+		}
+	} else if filterNamespacesForUser(ctx, nil) != nil {
+		return nil, nil, fmt.Errorf("forbidden: dashboard summary requires cluster-wide namespace access — pass a specific namespace you have access to")
+	}
+
+	dashboard := buildDashboard(ctx, cache, input.Namespace, canReadClusterScopedKind(ctx, "nodes", "", "list"), canReadClusterScopedKind(ctx, "namespaces", "", "list"))
 	return toJSONResult(dashboard)
 }
 
@@ -311,19 +325,70 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	}
 
 	kind := strings.ToLower(input.Kind)
-	var namespaces []string
+	group := input.Group
+	var requested []string
 	if input.Namespace != "" {
-		namespaces = []string{input.Namespace}
+		requested = []string{input.Namespace}
+	}
+
+	// Cluster-scoped kinds (static cluster-only list + cluster-scoped CRDs
+	// from discovery) are gated per-kind via SAR. Run BEFORE the namespace
+	// filter check so users with explicit cluster-scoped RBAC but no
+	// namespace access can still read those resources.
+	//
+	// "namespaces" is cluster-scoped at the K8s API. Full Namespace objects
+	// require explicit list-namespaces SAR. Read access to resources IN a
+	// namespace (list pods etc.) does not imply read access to the Namespace
+	// resource itself. Restricted users use the dedicated list_namespaces
+	// MCP tool, which serves a synthesized {name, status} view.
+	isNamespacesKind := kind == "namespaces" || kind == "namespace"
+	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+	if clusterScoped && !isNamespacesKind {
+		if !canReadClusterScopedKind(ctx, kind, group, "list") {
+			return toJSONResult([]any{})
+		}
+	}
+	if isNamespacesKind && !canReadClusterScopedKind(ctx, "namespaces", "", "list") {
+		return toJSONResult([]any{})
+	}
+
+	// Filter the requested namespaces against the user's RBAC. Returns:
+	//   nil       — auth off or cluster-wide namespaced access: pass through
+	//   []string{} — user has no namespace access
+	//   [...]     — restrict reads to these namespaces
+	allowed := filterNamespacesForUser(ctx, requested)
+	if !clusterScoped && allowed != nil && len(allowed) == 0 {
+		return toJSONResult([]any{})
+	}
+
+	// For cluster-scoped reads, force a cluster-wide list (don't iterate
+	// per allowed namespace — cluster-scoped resources don't live there).
+	listScope := allowed
+	if clusterScoped {
+		listScope = nil
 	}
 
 	// Try typed cache first
-	objs, err := k8s.FetchResourceList(cache, kind, namespaces)
+	objs, err := k8s.FetchResourceList(cache, kind, listScope)
 	if err == k8s.ErrUnknownKind {
-		// Fall through to dynamic cache for CRDs
-		return listDynamicResources(ctx, cache, kind, namespaces)
+		// Fall through to dynamic cache for CRDs. ClassifyKindScope/SAR
+		// above already authorized cluster-scoped CRDs; namespaced CRDs
+		// are scoped via listScope.
+		return listDynamicResources(ctx, cache, kind, group, listScope)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
+	}
+
+	// Cluster-scoped kinds (FetchResourceList ignores `allowed` for them) and
+	// "namespaces" need post-filtering for namespace-restricted users.
+	// Skip post-filter when the user is cluster-scoped-authorized for a
+	// non-namespaces kind (clusterScoped && !allowed-restricted) — they
+	// should see the full cluster-scoped result. For "namespaces" the
+	// per-user filter ALWAYS applies even though it's cluster-scoped at
+	// the API.
+	if allowed != nil && (!clusterScoped || isNamespacesKind) {
+		objs = retainAllowedObjects(objs, allowed, kind)
 	}
 
 	results, err := aicontext.MinifyList(objs, aicontext.LevelSummary)
@@ -334,11 +399,11 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	return toJSONResult(results)
 }
 
-func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind string, namespaces []string) (*mcp.CallToolResult, any, error) {
+func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string) (*mcp.CallToolResult, any, error) {
 	var allItems []any
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {
-			items, err := cache.ListDynamicWithGroup(ctx, kind, ns, "")
+			items, err := cache.ListDynamicWithGroup(ctx, kind, ns, group)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 			}
@@ -347,7 +412,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind st
 			}
 		}
 	} else {
-		items, err := cache.ListDynamicWithGroup(ctx, kind, "", "")
+		items, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 		}
@@ -366,15 +431,41 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 
 	kind := strings.ToLower(input.Kind)
+	group := input.Group
 	namespace := input.Namespace
 	name := input.Name
+
+	// Cluster-scoped GETs are gated per-kind via SAR — that catches both
+	// the static cluster-only list and dynamic cluster-scoped CRDs (via
+	// discovery). Run BEFORE the namespace check so users with cluster-
+	// scoped RBAC but no namespace access can still read those resources.
+	//
+	// "namespaces" is cluster-scoped at the K8s API but exposed as a
+	// per-user filtered list — gate via the user's namespace access for
+	// the requested name, not via cluster-scoped SAR.
+	isNamespacesKind := kind == "namespaces" || kind == "namespace"
+	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+	if isNamespacesKind {
+		// Full Namespace object access requires explicit get-namespaces SAR.
+		// Read access to resources IN a namespace does not imply read access
+		// to the Namespace object itself.
+		if !canReadClusterScopedKind(ctx, "namespaces", "", "get") {
+			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", name)
+		}
+	} else if clusterScoped {
+		if !canReadClusterScopedKind(ctx, kind, group, "get") {
+			return nil, nil, fmt.Errorf("forbidden: %s requires explicit cluster-scoped RBAC", kind)
+		}
+	} else if !checkNamespaceAccess(ctx, namespace) {
+		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", namespace)
+	}
 
 	// Try typed cache first
 	var resourceData any
 	obj, err := k8s.FetchResource(cache, kind, namespace, name)
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs
-		u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, "")
+		u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 		if dynErr != nil {
 			return nil, nil, fmt.Errorf("resource not found: %w", dynErr)
 		}
@@ -550,12 +641,24 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		limit = min(input.Limit, 50)
 	}
 
+	var requested []string
+	if input.Namespace != "" {
+		requested = []string{input.Namespace}
+	}
+	allowed := filterNamespacesForUser(ctx, requested)
+	if allowed != nil && len(allowed) == 0 {
+		return toJSONResult([]mcpChange{})
+	}
+
 	queryOpts := timeline.QueryOptions{
 		Since:        time.Now().Add(-since),
 		FilterPreset: "default",
 	}
-	if input.Namespace != "" {
+	switch {
+	case input.Namespace != "":
 		queryOpts.Namespaces = []string{input.Namespace}
+	case allowed != nil:
+		queryOpts.Namespaces = allowed
 	}
 	if input.Kind != "" {
 		queryOpts.Kinds = []string{input.Kind}
@@ -608,9 +711,28 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 }
 
 func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topologyInput) (*mcp.CallToolResult, any, error) {
+	// Topology weaves cluster-scoped (Nodes, IngressClasses, NetworkPolicies)
+	// with namespaced resources, so we gate on access to whatever the caller
+	// requested. Namespace-restricted users must scope to a namespace they
+	// can see; otherwise we refuse rather than build a partial graph.
+	var requested []string
+	if input.Namespace != "" {
+		requested = []string{input.Namespace}
+	}
+	allowed := filterNamespacesForUser(ctx, requested)
+	if allowed != nil && len(allowed) == 0 {
+		if input.Namespace != "" {
+			return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+		}
+		return nil, nil, fmt.Errorf("forbidden: topology requires either a namespace you can access or cluster-wide access")
+	}
+
 	opts := topology.DefaultBuildOptions()
 	if input.Namespace != "" {
 		opts.Namespaces = []string{input.Namespace}
+	} else if allowed != nil {
+		// Namespace-restricted user with no explicit pick — scope to their allowed set.
+		opts.Namespaces = allowed
 	}
 	if input.View == "traffic" {
 		opts.ViewMode = topology.ViewModeTraffic
@@ -622,6 +744,16 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 		return nil, nil, fmt.Errorf("failed to build topology: %w", err)
 	}
 
+	// Topology pulls cluster-scoped resources (Nodes, Karpenter NodePool /
+	// NodeClaim, GatewayClass, PV, StorageClass, …) regardless of the
+	// namespace scope. Strip the kinds the user can't list so a namespace-
+	// restricted user can't enumerate cluster infrastructure via the
+	// topology tool. Cluster-wide pod access does NOT imply cluster-scoped
+	// reads; per-kind SAR is the gate.
+	if deny := deniedClusterScopedTopoKinds(ctx); len(deny) > 0 {
+		topo.StripNodeKinds(deny)
+	}
+
 	if strings.ToLower(input.Format) == "summary" {
 		return toJSONResult(buildTopologySummary(topo))
 	}
@@ -629,11 +761,60 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 	return toJSONResult(topo)
 }
 
+// clusterScopedTopologyKinds maps topology NodeKinds for cluster-scoped
+// resources to the (group, resource) tuple a SAR needs. Topology pulls
+// these from the SA-populated cache regardless of the caller's namespace
+// scope, so callers without per-kind RBAC must have them stripped.
+//
+// This is a denylist: it must enumerate every cluster-scoped kind the
+// topology builder creates. Drift here = silent leak. See the checklist
+// comment on NodeKind in pkg/topology/types.go and the planned scope-
+// driven follow-up that removes the central table.
+//
+// KindNamespace is intentionally excluded — handled by per-user filter
+// upstream. KindNodeClass has multiple entries (one per cloud provider)
+// because the topology builder iterates EC2NodeClass / AKSNodeClass /
+// GCPNodeClass under the same NodeKind label; a denial on any provider
+// strips all NodeClass nodes. canReadClusterScopedKind's unknown-kind
+// passthrough makes providers absent from the cluster's discovery
+// non-blocking.
+var clusterScopedTopologyKinds = []struct {
+	kind     topology.NodeKind
+	group    string
+	resource string
+}{
+	{topology.KindNode, "", "nodes"},
+	{topology.KindNodePool, "karpenter.sh", "nodepools"},
+	{topology.KindNodeClaim, "karpenter.sh", "nodeclaims"},
+	{topology.KindNodeClass, "karpenter.k8s.aws", "ec2nodeclasses"},
+	{topology.KindNodeClass, "karpenter.azure.com", "aksnodeclasses"},
+	{topology.KindNodeClass, "karpenter.k8s.gcp", "gcpnodeclasses"},
+	{topology.KindGatewayClass, "gateway.networking.k8s.io", "gatewayclasses"},
+	{topology.KindPV, "", "persistentvolumes"},
+	{topology.KindStorageClass, "storage.k8s.io", "storageclasses"},
+	{topology.KindCiliumClusterwideNetworkPolicy, "cilium.io", "ciliumclusterwidenetworkpolicies"},
+	{topology.KindClusterNetworkPolicy, "policy.networking.k8s.io", "clusternetworkpolicies"},
+}
+
+// deniedClusterScopedTopoKinds returns the set of cluster-scoped topology
+// NodeKinds the calling user cannot list. Reuses canReadClusterScopedKind's
+// per-user canI cache so subsequent topology calls within the same TTL
+// don't re-SAR.
+func deniedClusterScopedTopoKinds(ctx context.Context) map[topology.NodeKind]bool {
+	deny := make(map[topology.NodeKind]bool)
+	for _, ck := range clusterScopedTopologyKinds {
+		if !canReadClusterScopedKind(ctx, ck.resource, ck.group, "list") {
+			deny[ck.kind] = true
+		}
+	}
+	return deny
+}
+
 // topologySummary is an LLM-friendly text representation of the topology.
 type topologySummary struct {
-	Namespaces []nsSummary    `json:"namespaces"`
-	Problems   []string       `json:"problems,omitempty"`
-	Stats      topologyStats  `json:"stats"`
+	Namespaces []nsSummary   `json:"namespaces"`
+	Problems   []string      `json:"problems,omitempty"`
+	Stats      topologyStats `json:"stats"`
 }
 
 type nsSummary struct {
@@ -814,11 +995,31 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 		return nil, nil, fmt.Errorf("insufficient permissions to list events")
 	}
 
+	var requested []string
+	if input.Namespace != "" {
+		requested = []string{input.Namespace}
+	}
+	allowed := filterNamespacesForUser(ctx, requested)
+	if allowed != nil && len(allowed) == 0 {
+		return toJSONResult([]any{})
+	}
+
 	var events []*corev1.Event
 	var err error
-	if input.Namespace != "" {
+	switch {
+	case input.Namespace != "":
 		events, err = eventLister.Events(input.Namespace).List(labels.Everything())
-	} else {
+	case allowed != nil:
+		// Namespace-restricted user, no explicit pick: aggregate across allowed.
+		for _, ns := range allowed {
+			items, listErr := eventLister.Events(ns).List(labels.Everything())
+			if listErr != nil {
+				err = listErr
+				break
+			}
+			events = append(events, items...)
+		}
+	default:
 		events, err = eventLister.List(labels.Everything())
 	}
 	if err != nil {
@@ -860,6 +1061,10 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 }
 
 func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLogsInput) (*mcp.CallToolResult, any, error) {
+	if !checkNamespaceAccess(ctx, input.Namespace) {
+		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+	}
+
 	clientset := k8s.ClientFromContext(ctx)
 	if clientset == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
@@ -906,6 +1111,23 @@ func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input s
 	namespaces, err := lister.List(labels.Everything())
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list namespaces: %w", err)
+	}
+
+	// Filter to the user's allowed namespaces. nil = no filter (auth off /
+	// cluster-admin). Empty = no access (return []).
+	allowed := filterNamespacesForUser(ctx, nil)
+	if allowed != nil {
+		set := make(map[string]bool, len(allowed))
+		for _, ns := range allowed {
+			set[ns] = true
+		}
+		filtered := namespaces[:0]
+		for _, ns := range namespaces {
+			if set[ns.Name] {
+				filtered = append(filtered, ns)
+			}
+		}
+		namespaces = filtered
 	}
 
 	result := make([]map[string]any, 0, len(namespaces))
@@ -1014,7 +1236,7 @@ type mcpHelmRelease struct {
 	ResourceHealth string `json:"resourceHealth,omitempty"`
 }
 
-func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string) mcpDashboard {
+func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
 	d := mcpDashboard{
 		ResourceCounts: make(map[string]int),
 	}
@@ -1065,6 +1287,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		if len(d.Problems) >= 10 {
 			break
 		}
+		if p.Kind == "Node" && !includeNodes {
+			continue
+		}
 		d.Problems = append(d.Problems, mcpProblem{
 			Kind:      p.Kind,
 			Namespace: p.Namespace,
@@ -1103,35 +1328,37 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	}
 
 	// Node health summary (cluster-scoped, not filtered by namespace)
-	if nodeLister := cache.Nodes(); nodeLister != nil {
-		nodes, _ := nodeLister.List(labels.Everything())
-		d.ResourceCounts["nodes"] = len(nodes)
-		d.Nodes.Total = len(nodes)
+	if includeNodes {
+		if nodeLister := cache.Nodes(); nodeLister != nil {
+			nodes, _ := nodeLister.List(labels.Everything())
+			d.ResourceCounts["nodes"] = len(nodes)
+			d.Nodes.Total = len(nodes)
 
-		for _, node := range nodes {
-			h := k8s.ClassifyNodeHealth(node)
-			if h.Ready {
-				if h.Unschedulable {
-					d.Nodes.Cordoned++
+			for _, node := range nodes {
+				h := k8s.ClassifyNodeHealth(node)
+				if h.Ready {
+					if h.Unschedulable {
+						d.Nodes.Cordoned++
+					} else {
+						d.Nodes.Ready++
+					}
 				} else {
-					d.Nodes.Ready++
+					d.Nodes.NotReady++
 				}
-			} else {
-				d.Nodes.NotReady++
 			}
-		}
 
-		// Version skew
-		if skew := k8s.DetectVersionSkew(nodes); skew != nil {
-			for v := range skew.Versions {
-				d.VersionSkew = append(d.VersionSkew, v)
+			// Version skew
+			if skew := k8s.DetectVersionSkew(nodes); skew != nil {
+				for v := range skew.Versions {
+					d.VersionSkew = append(d.VersionSkew, v)
+				}
+				sort.Strings(d.VersionSkew)
 			}
-			sort.Strings(d.VersionSkew)
 		}
 	}
 
 	// Simple resource counts for other types
-	countResources(cache, namespace, &d)
+	countResources(cache, namespace, &d, includeNamespaces)
 
 	// Warning events — deduplicate first, then sort by count
 	if eventLister := cache.Events(); eventLister != nil {
@@ -1211,62 +1438,64 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// Metrics (best-effort — silently skip if metrics-server unavailable).
 	// Metrics-server forwards the impersonation headers, so a user without
 	// metrics.k8s.io/nodes access gets a 403 here and the field is left empty.
-	if client := k8s.ClientFromContext(ctx); client != nil {
-		data, err := client.CoreV1().RESTClient().Get().
-			AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
-			DoRaw(ctx)
-		if err == nil {
-			var nodeMetricsList struct {
-				Items []struct {
-					Usage struct {
-						CPU    string `json:"cpu"`
-						Memory string `json:"memory"`
-					} `json:"usage"`
-				} `json:"items"`
-			}
-			if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
-				log.Printf("[mcp] Failed to parse node metrics: %v", err)
-			} else if len(nodeMetricsList.Items) > 0 {
-				if nodeLister := cache.Nodes(); nodeLister != nil {
-					allNodes, _ := nodeLister.List(labels.Everything())
-					var cpuCapMillis, memCapBytes int64
-					for _, n := range allNodes {
-						cpuCapMillis += n.Status.Capacity.Cpu().MilliValue()
-						memCapBytes += n.Status.Capacity.Memory().Value()
-					}
+	if includeNodes {
+		if client := k8s.ClientFromContext(ctx); client != nil {
+			data, err := client.CoreV1().RESTClient().Get().
+				AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
+				DoRaw(ctx)
+			if err == nil {
+				var nodeMetricsList struct {
+					Items []struct {
+						Usage struct {
+							CPU    string `json:"cpu"`
+							Memory string `json:"memory"`
+						} `json:"usage"`
+					} `json:"items"`
+				}
+				if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
+					log.Printf("[mcp] Failed to parse node metrics: %v", err)
+				} else if len(nodeMetricsList.Items) > 0 {
+					if nodeLister := cache.Nodes(); nodeLister != nil {
+						allNodes, _ := nodeLister.List(labels.Everything())
+						var cpuCapMillis, memCapBytes int64
+						for _, n := range allNodes {
+							cpuCapMillis += n.Status.Capacity.Cpu().MilliValue()
+							memCapBytes += n.Status.Capacity.Memory().Value()
+						}
 
-					var cpuUsageMillis, memUsageBytes int64
-					for _, item := range nodeMetricsList.Items {
-						cpuUsageMillis += k8s.ParseCPUToMillis(item.Usage.CPU)
-						memUsageBytes += k8s.ParseMemoryToBytes(item.Usage.Memory)
-					}
+						var cpuUsageMillis, memUsageBytes int64
+						for _, item := range nodeMetricsList.Items {
+							cpuUsageMillis += k8s.ParseCPUToMillis(item.Usage.CPU)
+							memUsageBytes += k8s.ParseMemoryToBytes(item.Usage.Memory)
+						}
 
-					var cpuReqMillis, memReqBytes int64
-					if podLister := cache.Pods(); podLister != nil {
-						allPods, _ := podLister.List(labels.Everything())
-						for _, pod := range allPods {
-							if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-								continue
-							}
-							for _, c := range pod.Spec.Containers {
-								if c.Resources.Requests != nil {
-									if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
-										cpuReqMillis += cpu.MilliValue()
-									}
-									if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
-										memReqBytes += mem.Value()
+						var cpuReqMillis, memReqBytes int64
+						if podLister := cache.Pods(); podLister != nil {
+							allPods, _ := podLister.List(labels.Everything())
+							for _, pod := range allPods {
+								if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+									continue
+								}
+								for _, c := range pod.Spec.Containers {
+									if c.Resources.Requests != nil {
+										if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+											cpuReqMillis += cpu.MilliValue()
+										}
+										if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+											memReqBytes += mem.Value()
+										}
 									}
 								}
 							}
 						}
-					}
 
-					if cpuCapMillis > 0 && memCapBytes > 0 {
-						d.Metrics = &mcpMetrics{
-							CPUUsagePercent:   int(cpuUsageMillis * 100 / cpuCapMillis),
-							CPURequestPercent: int(cpuReqMillis * 100 / cpuCapMillis),
-							MemUsagePercent:   int(memUsageBytes * 100 / memCapBytes),
-							MemRequestPercent: int(memReqBytes * 100 / memCapBytes),
+						if cpuCapMillis > 0 && memCapBytes > 0 {
+							d.Metrics = &mcpMetrics{
+								CPUUsagePercent:   int(cpuUsageMillis * 100 / cpuCapMillis),
+								CPURequestPercent: int(cpuReqMillis * 100 / cpuCapMillis),
+								MemUsagePercent:   int(memUsageBytes * 100 / memCapBytes),
+								MemRequestPercent: int(memReqBytes * 100 / memCapBytes),
+							}
 						}
 					}
 				}
@@ -1275,16 +1504,18 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	}
 
 	// Topology summary
-	opts := topology.DefaultBuildOptions()
-	if namespace != "" {
-		opts.Namespaces = []string{namespace}
-	}
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-	if topo, err := builder.Build(opts); err == nil {
-		d.TopologyNodes = len(topo.Nodes)
-		d.TopologyEdges = len(topo.Edges)
-	} else {
-		log.Printf("[mcp] Failed to build topology for dashboard: %v", err)
+	if includeNodes || namespace != "" {
+		opts := topology.DefaultBuildOptions()
+		if namespace != "" {
+			opts.Namespaces = []string{namespace}
+		}
+		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+		if topo, err := builder.Build(opts); err == nil {
+			d.TopologyNodes = len(topo.Nodes)
+			d.TopologyEdges = len(topo.Edges)
+		} else {
+			log.Printf("[mcp] Failed to build topology for dashboard: %v", err)
+		}
 	}
 
 	// Correlate recent changes with problems — only show changes for broken resources
@@ -1340,7 +1571,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	return d
 }
 
-func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard) {
+func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard, includeNamespaces bool) {
 	if svcLister := cache.Services(); svcLister != nil {
 		if namespace != "" {
 			items, _ := svcLister.Services(namespace).List(labels.Everything())
@@ -1395,9 +1626,11 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard)
 			d.ResourceCounts["cronjobs"] = len(items)
 		}
 	}
-	if nsLister := cache.Namespaces(); nsLister != nil {
-		items, _ := nsLister.List(labels.Everything())
-		d.ResourceCounts["namespaces"] = len(items)
+	if includeNamespaces {
+		if nsLister := cache.Namespaces(); nsLister != nil {
+			items, _ := nsLister.List(labels.Everything())
+			d.ResourceCounts["namespaces"] = len(items)
+		}
 	}
 }
 

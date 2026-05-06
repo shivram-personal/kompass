@@ -23,7 +23,7 @@ import (
 type WorkloadRevision struct {
 	Number    int64     `json:"number"`
 	CreatedAt time.Time `json:"createdAt"`
-	Image     string    `json:"image"`    // primary container image
+	Image     string    `json:"image"` // primary container image
 	IsCurrent bool      `json:"isCurrent"`
 	Replicas  int64     `json:"replicas"`
 	Template  string    `json:"template,omitempty"` // Pod template spec as YAML (for revision diff)

@@ -1,15 +1,22 @@
 package k8score
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 )
@@ -882,4 +889,269 @@ func TestDropManagedFields_Event(t *testing.T) {
 	if len(e.ManagedFields) != 0 {
 		t.Error("expected managedFields to be stripped from event")
 	}
+}
+
+// TestNewResourceCache_ResourceScopesMixed verifies a mixed-scope user
+// (some kinds cluster-wide, some kinds namespace-scoped) ends up with
+// informers wired into the right factories. The fake client lets every
+// list succeed; the assertion is structural — that listers exist for
+// every enabled kind and the per-namespace factory is created.
+func TestNewResourceCache_ResourceScopesMixed(t *testing.T) {
+	const ns = "dev-ns-1"
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: ns, UID: "u"},
+	}
+	client := fake.NewSimpleClientset(pod)
+
+	rc, err := NewResourceCache(CacheConfig{
+		Client: client,
+		ResourceScopes: map[string]ResourceScope{
+			Pods:        {Enabled: true, Namespace: ns}, // namespace-scoped
+			Deployments: {Enabled: true, Namespace: ns}, // namespace-scoped
+			Nodes:       {Enabled: true, Namespace: ""}, // cluster-wide (cluster-scoped kind)
+			Services:    {Enabled: false},               // denied — no informer
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache failed: %v", err)
+	}
+	defer rc.Stop()
+
+	if rc.Pods() == nil {
+		t.Error("Pods lister should exist for an enabled kind")
+	}
+	if rc.Deployments() == nil {
+		t.Error("Deployments lister should exist for an enabled kind")
+	}
+	if rc.Nodes() == nil {
+		t.Error("Nodes lister should exist for an enabled kind")
+	}
+	if rc.Services() != nil {
+		t.Error("Services lister should be nil — kind was disabled")
+	}
+
+	enabled := rc.GetEnabledResources()
+	if !enabled[Pods] || !enabled[Deployments] || !enabled[Nodes] {
+		t.Errorf("enabled map missing kinds: %+v", enabled)
+	}
+	if enabled[Services] {
+		t.Errorf("disabled Services should not appear in enabled map")
+	}
+
+	// Internal: a namespace-scoped factory should have been created for
+	// the namespace used by Pods/Deployments.
+	if _, ok := rc.nsFactories[ns]; !ok {
+		t.Errorf("expected nsFactories to contain %q, got keys %v", ns, mapKeys(rc.nsFactories))
+	}
+}
+
+// TestNewResourceCache_ResourceScopesEmpty verifies that an explicitly
+// empty ResourceScopes map (no kinds enabled) produces a cache with no
+// informers, vs nil ResourceScopes which falls through to the legacy
+// ResourceTypes path.
+func TestNewResourceCache_ResourceScopesEmpty(t *testing.T) {
+	client := fake.NewSimpleClientset()
+
+	rc, err := NewResourceCache(CacheConfig{
+		Client:         client,
+		ResourceScopes: map[string]ResourceScope{}, // explicitly empty
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache failed: %v", err)
+	}
+	defer rc.Stop()
+
+	if rc.Pods() != nil {
+		t.Error("expected no Pods lister when ResourceScopes is empty")
+	}
+}
+
+func TestNewResourceCache_RbacResources(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: "reader", Namespace: "dev"}},
+		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: "cluster-reader"}},
+		&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "reader-bind", Namespace: "dev"}},
+		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: "cluster-reader-bind"}},
+	)
+
+	rc, err := NewResourceCache(CacheConfig{
+		Client: client,
+		ResourceScopes: map[string]ResourceScope{
+			Roles:               {Enabled: true, Namespace: "dev"},
+			ClusterRoles:        {Enabled: true},
+			RoleBindings:        {Enabled: true, Namespace: "dev"},
+			ClusterRoleBindings: {Enabled: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache failed: %v", err)
+	}
+	defer rc.Stop()
+
+	if rc.Roles() == nil || rc.ClusterRoles() == nil || rc.RoleBindings() == nil || rc.ClusterRoleBindings() == nil {
+		t.Fatalf("expected all RBAC listers to be non-nil")
+	}
+
+	counts := rc.GetKindObjectCounts()
+	for _, kind := range []string{"Role", "ClusterRole", "RoleBinding", "ClusterRoleBinding"} {
+		if counts[kind] == 0 {
+			t.Fatalf("expected %s to be counted, got counts=%v", kind, counts)
+		}
+	}
+
+	enabled := rc.GetEnabledResources()
+	for _, key := range []string{Roles, ClusterRoles, RoleBindings, ClusterRoleBindings} {
+		if !enabled[key] {
+			t.Fatalf("expected %s to be enabled, got %v", key, enabled)
+		}
+	}
+}
+
+func mapKeys[K comparable, V any](m map[K]V) []K {
+	keys := make([]K, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// TestRecordWatchError verifies that the WatchErrorHandler hook updates the
+// per-informer status when a 403 surfaces from the reflector. Validates the
+// observable behavior of the safety net rather than relying on simulating a
+// full reflector watch failure (which is racy with the fake client).
+func TestRecordWatchError(t *testing.T) {
+	rc := &ResourceCache{
+		stdlog: log.New(io.Discard, "", 0),
+		informerStatuses: []InformerSyncStatus{
+			{Kind: "Pod", Key: Pods},
+			{Kind: "Service", Key: Services},
+		},
+	}
+
+	rc.recordWatchError(0, Pods, "Pod", apierrors.NewForbidden(
+		schema.GroupResource{Resource: "pods"}, "", nil,
+	))
+
+	rc.informerMu.RLock()
+	defer rc.informerMu.RUnlock()
+	pod := rc.informerStatuses[0]
+	if !pod.ForbiddenSeen {
+		t.Errorf("ForbiddenSeen should be true after a 403")
+	}
+	if pod.LastError == "" {
+		t.Errorf("LastError should be set")
+	}
+	if pod.LastErrorAt == "" {
+		t.Errorf("LastErrorAt should be set")
+	}
+	// Untouched informer should remain pristine.
+	svc := rc.informerStatuses[1]
+	if svc.ForbiddenSeen || svc.LastError != "" {
+		t.Errorf("Service status should not be affected by Pod's 403, got %+v", svc)
+	}
+}
+
+func TestRecordWatchError_TransientNotForbidden(t *testing.T) {
+	rc := &ResourceCache{
+		stdlog: log.New(io.Discard, "", 0),
+		informerStatuses: []InformerSyncStatus{
+			{Kind: "Pod", Key: Pods},
+		},
+	}
+
+	rc.recordWatchError(0, Pods, "Pod", errors.New("dial tcp: connection refused"))
+
+	rc.informerMu.RLock()
+	defer rc.informerMu.RUnlock()
+	if rc.informerStatuses[0].ForbiddenSeen {
+		t.Errorf("ForbiddenSeen should NOT be set for a transient connection error")
+	}
+	if rc.informerStatuses[0].LastError == "" {
+		t.Errorf("LastError should still be recorded for transient errors")
+	}
+}
+
+func TestDynamicResourceCache_NamespaceFallbackIsPerGVR(t *testing.T) {
+	const ns = "dev-ns-1"
+	clusterGVR := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "clusterthings"}
+	namespacedGVR := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "namespacedthings"}
+	dyn := fakeDynamicForListAccess(t, map[schema.GroupVersionResource]string{
+		clusterGVR:    "ClusterThingList",
+		namespacedGVR: "NamespacedThingList",
+	}, func(gvr schema.GroupVersionResource, namespace string) bool {
+		if gvr == namespacedGVR {
+			return namespace == ns
+		}
+		return namespace == ""
+	})
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{
+		DynamicClient:     dyn,
+		NamespaceFallback: ns,
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+
+	if err := d.probeAccess(clusterGVR); err != nil {
+		t.Fatalf("cluster GVR probe failed: %v", err)
+	}
+	if err := d.probeAccess(namespacedGVR); err != nil {
+		t.Fatalf("namespaced GVR probe failed: %v", err)
+	}
+
+	if got := d.informerScopes[clusterGVR]; got != "" {
+		t.Errorf("cluster GVR scope = %q, want cluster-wide", got)
+	}
+	if got := d.informerScopes[namespacedGVR]; got != ns {
+		t.Errorf("namespaced GVR scope = %q, want %q", got, ns)
+	}
+}
+
+func TestDynamicResourceCache_ForcedNamespaceScopesEveryGVR(t *testing.T) {
+	const ns = "dev-ns-1"
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	dyn := fakeDynamicForListAccess(t, map[schema.GroupVersionResource]string{
+		gvr: "WidgetList",
+	}, func(_ schema.GroupVersionResource, namespace string) bool {
+		return namespace == ns
+	})
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{
+		DynamicClient:   dyn,
+		NamespaceScoped: true,
+		Namespace:       ns,
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+
+	if err := d.probeAccess(gvr); err != nil {
+		t.Fatalf("forced namespace probe failed: %v", err)
+	}
+	if got := d.informerScopes[gvr]; got != ns {
+		t.Errorf("GVR scope = %q, want %q", got, ns)
+	}
+}
+
+func fakeDynamicForListAccess(
+	t *testing.T,
+	listKinds map[schema.GroupVersionResource]string,
+	allow func(schema.GroupVersionResource, string) bool,
+) *dynamicfake.FakeDynamicClient {
+	t.Helper()
+
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds)
+	dyn.PrependReactor("list", "*", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		listAction, ok := action.(k8stesting.ListAction)
+		if !ok {
+			return false, nil, nil
+		}
+		gvr := listAction.GetResource()
+		if allow(gvr, listAction.GetNamespace()) {
+			return false, nil, nil
+		}
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Group: gvr.Group, Resource: gvr.Resource}, "", nil)
+	})
+	return dyn
 }

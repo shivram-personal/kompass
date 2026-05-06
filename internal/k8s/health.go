@@ -167,7 +167,7 @@ func DetectNodeProblems(nodes []*corev1.Node) []NodeProblem {
 
 // VersionSkew describes a detected minor version skew across cluster nodes.
 type VersionSkew struct {
-	Versions   map[string][]string `json:"versions"`   // minor version -> node names
+	Versions   map[string][]string `json:"versions"` // minor version -> node names
 	MinVersion string              `json:"minVersion"`
 	MaxVersion string              `json:"maxVersion"`
 }

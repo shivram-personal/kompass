@@ -140,11 +140,11 @@ func TestClassifyPodHealth(t *testing.T) {
 
 func TestClassifyNodeHealth(t *testing.T) {
 	tests := []struct {
-		name            string
-		node            *corev1.Node
-		wantReady       bool
+		name              string
+		node              *corev1.Node
+		wantReady         bool
 		wantUnschedulable bool
-		wantPressures   int
+		wantPressures     int
 	}{
 		{
 			name: "ready node",
@@ -156,9 +156,9 @@ func TestClassifyNodeHealth(t *testing.T) {
 					NodeInfo: corev1.NodeSystemInfo{KubeletVersion: "v1.28.3"},
 				},
 			},
-			wantReady:       true,
+			wantReady:         true,
 			wantUnschedulable: false,
-			wantPressures:   0,
+			wantPressures:     0,
 		},
 		{
 			name: "not ready node",
@@ -169,9 +169,9 @@ func TestClassifyNodeHealth(t *testing.T) {
 					},
 				},
 			},
-			wantReady:       false,
+			wantReady:         false,
 			wantUnschedulable: false,
-			wantPressures:   0,
+			wantPressures:     0,
 		},
 		{
 			name: "cordoned and ready",
@@ -183,9 +183,9 @@ func TestClassifyNodeHealth(t *testing.T) {
 					},
 				},
 			},
-			wantReady:       true,
+			wantReady:         true,
 			wantUnschedulable: true,
-			wantPressures:   0,
+			wantPressures:     0,
 		},
 		{
 			name: "cordoned and not ready",
@@ -197,9 +197,9 @@ func TestClassifyNodeHealth(t *testing.T) {
 					},
 				},
 			},
-			wantReady:       false,
+			wantReady:         false,
 			wantUnschedulable: true,
-			wantPressures:   0,
+			wantPressures:     0,
 		},
 		{
 			name: "memory pressure",
@@ -211,9 +211,9 @@ func TestClassifyNodeHealth(t *testing.T) {
 					},
 				},
 			},
-			wantReady:       true,
+			wantReady:         true,
 			wantUnschedulable: false,
-			wantPressures:   1,
+			wantPressures:     1,
 		},
 	}
 
@@ -354,11 +354,11 @@ func TestDetectNodeProblems(t *testing.T) {
 
 func TestDetectVersionSkew(t *testing.T) {
 	tests := []struct {
-		name     string
-		nodes    []*corev1.Node
-		wantNil  bool
-		wantMin  string
-		wantMax  string
+		name    string
+		nodes   []*corev1.Node
+		wantNil bool
+		wantMin string
+		wantMax string
 	}{
 		{
 			name:    "empty nodes",
@@ -453,9 +453,9 @@ func TestTruncate(t *testing.T) {
 
 func TestDetectHPAProblems(t *testing.T) {
 	tests := []struct {
-		name      string
-		hpas      []*autoscalingv2.HorizontalPodAutoscaler
-		wantCount int
+		name        string
+		hpas        []*autoscalingv2.HorizontalPodAutoscaler
+		wantCount   int
 		wantProblem string
 	}{
 		{

@@ -15,6 +15,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -39,9 +40,9 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
-	topology "github.com/skyhook-io/radar/pkg/topology"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
+	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
 // Server is the Explorer HTTP server
@@ -61,6 +62,15 @@ type Server struct {
 	permCache       *auth.PermissionCache
 	oidcHandler     *auth.OIDCHandler
 	saveFileFunc    func(defaultFilename string, data []byte) (string, error)
+
+	// nsPreferences holds each user's active-namespace pick from the in-app
+	// switcher. Key shape: "<username>\x00<contextName>" when auth is enabled,
+	// "\x00<contextName>" when auth is disabled. Cleared on context switch
+	// (new cluster ⇒ old picks meaningless). The pick is a per-user view
+	// filter — intersected with the user's RBAC-allowed namespaces at read
+	// time. Picking does NOT narrow the shared informer cache (would corrupt
+	// other users' views).
+	nsPreferences sync.Map
 }
 
 // Config holds server configuration
@@ -91,9 +101,23 @@ func New(cfg Config) *Server {
 		authConfig:      cfg.AuthConfig,
 	}
 
+	// Register a single context-switch callback so every PerformContextSwitch
+	// path (REST switch, CAPI connect, periodic re-auth, …) gets per-user
+	// state cleared automatically. Fires inside step 5 of the swap, strictly
+	// before PerformContextSwitch returns. Mirrors the MCP package's pattern
+	// for mcpPermCache.
+	k8s.OnContextSwitch(func(_ string) {
+		s.finalizePostContextSwitch()
+	})
+
 	// Initialize auth components when auth is enabled
 	if s.authConfig.Enabled() {
-		s.permCache = auth.NewPermissionCache()
+		// Stamp cache entries with the current K8s context so an in-flight
+		// request mid-context-switch can't use the previous cluster's
+		// AllowedNamespaces / canI results to authorize the new cluster's
+		// reads. Without the stamp, the window between PerformContextSwitch
+		// step 2 (client swap) and the post-switch invalidation is exploitable.
+		s.permCache = auth.NewPermissionCache().WithContextName(k8s.GetContextName)
 
 		if s.authConfig.Mode == "oidc" {
 			// Validate required OIDC fields before attempting provider discovery
@@ -348,6 +372,11 @@ func (s *Server) setupRoutes() {
 			// Context routes
 			r.Get("/contexts", s.handleListContexts)
 			r.Post("/contexts/{name}", s.handleSwitchContext)
+
+			// Active namespace switcher (k9s :ns equivalent for the
+			// namespace-scoped path; informational filter for cluster-wide users)
+			r.Get("/cluster/namespace-scope", s.handleGetNamespaceScope)
+			r.Post("/cluster/namespace", s.handleSetActiveNamespace)
 
 			// CAPI routes
 			r.Get("/capi/clusters/{ns}/{name}/kubeconfig", s.handleCAPIClusterKubeconfig)
@@ -626,6 +655,10 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 			Jobs:                     enabled["jobs"],
 			CronJobs:                 enabled["cronjobs"],
 			HorizontalPodAutoscalers: enabled["horizontalpodautoscalers"],
+			Roles:                    enabled["roles"],
+			ClusterRoles:             enabled["clusterroles"],
+			RoleBindings:             enabled["rolebindings"],
+			ClusterRoleBindings:      enabled["clusterrolebindings"],
 		}
 	}
 
@@ -636,9 +669,32 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 // Returns nil for "all namespaces" (no filter), a populated slice for specific namespaces,
 // or an empty non-nil slice when the user has no namespace access.
 // Use noNamespaceAccess() to check the no-access case.
+//
+// If the request omits an explicit namespace filter, falls back to the user's
+// in-app namespace pick (from the namespace switcher). The pick is treated as
+// a view filter — it's still intersected with the user's RBAC-allowed
+// namespaces in getUserNamespaces.
 func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	namespaces := parseNamespaces(r.URL.Query())
-	return s.getUserNamespaces(r, namespaces)
+	pickFallback := false
+	if namespaces == nil {
+		// No explicit filter — use the user's saved pick if any.
+		s.loadSavedNamespacePreference(r)
+		if pick := s.getActiveNamespaceForUser(r); pick != "" {
+			namespaces = []string{pick}
+			pickFallback = true
+		}
+	}
+	filtered := s.getUserNamespaces(r, namespaces)
+	// If the pick lost RBAC mid-session, the filter shrinks it to empty and
+	// every read returns []. Drop the stale pick and recompute as if no
+	// filter were set, so the user sees their full RBAC ceiling instead of
+	// a silently-empty UI. Symmetric with handleGetNamespaceScope's eviction.
+	if pickFallback && noNamespaceAccess(filtered) {
+		s.setActiveNamespaceForUser(r, "")
+		filtered = s.getUserNamespaces(r, nil)
+	}
+	return filtered
 }
 
 // noNamespaceAccess returns true when a namespace filter explicitly grants no access
@@ -646,6 +702,118 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 // should check this and return empty results.
 func noNamespaceAccess(namespaces []string) bool {
 	return namespaces != nil && len(namespaces) == 0
+}
+
+// canRead authorizes a single (verb, group, resource, namespace) tuple for
+// the calling user via SubjectAccessReview. Used to gate cluster-scoped
+// reads — namespace-list discovery is too narrow a signal to authorize
+// arbitrary cluster-scoped kinds (a user can have cluster-wide pod
+// visibility without `list nodes`, `list secrets`, etc.).
+//
+// Returns true when:
+//
+//   - auth is disabled (no user on context — local kubeconfig case), OR
+//   - the apiserver's SAR for this exact tuple says yes
+//
+// Results are cached on UserPermissions and live only as long as the
+// surrounding namespace-discovery cache entry (2-min TTL by default), so
+// RBAC changes propagate within the TTL window.
+//
+// Pass namespace="" for a cluster-scoped check.
+func (s *Server) canRead(r *http.Request, group, resource, namespace, verb string) bool {
+	user := auth.UserFromContext(r.Context())
+	if user == nil || s.permCache == nil {
+		return true
+	}
+	perms := s.permCache.Get(user.Username)
+	if perms == nil {
+		// Trigger namespace discovery so SAR cache has a parent UserPermissions
+		// entry. parseNamespacesForUser is the canonical path that populates
+		// this; if it hasn't run yet, fall through to a fresh SAR every time.
+		_ = s.getUserNamespaces(r, []string{})
+		perms = s.permCache.Get(user.Username)
+	}
+	if perms != nil {
+		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
+			return v
+		}
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		// Fail-closed: no apiserver to ask, refuse rather than quietly
+		// serving from the cache.
+		log.Printf("[auth] canRead: K8s client unavailable, denying %s on %s/%s for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(user.Username))
+		return false
+	}
+	allowed, err := auth.SubjectCanI(r.Context(), client, user.Username, user.Groups, namespace, group, resource, verb)
+	if err != nil {
+		// Fail-closed on SAR error — apiserver said something we don't trust.
+		log.Printf("[auth] canRead SAR failed for %s on %s/%s in ns=%q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
+		return false
+	}
+	if perms != nil {
+		perms.SetCanI(verb, group, resource, namespace, allowed)
+	}
+	return allowed
+}
+
+// clusterScopedTopologyKinds maps topology NodeKinds for cluster-scoped
+// resources to the (group, resource) tuple a SAR needs. Mirrors the MCP
+// table — kept in sync manually since each side gates with its own helper.
+//
+// This is a denylist: it must enumerate every cluster-scoped kind the
+// topology builder creates. Drift here = silent leak. The follow-up plan
+// (per-node GVR/scope metadata + scope-driven strip) removes the central
+// table; until then, the checklist comment on NodeKind in
+// pkg/topology/types.go is the maintenance signal for new kinds.
+//
+// KindNamespace is intentionally excluded — handled by per-user filter
+// upstream. KindNodeClass has multiple entries (one per cloud provider)
+// because the topology builder iterates EC2NodeClass / AKSNodeClass /
+// GCPNodeClass under the same NodeKind label; a denial on any provider
+// strips all NodeClass nodes. canRead's unknown-kind passthrough makes
+// providers absent from the cluster's discovery non-blocking.
+var clusterScopedTopologyKinds = []struct {
+	kind     topology.NodeKind
+	group    string
+	resource string
+}{
+	{topology.KindNode, "", "nodes"},
+	{topology.KindNodePool, "karpenter.sh", "nodepools"},
+	{topology.KindNodeClaim, "karpenter.sh", "nodeclaims"},
+	{topology.KindNodeClass, "karpenter.k8s.aws", "ec2nodeclasses"},
+	{topology.KindNodeClass, "karpenter.azure.com", "aksnodeclasses"},
+	{topology.KindNodeClass, "karpenter.k8s.gcp", "gcpnodeclasses"},
+	{topology.KindGatewayClass, "gateway.networking.k8s.io", "gatewayclasses"},
+	{topology.KindPV, "", "persistentvolumes"},
+	{topology.KindStorageClass, "storage.k8s.io", "storageclasses"},
+	{topology.KindCiliumClusterwideNetworkPolicy, "cilium.io", "ciliumclusterwidenetworkpolicies"},
+	{topology.KindClusterNetworkPolicy, "policy.networking.k8s.io", "clusternetworkpolicies"},
+}
+
+// deniedClusterScopedTopoKinds returns the set of cluster-scoped topology
+// NodeKinds the calling user cannot list. Reuses canRead's per-user canI
+// cache so subsequent topology calls within the TTL don't re-SAR.
+//
+// Skips CRDs not present in discovery (e.g. AKSNodeClass on an EKS cluster):
+// SARing a non-existent resource returns false because no RBAC rule covers
+// it, which would over-strip KindNodeClass for a user who has list-RBAC on
+// the provider that IS installed. Mirrors MCP canReadClusterScopedKind's
+// unknown-kind passthrough.
+func (s *Server) deniedClusterScopedTopoKinds(r *http.Request) map[topology.NodeKind]bool {
+	deny := make(map[topology.NodeKind]bool)
+	disc := k8s.GetResourceDiscovery()
+	for _, ck := range clusterScopedTopologyKinds {
+		if ck.group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.resource, ck.group); !ok {
+				continue
+			}
+		}
+		if !s.canRead(r, ck.group, ck.resource, "", "list") {
+			deny[ck.kind] = true
+		}
+	}
+	return deny
 }
 
 // parseNamespaces parses the namespace filter from query parameters.
@@ -706,6 +874,15 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Strip cluster-scoped resources (Nodes, Karpenter NodePool / NodeClaim,
+	// GatewayClass, PV, StorageClass, …) the user can't list. Topology pulls
+	// them from the SA-populated cache regardless of namespace scope, so
+	// without this strip a namespace-restricted user with cluster-wide pod
+	// access would enumerate cluster infrastructure they have no RBAC for.
+	if deny := s.deniedClusterScopedTopoKinds(r); len(deny) > 0 {
+		topo.StripNodeKinds(deny)
+	}
+
 	s.writeJSON(w, topo)
 }
 
@@ -719,9 +896,42 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Authoritative per-user filter from the discovery return value. Reading
+	// permCache.Get back after a transient discovery failure conflates
+	// "cluster-admin sentinel" with "cache miss" and would silently leak the
+	// full namespace list to a restricted user during apiserver flakes.
+	allowedNames := s.parseNamespacesForUser(r)
+	if allowedNames != nil && len(allowedNames) == 0 {
+		s.writeJSON(w, []map[string]any{})
+		return
+	}
+	var allowedSet map[string]bool
+	if allowedNames != nil {
+		allowedSet = make(map[string]bool, len(allowedNames))
+		for _, ns := range allowedNames {
+			allowedSet[ns] = true
+		}
+	}
+
 	lister := cache.Namespaces()
 	if lister == nil {
-		s.writeError(w, http.StatusForbidden, "insufficient permissions to list namespaces")
+		// Cluster-wide Namespaces informer isn't available — fall back to
+		// GetAccessibleNamespaces (SA-listed). Apply the same per-user
+		// filter so restricted users don't see SA-visible names they
+		// have no access to.
+		accessible, _ := k8s.GetAccessibleNamespaces(r.Context())
+		result := make([]map[string]any, 0, len(accessible))
+		for _, name := range accessible {
+			if allowedSet != nil && !allowedSet[name] {
+				continue
+			}
+			result = append(result, map[string]any{"name": name, "status": "Active"})
+		}
+		if len(result) == 0 {
+			s.writeError(w, http.StatusForbidden, "insufficient permissions to list namespaces")
+			return
+		}
+		s.writeJSON(w, result)
 		return
 	}
 
@@ -729,20 +939,6 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
-	}
-
-	// Trigger namespace discovery for user (populates perm cache)
-	_ = s.parseNamespacesForUser(r)
-
-	// Filter namespace list using the resolved permissions
-	var allowedSet map[string]bool
-	if user := auth.UserFromContext(r.Context()); user != nil && s.permCache != nil {
-		if perms := s.permCache.Get(user.Username); perms != nil && perms.AllowedNamespaces != nil {
-			allowedSet = make(map[string]bool, len(perms.AllowedNamespaces))
-			for _, ns := range perms.AllowedNamespaces {
-				allowedSet[ns] = true
-			}
-		}
 	}
 
 	result := make([]map[string]any, 0, len(namespaces))
@@ -780,12 +976,48 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
+	group := r.URL.Query().Get("group") // API group for CRD disambiguation
+
+	// parseNamespacesForUser primes the per-user perm cache (triggers
+	// DiscoverNamespaces if needed). canRead below relies on it.
 	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+
+	// "namespaces" is cluster-scoped at the K8s API. Full Namespace objects
+	// (labels, annotations, spec) require explicit list-namespaces SAR.
+	// AllowedNamespaces is NOT a sufficient fallback: list-pods-in-alpha
+	// SAR-confirms namespace existence and pod read access, not get-namespace-
+	// alpha (which would require ClusterRole on namespaces). The namespace
+	// picker uses /api/namespaces, which serves a synthesized {name, status}
+	// view filtered by AllowedNamespaces — restricted users keep their picker
+	// without leaking Namespace metadata via this resource-browser path.
+	isNamespacesKind := kind == "namespaces" || kind == "namespace"
+	if isNamespacesKind {
+		if !s.canRead(r, "", "namespaces", "", "list") {
+			s.writeJSON(w, []any{})
+			return
+		}
+		namespaces = nil // full lister output for SAR-authorized users
+	}
+
+	// Cluster-only kinds (Nodes, PVs, StorageClasses, ClusterRoles, cluster-
+	// scoped CRDs) have no namespace dimension — gate via SAR. Run BEFORE the
+	// noNamespaceAccess check so a user with explicit cluster-scoped RBAC but
+	// no namespace access can still read those resources.
+	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
+	if isClusterScoped && !isNamespacesKind {
+		if !s.canRead(r, gvrGroup, gvrResource, "", "list") {
+			s.writeJSON(w, []any{})
+			return
+		}
+		// Cluster-scoped reads have no namespace dimension. Once the
+		// resource-level SAR passes, force the later typed/dynamic cache paths
+		// through their cluster-wide branch even if the user also has a
+		// namespace view preference.
+		namespaces = nil
+	} else if !isNamespacesKind && noNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
 	}
-	group := r.URL.Query().Get("group") // API group for CRD disambiguation
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -834,7 +1066,8 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 
 	// When a group is specified, skip the typed cache and use the dynamic cache
 	// directly. This handles CRDs whose plural name collides with core resources
-	// (e.g., KNative "services" vs core "services").
+	// (e.g., KNative "services" vs core "services"). Cluster-scoped gating for
+	// these is already done at the top of this handler via k8s.ClassifyKindScope.
 	if group != "" {
 		if len(namespaces) > 0 {
 			var merged []any
@@ -977,6 +1210,36 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 				return cache.PersistentVolumeClaims().PersistentVolumeClaims(ns).List(labels.Everything())
 			},
 		)
+	case "roles":
+		if cache.Roles() == nil {
+			forbiddenMsg("roles")
+			return
+		}
+		result, err = listPerNs(
+			func() (any, error) { return cache.Roles().List(labels.Everything()) },
+			func(ns string) (any, error) { return cache.Roles().Roles(ns).List(labels.Everything()) },
+		)
+	case "clusterroles":
+		if cache.ClusterRoles() == nil {
+			forbiddenMsg("clusterroles")
+			return
+		}
+		result, err = cache.ClusterRoles().List(labels.Everything())
+	case "rolebindings":
+		if cache.RoleBindings() == nil {
+			forbiddenMsg("rolebindings")
+			return
+		}
+		result, err = listPerNs(
+			func() (any, error) { return cache.RoleBindings().List(labels.Everything()) },
+			func(ns string) (any, error) { return cache.RoleBindings().RoleBindings(ns).List(labels.Everything()) },
+		)
+	case "clusterrolebindings":
+		if cache.ClusterRoleBindings() == nil {
+			forbiddenMsg("clusterrolebindings")
+			return
+		}
+		result, err = cache.ClusterRoleBindings().List(labels.Everything())
 	case "jobs":
 		if cache.Jobs() == nil {
 			forbiddenMsg("jobs")
@@ -1018,6 +1281,8 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			forbiddenMsg("namespaces")
 			return
 		}
+		// SAR gate above already filtered: cluster-admin / no-auth fell
+		// through with namespaces=nil; restricted users early-returned [].
 		result, err = cache.Namespaces().List(labels.Everything())
 	case "persistentvolumes", "pvs":
 		if cache.PersistentVolumes() == nil {
@@ -1120,8 +1385,34 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		namespace = ""
 	}
 
-	// Check namespace access for namespaced resources
-	if namespace != "" {
+	// Cluster-scoped GETs (Node, ClusterRole, cluster-scoped CRDs, …) are
+	// gated per-kind via SAR. Run BEFORE the namespace access check so
+	// users with explicit cluster-scoped RBAC but no namespace access can
+	// still get the resource. ClassifyKindScope catches both static cluster-
+	// only kinds and dynamic cluster-scoped CRDs (via discovery).
+	//
+	// "namespaces" is cluster-scoped at the K8s API but exposed as a per-user
+	// filtered list — gate the GET via the user's namespace access for the
+	// requested name, not via cluster-scoped SAR.
+	isNamespacesKind := kind == "namespaces" || kind == "namespace"
+	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
+	switch {
+	case isNamespacesKind:
+		// Full Namespace object access requires explicit get-namespaces SAR.
+		// Read access to resources IN a namespace (list pods etc.) does not
+		// imply read access to the Namespace object itself. Restricted users
+		// without ClusterRole on namespaces get 403 here.
+		if !s.canRead(r, "", "namespaces", "", "get") {
+			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", name))
+			return
+		}
+	case isClusterScoped:
+		if !s.canRead(r, gvrGroup, gvrResource, "", "get") {
+			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to %s (cluster-scoped resource requires explicit RBAC)", kind))
+			return
+		}
+	case namespace != "":
+		// Namespaced kind: verify namespace access.
 		allowed := s.getUserNamespaces(r, []string{namespace})
 		if noNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
@@ -1154,7 +1445,8 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 
 	// When a group is specified, skip the typed cache and use the dynamic cache
 	// directly. This handles CRDs whose plural name collides with core resources
-	// (e.g., KNative "services" vs core "services").
+	// (e.g., KNative "services" vs core "services"). Cluster-scoped gating for
+	// these is already done at the top of this handler via k8s.ClassifyKindScope.
 	if group != "" {
 		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
 		if err != nil {
@@ -1384,6 +1676,10 @@ func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
 // handleNodeMetrics fetches metrics for a specific node from the metrics.k8s.io API
 func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if !s.canRead(r, "", "nodes", "", "get") {
+		s.writeError(w, http.StatusForbidden, "no access to nodes (cluster-scoped resource requires explicit RBAC)")
+		return
+	}
 
 	metrics, err := k8s.GetNodeMetrics(r.Context(), name)
 	if err != nil {
@@ -1429,6 +1725,10 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 // handleNodeMetricsHistory returns historical metrics for a specific node
 func (s *Server) handleNodeMetricsHistory(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
+	if !s.canRead(r, "", "nodes", "", "get") {
+		s.writeError(w, http.StatusForbidden, "no access to nodes (cluster-scoped resource requires explicit RBAC)")
+		return
+	}
 
 	store := k8s.GetMetricsHistory()
 	if store == nil {
@@ -1524,6 +1824,10 @@ func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
 // handleTopNodes returns the latest metrics for all nodes (bulk endpoint for table view)
 func (s *Server) handleTopNodes(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
+		return
+	}
+	if !s.canRead(r, "", "nodes", "", "list") {
+		s.writeJSON(w, []k8s.TopNodeMetrics{})
 		return
 	}
 
@@ -2321,12 +2625,6 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	// Stop all active sessions before switching
 	StopAllSessions()
 
-	// Invalidate per-user permission cache (different cluster = different RBAC)
-	if s.permCache != nil {
-		s.permCache.Invalidate()
-	}
-
-	// Perform the context switch
 	if err := k8s.PerformContextSwitch(name); err != nil {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
@@ -2338,7 +2636,9 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set connected state after successful switch
+	// Per-user state (permCache, namespace picks, capabilities cache) is
+	// cleared by the OnContextSwitch callback registered in New().
+
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnected,
 		Context:     k8s.GetContextName(),
@@ -2536,13 +2836,8 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Stop active sessions before switching
 	StopAllSessions()
-	if s.permCache != nil {
-		s.permCache.Invalidate()
-	}
 
-	// Switch to the new context
 	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
@@ -2553,6 +2848,8 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		s.writeError(w, http.StatusInternalServerError, "failed to switch context: "+err.Error())
 		return
 	}
+
+	// Per-user state cleared via the OnContextSwitch callback (see New()).
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnected,
@@ -2639,7 +2936,7 @@ func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, err := k8s.ImpersonatedDynamicClient(user.Username, user.Groups)
 		if err != nil {
-			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
+			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil
 		}
 		return client
@@ -2654,7 +2951,7 @@ func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		cfg, err := k8s.ImpersonatedConfig(user.Username, user.Groups)
 		if err != nil {
-			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
+			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil
 		}
 		return cfg
@@ -2669,7 +2966,7 @@ func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		client, err := k8s.ImpersonatedClient(user.Username, user.Groups)
 		if err != nil {
-			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
+			log.Printf("[auth] Impersonation failed for %s: %v", k8s.SanitizeForLog(user.Username), err)
 			return nil
 		}
 		return client
@@ -2702,7 +2999,7 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 		// Discover namespaces synchronously on first request
 		client := k8s.GetClient()
 		if client == nil {
-			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", user.Username)
+			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", k8s.SanitizeForLog(user.Username))
 			return []string{} // fail-closed: cannot verify permissions
 		}
 
@@ -2716,10 +3013,21 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 				}
 			}
 		}
+		// Fallback for namespace-scoped SAs: when the cluster-wide namespace
+		// informer is unavailable (SA lacks list-namespaces RBAC), the lister
+		// is empty and DiscoverNamespaces' per-namespace SAR loop has nothing
+		// to iterate — every non-admin user gets [] even when they have RBAC
+		// on the SA's bound namespace. Seed candidates from the kubeconfig
+		// context / --namespace fallback so those users get surfaced.
+		if len(allNamespaces) == 0 {
+			if accessible, _ := k8s.GetAccessibleNamespaces(r.Context()); len(accessible) > 0 {
+				allNamespaces = accessible
+			}
+		}
 
 		allowed, err := auth.DiscoverNamespaces(r.Context(), client, user.Username, user.Groups, allNamespaces)
 		if err != nil {
-			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", user.Username, err)
+			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", k8s.SanitizeForLog(user.Username), err)
 			return []string{} // fail-closed: no access on discovery error
 		}
 

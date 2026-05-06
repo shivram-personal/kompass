@@ -36,6 +36,10 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		"persistentvolumes":        true,
 		"storageclasses":           true,
 		"poddisruptionbudgets":     true,
+		"roles":                    true,
+		"clusterroles":             true,
+		"rolebindings":             true,
+		"clusterrolebindings":      true,
 	}
 
 	cfg := k8score.CacheConfig{
@@ -62,6 +66,18 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	cacheOnce.Do(func() {})
 
 	return nil
+}
+
+// SetTestContextName is a test-only helper that overrides the package-level
+// kubeconfig context name. Used by tests that exercise per-context state
+// (e.g. namespace preferences) without needing to spin up a real client.
+// Returns the previous value so callers can restore it on cleanup.
+func SetTestContextName(name string) string {
+	clientMu.Lock()
+	prev := contextName
+	contextName = name
+	clientMu.Unlock()
+	return prev
 }
 
 // ResetTestState tears down the resource cache and resets all package-level

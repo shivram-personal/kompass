@@ -48,9 +48,21 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}
 
-	var namespaces []string
+	var requested []string
 	if input.Namespace != "" {
-		namespaces = []string{input.Namespace}
+		requested = []string{input.Namespace}
+	}
+	allowed := filterNamespacesForUser(ctx, requested)
+	if allowed != nil && len(allowed) == 0 {
+		return toJSONResult(auditToolResult{})
+	}
+
+	// For namespace-restricted users, narrow the audit scope to their allowed
+	// set (cluster-scoped findings are filtered out below). For cluster-admins
+	// (allowed == nil) we pass through to RunFromCache's default behavior.
+	namespaces := requested
+	if allowed != nil && len(requested) == 0 {
+		namespaces = allowed
 	}
 
 	results := audit.RunFromCache(cache, namespaces, nil)
@@ -74,14 +86,27 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 		limit = 100
 	}
 
-	// Category counts
-	catCounts := map[string]int{}
-	for _, f := range results.Findings {
-		catCounts[f.Category]++
+	// For namespace-restricted users, drop findings outside their allowed
+	// set (covers cluster-scoped findings and findings on objects the
+	// listNamespaced helper let through with empty namespace).
+	var nsAllow map[string]bool
+	if allowed != nil {
+		nsAllow = make(map[string]bool, len(allowed))
+		for _, ns := range allowed {
+			nsAllow[ns] = true
+		}
 	}
 
+	// Category counts are built post-namespace-filter so restricted users
+	// don't see totals that include namespaces they can't access.
+	catCounts := map[string]int{}
 	var filtered []auditFinding
 	for _, f := range results.Findings {
+		if nsAllow != nil && !nsAllow[f.Namespace] {
+			continue
+		}
+		catCounts[f.Category]++
+
 		if input.Category != "" && f.Category != input.Category {
 			continue
 		}

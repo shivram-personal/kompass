@@ -345,6 +345,35 @@ func (d *ResourceDiscovery) GetResource(kindOrName string) (APIResource, bool) {
 	return res, ok
 }
 
+// GetResourceWithGroup returns the APIResource for a kind in a specific
+// API group. Mirrors GetGVRWithGroup but yields the full resource (incl.
+// Namespaced) rather than just the GVR. Empty group falls back to the
+// kind-keyed lookup (first match wins, with the same caveat as GetGVR).
+//
+// Used for authorization decisions where the caller has both kind and
+// group from a request and needs to know the resource's scope before
+// running a SubjectAccessReview.
+func (d *ResourceDiscovery) GetResourceWithGroup(kindOrName, group string) (APIResource, bool) {
+	if d == nil {
+		return APIResource{}, false
+	}
+
+	if group == "" {
+		return d.GetResource(kindOrName)
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	kindLower := strings.ToLower(kindOrName)
+	for _, res := range d.resources {
+		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
+			return res, true
+		}
+	}
+	return APIResource{}, false
+}
+
 // IsKnownResource checks if a kind or plural name is a known resource.
 func (d *ResourceDiscovery) IsKnownResource(kindOrName string) bool {
 	_, ok := d.GetResource(kindOrName)

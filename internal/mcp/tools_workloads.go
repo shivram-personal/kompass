@@ -146,6 +146,10 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, or daemonset", input.Kind)
 	}
 
+	if !checkNamespaceAccess(ctx, input.Namespace) {
+		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+	}
+
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")

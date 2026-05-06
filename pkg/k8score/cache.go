@@ -21,7 +21,9 @@ import (
 // using SharedInformers. It is the shared core used by both Radar and
 // skyhook-connector.
 type ResourceCache struct {
-	factory          informers.SharedInformerFactory
+	factory          informers.SharedInformerFactory            // cluster-wide factory (always present)
+	nsFactories      map[string]informers.SharedInformerFactory // per-namespace factories (for mixed-scope mode)
+	factoryByKind    map[string]informers.SharedInformerFactory // resolved factory per enabled kind — listers MUST go through this
 	changes          chan ResourceChange
 	stopCh           chan struct{}
 	stopOnce         sync.Once
@@ -43,12 +45,15 @@ type ResourceCache struct {
 
 // InformerSyncStatus tracks the sync state of a single informer.
 type InformerSyncStatus struct {
-	Kind     string `json:"kind"`
-	Key      string `json:"key"`      // e.g. "pods", "deployments"
-	Deferred bool   `json:"deferred"` // true if deferred (non-critical)
-	Synced   bool   `json:"synced"`
-	SyncedAt string `json:"syncedAt,omitempty"` // RFC3339 timestamp
-	Items    int    `json:"items"`              // current item count in lister
+	Kind          string `json:"kind"`
+	Key           string `json:"key"`      // e.g. "pods", "deployments"
+	Deferred      bool   `json:"deferred"` // true if deferred (non-critical)
+	Synced        bool   `json:"synced"`
+	SyncedAt      string `json:"syncedAt,omitempty"`      // RFC3339 timestamp
+	Items         int    `json:"items"`                   // current item count in lister
+	LastError     string `json:"lastError,omitempty"`     // most recent watch error (truncated to keep diagnostics small)
+	LastErrorAt   string `json:"lastErrorAt,omitempty"`   // RFC3339 timestamp of last watch error
+	ForbiddenSeen bool   `json:"forbiddenSeen,omitempty"` // reflector hit 403/401 — probe and reality disagree
 }
 
 // SyncPhase describes the current phase of cache initialization.
@@ -63,24 +68,25 @@ const (
 
 // CacheSyncStatus is the overall sync status exposed for diagnostics.
 type CacheSyncStatus struct {
-	Phase             SyncPhase            `json:"phase"`
-	SyncStarted       string               `json:"syncStarted,omitempty"` // RFC3339
-	ElapsedSec        float64              `json:"elapsedSec"`
-	CriticalTotal     int                  `json:"criticalTotal"`
-	CriticalSynced    int                  `json:"criticalSynced"`
-	DeferredTotal     int                  `json:"deferredTotal"`
-	DeferredSynced    int                  `json:"deferredSynced"`
-	Informers         []InformerSyncStatus `json:"informers"`
-	PendingCritical   []string             `json:"pendingCritical,omitempty"`   // kinds not yet synced
-	PendingDeferred   []string             `json:"pendingDeferred,omitempty"`
-	PromotedKinds     []string             `json:"promotedKinds,omitempty"`    // critical informers that timed out
+	Phase           SyncPhase            `json:"phase"`
+	SyncStarted     string               `json:"syncStarted,omitempty"` // RFC3339
+	ElapsedSec      float64              `json:"elapsedSec"`
+	CriticalTotal   int                  `json:"criticalTotal"`
+	CriticalSynced  int                  `json:"criticalSynced"`
+	DeferredTotal   int                  `json:"deferredTotal"`
+	DeferredSynced  int                  `json:"deferredSynced"`
+	Informers       []InformerSyncStatus `json:"informers"`
+	PendingCritical []string             `json:"pendingCritical,omitempty"` // kinds not yet synced
+	PendingDeferred []string             `json:"pendingDeferred,omitempty"`
+	PromotedKinds   []string             `json:"promotedKinds,omitempty"` // critical informers that timed out
 }
 
 type informerSetup struct {
-	key     string
-	kind    string
-	setup   func() cache.SharedIndexInformer
-	isEvent bool
+	key             string
+	kind            string
+	setup           func(factory informers.SharedInformerFactory) cache.SharedIndexInformer
+	isEvent         bool
+	isClusterScoped bool // true for nodes, namespaces, PV, storageclasses, ingressclasses
 }
 
 // NewResourceCache creates and starts a ResourceCache from the given config.
@@ -97,6 +103,14 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	}
 	if cfg.NamespaceScoped && cfg.Namespace == "" {
 		return nil, fmt.Errorf("CacheConfig.Namespace must be set when NamespaceScoped is true")
+	}
+	for k, scope := range cfg.ResourceScopes {
+		if scope.Enabled && scope.Namespace == "" {
+			continue
+		}
+		if scope.Enabled && scope.Namespace != "" && k == "" {
+			return nil, fmt.Errorf("CacheConfig.ResourceScopes contains entry with empty key")
+		}
 	}
 
 	channelSize := cfg.ChannelSize
@@ -116,36 +130,92 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 
 	// Clone caller-owned maps to prevent mutation after construction.
 	cfg.ResourceTypes = maps.Clone(cfg.ResourceTypes)
+	cfg.ResourceScopes = maps.Clone(cfg.ResourceScopes)
 	cfg.DeferredTypes = maps.Clone(cfg.DeferredTypes)
 	cfg.MinimalSet = maps.Clone(cfg.MinimalSet)
+
+	// Derive a per-kind scope view that captures both modes:
+	//   - ResourceScopes (when set) is authoritative.
+	//   - Otherwise fall back to ResourceTypes + NamespaceScoped + Namespace.
+	// This single map drives both the enabled set and which factory each
+	// informer is wired into.
+	scopes := make(map[string]ResourceScope)
+	if cfg.ResourceScopes != nil {
+		for k, s := range cfg.ResourceScopes {
+			if s.Enabled {
+				scopes[k] = s
+			}
+		}
+	} else {
+		ns := ""
+		if cfg.NamespaceScoped {
+			ns = cfg.Namespace
+		}
+		for k, ok := range cfg.ResourceTypes {
+			if ok {
+				scopes[k] = ResourceScope{Enabled: true, Namespace: ns}
+			}
+		}
+	}
 
 	stopCh := make(chan struct{})
 	changes := make(chan ResourceChange, channelSize)
 
-	// Build factory options
-	factoryOpts := []informers.SharedInformerOption{
-		informers.WithTransform(DropManagedFields),
-	}
-	if cfg.NamespaceScoped {
-		factoryOpts = append(factoryOpts, informers.WithNamespace(cfg.Namespace))
-		stdlog.Printf("Using namespace-scoped informers for namespace %q", cfg.Namespace)
-	}
-
-	// Factory serves as informer registry and shutdown coordinator.
-	// We don't call factory.Start() — informers are Run() individually
-	// to stagger critical vs deferred starts. Shutdown() still works
-	// because each informer's factory getter (e.g. factory.Core().V1().Pods().Informer())
-	// registers it internally when called in the setup loop below.
-	factory := informers.NewSharedInformerFactoryWithOptions(
+	// Build one factory per unique scope. The cluster-wide factory is
+	// always created so cluster-scoped kinds (nodes, namespaces, PV…)
+	// have a home; namespace-scoped factories are created on demand.
+	clusterFactory := informers.NewSharedInformerFactoryWithOptions(
 		cfg.Client,
 		0, // no resync — updates come via watch
-		factoryOpts...,
+		informers.WithTransform(DropManagedFields),
 	)
+	nsFactories := make(map[string]informers.SharedInformerFactory)
+	for _, s := range scopes {
+		if s.Namespace == "" {
+			continue
+		}
+		if _, ok := nsFactories[s.Namespace]; ok {
+			continue
+		}
+		nsFactories[s.Namespace] = informers.NewSharedInformerFactoryWithOptions(
+			cfg.Client,
+			0,
+			informers.WithTransform(DropManagedFields),
+			informers.WithNamespace(s.Namespace),
+		)
+	}
+	if len(nsFactories) > 0 {
+		var nsList []string
+		for ns := range nsFactories {
+			nsList = append(nsList, ns)
+		}
+		sort.Strings(nsList)
+		// %q on the slice quotes each element, neutering newlines / control
+		// characters in caller-supplied namespace strings before they hit logs.
+		stdlog.Printf("Using namespace-scoped informers for namespace(s): %q", nsList)
+	}
+
+	// pickFactory routes each informer to the factory matching its scope.
+	// Cluster-scoped kinds always use the cluster-wide factory regardless
+	// of caller intent — namespace-scoping them would 404.
+	pickFactory := func(s informerSetup) informers.SharedInformerFactory {
+		scope, ok := scopes[s.key]
+		if !ok || scope.Namespace == "" || s.isClusterScoped {
+			return clusterFactory
+		}
+		return nsFactories[scope.Namespace]
+	}
 
 	// Table-driven informer setup — only create informers for enabled types
-	setups := buildInformerSetups(factory)
+	setups := buildInformerSetups()
 
-	enabled := cfg.ResourceTypes
+	// enabledMap is the boolean projection over `scopes` exposed via
+	// GetEnabledResources for callers that only need "is this kind on?"
+	// without the per-kind scope detail.
+	enabled := make(map[string]bool, len(scopes))
+	for k := range scopes {
+		enabled[k] = true
+	}
 	deferredTypes := cfg.DeferredTypes
 	if deferredTypes == nil {
 		deferredTypes = map[string]bool{}
@@ -159,7 +229,9 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	enabledCount := 0
 
 	rc := &ResourceCache{
-		factory:          factory,
+		factory:          clusterFactory,
+		nsFactories:      nsFactories,
+		factoryByKind:    map[string]informers.SharedInformerFactory{},
 		changes:          changes,
 		stopCh:           stopCh,
 		enabledResources: enabled,
@@ -183,7 +255,9 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 			continue
 		}
 		enabledCount++
-		inf := s.setup()
+		factory := pickFactory(s)
+		rc.factoryByKind[s.key] = factory
+		inf := s.setup(factory)
 
 		var err error
 		if s.isEvent {
@@ -194,6 +268,23 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		if err != nil {
 			close(stopCh)
 			return nil, fmt.Errorf("failed to register %s event handler: %w", s.kind, err)
+		}
+
+		// Wire a WatchErrorHandler so reflector-level failures (most
+		// notably 403/Unauthorized that the probe didn't predict — e.g.
+		// the token expired between probe and watch, or RBAC changed
+		// mid-session) are visible in diagnostics. The reflector keeps
+		// retrying with exponential backoff regardless; this just makes
+		// the failure observable instead of silent.
+		idx := len(allEntries) // status index for this informer
+		key := s.key
+		kind := s.kind
+		if hErr := inf.SetWatchErrorHandler(func(_ *cache.Reflector, err error) {
+			rc.recordWatchError(idx, key, kind, err)
+		}); hErr != nil {
+			// SetWatchErrorHandler only errors after the informer has
+			// started, which can't happen here — log and continue.
+			stdlog.Printf("Warning: failed to set watch error handler for %s: %v", s.kind, hErr)
 		}
 
 		isDeferred := deferredTypes[s.key]
@@ -663,34 +754,97 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	return rc, nil
 }
 
-// buildInformerSetups returns the table-driven informer setup list.
-func buildInformerSetups(factory informers.SharedInformerFactory) []informerSetup {
+// buildInformerSetups returns the table-driven informer setup list. Each
+// entry's setup func takes the factory it should be created from — caller
+// picks the cluster-wide or a namespace-scoped factory based on the kind's
+// resolved access scope.
+func buildInformerSetups() []informerSetup {
+	type entry = informerSetup
+	mk := func(key, kind string, isEvent, clusterScoped bool, fn func(f informers.SharedInformerFactory) cache.SharedIndexInformer) entry {
+		return entry{key: key, kind: kind, setup: fn, isEvent: isEvent, isClusterScoped: clusterScoped}
+	}
 	return []informerSetup{
-		{Services, "Service", func() cache.SharedIndexInformer { return factory.Core().V1().Services().Informer() }, false},
-		{Pods, "Pod", func() cache.SharedIndexInformer { return factory.Core().V1().Pods().Informer() }, false},
-		{Nodes, "Node", func() cache.SharedIndexInformer { return factory.Core().V1().Nodes().Informer() }, false},
-		{Namespaces, "Namespace", func() cache.SharedIndexInformer { return factory.Core().V1().Namespaces().Informer() }, false},
-		{ConfigMaps, "ConfigMap", func() cache.SharedIndexInformer { return factory.Core().V1().ConfigMaps().Informer() }, false},
-		{Secrets, "Secret", func() cache.SharedIndexInformer { return factory.Core().V1().Secrets().Informer() }, false},
-		{Events, "Event", func() cache.SharedIndexInformer { return factory.Core().V1().Events().Informer() }, true},
-		{PersistentVolumeClaims, "PersistentVolumeClaim", func() cache.SharedIndexInformer { return factory.Core().V1().PersistentVolumeClaims().Informer() }, false},
-		{PersistentVolumes, "PersistentVolume", func() cache.SharedIndexInformer { return factory.Core().V1().PersistentVolumes().Informer() }, false},
-		{Deployments, "Deployment", func() cache.SharedIndexInformer { return factory.Apps().V1().Deployments().Informer() }, false},
-		{DaemonSets, "DaemonSet", func() cache.SharedIndexInformer { return factory.Apps().V1().DaemonSets().Informer() }, false},
-		{StatefulSets, "StatefulSet", func() cache.SharedIndexInformer { return factory.Apps().V1().StatefulSets().Informer() }, false},
-		{ReplicaSets, "ReplicaSet", func() cache.SharedIndexInformer { return factory.Apps().V1().ReplicaSets().Informer() }, false},
-		{Ingresses, "Ingress", func() cache.SharedIndexInformer { return factory.Networking().V1().Ingresses().Informer() }, false},
-		{IngressClasses, "IngressClass", func() cache.SharedIndexInformer { return factory.Networking().V1().IngressClasses().Informer() }, false},
-		{Jobs, "Job", func() cache.SharedIndexInformer { return factory.Batch().V1().Jobs().Informer() }, false},
-		{CronJobs, "CronJob", func() cache.SharedIndexInformer { return factory.Batch().V1().CronJobs().Informer() }, false},
-		{HorizontalPodAutoscalers, "HorizontalPodAutoscaler", func() cache.SharedIndexInformer {
-			return factory.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
-		}, false},
-		{StorageClasses, "StorageClass", func() cache.SharedIndexInformer { return factory.Storage().V1().StorageClasses().Informer() }, false},
-		{PodDisruptionBudgets, "PodDisruptionBudget", func() cache.SharedIndexInformer { return factory.Policy().V1().PodDisruptionBudgets().Informer() }, false},
-		{NetworkPolicies, "NetworkPolicy", func() cache.SharedIndexInformer { return factory.Networking().V1().NetworkPolicies().Informer() }, false},
-		{ServiceAccounts, "ServiceAccount", func() cache.SharedIndexInformer { return factory.Core().V1().ServiceAccounts().Informer() }, false},
-		{LimitRanges, "LimitRange", func() cache.SharedIndexInformer { return factory.Core().V1().LimitRanges().Informer() }, false},
+		mk(Services, "Service", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Services().Informer()
+		}),
+		mk(Pods, "Pod", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Pods().Informer()
+		}),
+		mk(Nodes, "Node", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Nodes().Informer()
+		}),
+		mk(Namespaces, "Namespace", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Namespaces().Informer()
+		}),
+		mk(ConfigMaps, "ConfigMap", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().ConfigMaps().Informer()
+		}),
+		mk(Secrets, "Secret", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Secrets().Informer()
+		}),
+		mk(Events, "Event", true, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().Events().Informer()
+		}),
+		mk(PersistentVolumeClaims, "PersistentVolumeClaim", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().PersistentVolumeClaims().Informer()
+		}),
+		mk(PersistentVolumes, "PersistentVolume", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().PersistentVolumes().Informer()
+		}),
+		mk(Deployments, "Deployment", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().Deployments().Informer()
+		}),
+		mk(DaemonSets, "DaemonSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().DaemonSets().Informer()
+		}),
+		mk(StatefulSets, "StatefulSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().StatefulSets().Informer()
+		}),
+		mk(ReplicaSets, "ReplicaSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Apps().V1().ReplicaSets().Informer()
+		}),
+		mk(Ingresses, "Ingress", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Networking().V1().Ingresses().Informer()
+		}),
+		mk(IngressClasses, "IngressClass", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Networking().V1().IngressClasses().Informer()
+		}),
+		mk(Jobs, "Job", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Batch().V1().Jobs().Informer()
+		}),
+		mk(CronJobs, "CronJob", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Batch().V1().CronJobs().Informer()
+		}),
+		mk(HorizontalPodAutoscalers, "HorizontalPodAutoscaler", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
+		}),
+		mk(StorageClasses, "StorageClass", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Storage().V1().StorageClasses().Informer()
+		}),
+		mk(PodDisruptionBudgets, "PodDisruptionBudget", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Policy().V1().PodDisruptionBudgets().Informer()
+		}),
+		mk(NetworkPolicies, "NetworkPolicy", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Networking().V1().NetworkPolicies().Informer()
+		}),
+		mk(ServiceAccounts, "ServiceAccount", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().ServiceAccounts().Informer()
+		}),
+		mk(Roles, "Role", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().Roles().Informer()
+		}),
+		mk(ClusterRoles, "ClusterRole", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().ClusterRoles().Informer()
+		}),
+		mk(RoleBindings, "RoleBinding", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().RoleBindings().Informer()
+		}),
+		mk(ClusterRoleBindings, "ClusterRoleBinding", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Rbac().V1().ClusterRoleBindings().Informer()
+		}),
+		mk(LimitRanges, "LimitRange", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().LimitRanges().Informer()
+		}),
 	}
 }
 
@@ -861,6 +1015,58 @@ func (rc *ResourceCache) safeCallback(name string, fn func()) {
 	fn()
 }
 
+// recordWatchError is invoked from each informer's WatchErrorHandler when its
+// reflector drops its connection. It updates the per-informer status so the
+// failure surfaces in diagnostics, and logs the first 403/401 — these signal
+// that the access probe and the actual list/watch disagree (token rotation,
+// RBAC change mid-session, or webhook authorizer flakiness).
+//
+// The reflector continues retrying with exponential backoff regardless; this
+// hook just makes the failure observable. Cap the recorded error string to
+// keep the diagnostics payload small.
+func (rc *ResourceCache) recordWatchError(idx int, key, kind string, err error) {
+	if err == nil {
+		return
+	}
+	msg := err.Error()
+	const maxLen = 256
+	if len(msg) > maxLen {
+		msg = msg[:maxLen] + "…"
+	}
+	forbidden := isWatchForbiddenErr(err)
+
+	rc.informerMu.Lock()
+	if idx >= 0 && idx < len(rc.informerStatuses) {
+		s := &rc.informerStatuses[idx]
+		firstForbidden := forbidden && !s.ForbiddenSeen
+		s.LastError = msg
+		s.LastErrorAt = time.Now().Format(time.RFC3339)
+		if forbidden {
+			s.ForbiddenSeen = true
+		}
+		if firstForbidden {
+			rc.stdlog.Printf("WARNING: informer %s saw 403/Unauthorized — probe and reality disagree (key=%s): %v",
+				kind, key, err)
+		}
+	}
+	rc.informerMu.Unlock()
+}
+
+// isWatchForbiddenErr returns true when err signals 403/401 from the
+// apiserver. The reflector wraps the typed error in an unstructured
+// status error, so apierrors helpers (which need an *apierrors.StatusError)
+// can miss it — fall back to substring matching when type-detection fails.
+//
+// Kept here (rather than reusing the apierrors-aware helper in capabilities.go)
+// because pkg/k8score must not import internal/.
+func isWatchForbiddenErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "forbidden") || strings.Contains(msg, "unauthorized")
+}
+
 // Stop initiates a non-blocking shutdown of the cache.
 func (rc *ResourceCache) Stop() {
 	if rc == nil {
@@ -873,6 +1079,9 @@ func (rc *ResourceCache) Stop() {
 			done := make(chan struct{})
 			go func() {
 				rc.factory.Shutdown()
+				for _, f := range rc.nsFactories {
+					f.Shutdown()
+				}
 				close(done)
 			}()
 			select {
@@ -1097,6 +1306,10 @@ var allKindListers = []kindLister{
 	{"PodDisruptionBudget", "policy", func(rc *ResourceCache) any { return rc.PodDisruptionBudgets() }},
 	{"NetworkPolicy", "networking.k8s.io", func(rc *ResourceCache) any { return rc.NetworkPolicies() }},
 	{"ServiceAccount", "", func(rc *ResourceCache) any { return rc.ServiceAccounts() }},
+	{"Role", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.Roles() }},
+	{"ClusterRole", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.ClusterRoles() }},
+	{"RoleBinding", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.RoleBindings() }},
+	{"ClusterRoleBinding", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.ClusterRoleBindings() }},
 	{"LimitRange", "", func(rc *ResourceCache) any { return rc.LimitRanges() }},
 }
 

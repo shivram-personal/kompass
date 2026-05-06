@@ -198,8 +198,10 @@ Add to `~/.gemini/settings.json`:
 ## Security
 
 - **Safe by design** — read tools are strictly read-only; write tools perform non-destructive operations (restart, scale, sync) and are annotated with MCP tool hints so AI clients can distinguish them
-- **Local-only** — MCP server runs on localhost alongside Radar
-- **RBAC-aware** — respects your kubeconfig's RBAC permissions; returns 403 for unauthorized resources
+- **RBAC-aware** — every call enforces RBAC at the same boundary as the REST API:
+  - **Local binary**: the cache uses your kubeconfig identity, so MCP can only see what `kubectl` can see for that user
+  - **In-cluster (auth enabled)**: read tools intersect namespaced reads with the calling user's RBAC-allowed namespaces; cluster-scoped reads (Nodes, PVs, ClusterRoles, cluster-scoped CRDs) are gated per-kind via SubjectAccessReview, so cluster-wide pod visibility doesn't implicitly grant Node read; write tools, exec, and logs are fully impersonated so the apiserver enforces the user's RBAC end-to-end
+  - **In-cluster (no auth)**: every MCP caller shares the pod ServiceAccount's view — only deploy this way when MCP isn't exposed beyond a trusted boundary
 - **Secret redaction** — Secret `.data` and `.stringData` are never exposed; only key names are shown
 - **Value redaction** — environment variable values are scrubbed for known secret patterns (API keys, tokens, passwords, base64 blocks)
 - **Log redaction** — pod log output is scrubbed for secret patterns before being returned
