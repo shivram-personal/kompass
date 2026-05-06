@@ -27,6 +27,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
 
   const { data: releases, isLoading, error: releasesError, refetch: refetchReleases } = useHelmReleases(namespace || undefined)
   const isForbidden = isForbiddenError(releasesError)
+  const releasesErrorMessage = releasesError instanceof Error ? releasesError.message : 'Failed to load Helm releases'
 
   // Lazy load upgrade info after releases are loaded
   const { data: upgradeInfo, isLoading: upgradeLoading, error: upgradeError, refetch: refetchUpgradeInfo } = useHelmBatchUpgradeInfo(
@@ -246,6 +247,20 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                   <p className="text-theme-text-secondary font-medium">Access Restricted</p>
                   <p className="text-sm mt-1">Insufficient permissions to list Helm releases</p>
                 </div>
+              ) : releasesError ? (
+                <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-3 px-6 text-center">
+                  <Package className="w-10 h-10 text-amber-400" />
+                  <div>
+                    <p className="text-theme-text-secondary font-medium">Failed to load Helm releases</p>
+                    <p className="text-sm mt-1 break-all">{releasesErrorMessage}</p>
+                  </div>
+                  <button
+                    onClick={() => refetchReleases()}
+                    className="px-3 py-1.5 text-sm text-theme-text-primary border border-theme-border rounded-lg hover:bg-theme-elevated transition-colors"
+                  >
+                    Retry
+                  </button>
+                </div>
               ) : filteredReleases.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-2">
                   <Package className="w-12 h-12 text-theme-text-disabled" />
@@ -297,13 +312,14 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                   <tbody className="table-divide-subtle">
                     {filteredReleases.map((release, index) => (
                       <ReleaseRow
-                        key={`${release.namespace}-${release.name}`}
+                        key={releaseIdentityKey(release)}
                         ref={index === highlightedIndex ? highlightedRowRef : null}
                         release={release}
-                        upgradeInfo={upgradeInfo?.releases[`${release.namespace}/${release.name}`]}
+                        upgradeInfo={upgradeInfo?.releases[releaseIdentityKey(release)]}
                         isSelected={
                           selectedRelease?.namespace === release.namespace &&
-                          selectedRelease?.name === release.name
+                          selectedRelease?.name === release.name &&
+                          (selectedRelease?.storageNamespace || selectedRelease?.namespace) === (release.storageNamespace || release.namespace)
                         }
                         isHighlighted={index === highlightedIndex}
                         onClick={() => onReleaseClick?.(release.namespace, release.name, release.storageNamespace)}
@@ -333,6 +349,10 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
       )}
     </div>
   )
+}
+
+function releaseIdentityKey(release: Pick<HelmRelease, 'namespace' | 'name' | 'storageNamespace'>): string {
+  return `${release.storageNamespace || release.namespace}/${release.name}`
 }
 
 interface ReleaseRowProps {

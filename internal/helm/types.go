@@ -107,7 +107,8 @@ type UpgradeInfo struct {
 
 // BatchUpgradeInfo contains upgrade info for multiple releases
 type BatchUpgradeInfo struct {
-	// Map of "namespace/name" to UpgradeInfo
+	// Map of "storageNamespace/name" to UpgradeInfo. For ordinary releases,
+	// storageNamespace is the same as the release namespace.
 	Releases map[string]*UpgradeInfo `json:"releases"`
 }
 

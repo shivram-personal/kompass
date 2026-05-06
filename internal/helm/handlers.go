@@ -539,6 +539,10 @@ func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
 
 	resultCh := make(chan error, 1)
 	go func() {
+		if user := auth.UserFromContext(r.Context()); user != nil {
+			resultCh <- client.UpgradeWithProgressAsUser(namespace, name, version, repositoryName, user.Username, user.Groups, progressCh)
+			return
+		}
 		resultCh <- client.UpgradeWithProgress(namespace, name, version, repositoryName, progressCh)
 	}()
 

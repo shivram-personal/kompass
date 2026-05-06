@@ -1,8 +1,11 @@
 package helm
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -280,6 +283,15 @@ func TestToHelmRelease_StorageNamespace(t *testing.T) {
 }
 
 func TestHelmReleaseStorageNamespacesWithClient(t *testing.T) {
+	assertStorageNamespaceFromSecret(t, false)
+}
+
+func TestHelmReleaseStorageNamespacesWithClient_GzippedPayload(t *testing.T) {
+	assertStorageNamespaceFromSecret(t, true)
+}
+
+func assertStorageNamespaceFromSecret(t *testing.T, gzipped bool) {
+	t.Helper()
 	rel := &release.Release{
 		Name:      "podinfo",
 		Namespace: "demo-flux-helm",
@@ -290,6 +302,17 @@ func TestHelmReleaseStorageNamespacesWithClient(t *testing.T) {
 	payload, err := json.Marshal(rel)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if gzipped {
+		var b bytes.Buffer
+		w := gzip.NewWriter(&b)
+		if _, err := w.Write(payload); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		payload = b.Bytes()
 	}
 
 	client := fake.NewSimpleClientset(&corev1.Secret{
@@ -354,7 +377,29 @@ func TestResolveUpgradeChartPath_UsesSourceAffinity(t *testing.T) {
 	}
 }
 
+func TestResolveUpgradeChartPath_RepositoryHintDoesNotFallback(t *testing.T) {
+	client := testHelmClientWithRepoVersions(t, map[string][]string{
+		"bitnami": {"9.5.11"},
+		"argo":    {"9.5.10"},
+	})
+
+	_, _, err := client.resolveUpgradeChartPath("argo-cd", "9.5.11", "argo", nil)
+	if err == nil {
+		t.Fatal("expected target version missing from hinted repo")
+	}
+	if !strings.Contains(err.Error(), "chart argo-cd version 9.5.11 not found in repository argo") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
 func testHelmClientWithRepos(t *testing.T) *Client {
+	return testHelmClientWithRepoVersions(t, map[string][]string{
+		"bitnami": {"9.5.11"},
+		"argo":    {"9.5.11"},
+	})
+}
+
+func testHelmClientWithRepoVersions(t *testing.T, versionsByRepo map[string][]string) *Client {
 	t.Helper()
 	dir := t.TempDir()
 	cacheDir := filepath.Join(dir, "cache")
@@ -373,22 +418,29 @@ repositories:
 		t.Fatal(err)
 	}
 
-	writeIndex := func(name, url string) {
+	writeIndex := func(name string, versions []string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(cacheDir, name+"-index.yaml"), []byte(`apiVersion: v1
+		var b strings.Builder
+		b.WriteString(`apiVersion: v1
 entries:
   argo-cd:
-  - name: argo-cd
-    version: 9.5.11
+`)
+		for _, version := range versions {
+			b.WriteString(fmt.Sprintf(`  - name: argo-cd
+    version: %s
     urls:
-    - `+url+`
-generated: "2026-05-05T00:00:00Z"
-`), 0o644); err != nil {
+    - argo-cd-%s.tgz
+`, version, version))
+		}
+		b.WriteString(`generated: "2026-05-05T00:00:00Z"
+`)
+		if err := os.WriteFile(filepath.Join(cacheDir, name+"-index.yaml"), []byte(b.String()), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
-	writeIndex("bitnami", "argo-cd-9.5.11.tgz")
-	writeIndex("argo", "argo-cd-9.5.11.tgz")
+	for name, versions := range versionsByRepo {
+		writeIndex(name, versions)
+	}
 
 	return &Client{settings: &cli.EnvSettings{
 		RepositoryConfig: repoFile,

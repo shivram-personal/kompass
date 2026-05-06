@@ -536,7 +536,7 @@ export interface UpgradeInfo {
   error?: string
 }
 
-// Batch upgrade info (map of "namespace/name" to UpgradeInfo)
+// Batch upgrade info keyed by "storageNamespace/name".
 export interface BatchUpgradeInfo {
   releases: Record<string, UpgradeInfo>
 }

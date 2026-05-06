@@ -528,6 +528,13 @@ func releaseStorageKey(rel *release.Release) string {
 	return fmt.Sprintf("%s/%s/%d", rel.Namespace, rel.Name, rel.Version)
 }
 
+func releaseUpgradeKey(rel *release.Release, storageNamespace string) string {
+	if storageNamespace == "" {
+		storageNamespace = rel.Namespace
+	}
+	return storageNamespace + "/" + rel.Name
+}
+
 // toHelmRelease converts a helm release to our API type
 func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
 	hr := HelmRelease{
@@ -1407,19 +1414,22 @@ func (c *Client) Upgrade(namespace, name, targetVersion, repositoryName string) 
 // UpgradeWithProgress upgrades a release with progress reporting via a channel.
 // If progressCh is nil, progress messages are silently discarded.
 func (c *Client) UpgradeWithProgress(namespace, name, targetVersion, repositoryName string, progressCh chan<- InstallProgress) error {
-	sendProgress := func(phase, message, detail string) {
-		if progressCh == nil {
-			return
-		}
-		select {
-		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
-		default:
-		}
-	}
-
+	sendProgress := progressSender(progressCh)
 	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
 
 	actionConfig, err := c.getActionConfig(namespace)
+	if err != nil {
+		return err
+	}
+	return c.upgradeWith(actionConfig, name, targetVersion, repositoryName, sendProgress)
+}
+
+// UpgradeWithProgressAsUser upgrades a release with K8s impersonation and progress reporting.
+func (c *Client) UpgradeWithProgressAsUser(namespace, name, targetVersion, repositoryName, username string, groups []string, progressCh chan<- InstallProgress) error {
+	sendProgress := progressSender(progressCh)
+	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
+
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
 	if err != nil {
 		return err
 	}
@@ -1434,6 +1444,18 @@ func (c *Client) UpgradeAsUser(namespace, name, targetVersion, repositoryName st
 	}
 	noop := func(phase, message, detail string) {}
 	return c.upgradeWith(actionConfig, name, targetVersion, repositoryName, noop)
+}
+
+func progressSender(progressCh chan<- InstallProgress) func(phase, message, detail string) {
+	return func(phase, message, detail string) {
+		if progressCh == nil {
+			return
+		}
+		select {
+		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
+		default:
+		}
+	}
 }
 
 func (c *Client) upgradeWith(actionConfig *action.Configuration, name, targetVersion, repositoryName string, sendProgress func(phase, message, detail string)) error {
@@ -1549,6 +1571,9 @@ func (c *Client) resolveUpgradeChartPath(chartName, targetVersion, repositoryNam
 	}
 
 	if repositoryName != "" {
+		if len(indexErrors) > 0 {
+			return "", "", fmt.Errorf("failed to load Helm repository index for %s: %s", repositoryName, strings.Join(indexErrors, "; "))
+		}
 		return "", "", fmt.Errorf("chart %s version %s not found in repository %s", chartName, targetVersion, repositoryName)
 	}
 	if len(indexErrors) > 0 {
@@ -1600,6 +1625,18 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 		return result, nil
 	}
 
+	storageNamespaces := make(map[string]string, len(releases))
+	if namespace == "" {
+		storageNamespaces, err = helmReleaseStorageNamespaces(username, groups)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		for _, rel := range releases {
+			storageNamespaces[releaseStorageKey(rel)] = namespace
+		}
+	}
+
 	repoFile := c.settings.RepositoryConfig
 	f, err := repo.LoadFile(repoFile)
 	if err != nil {
@@ -1610,7 +1647,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 			log.Printf("[helm] failed to load repository config %s: %v", repoFile, err)
 		}
 		for _, rel := range releases {
-			key := rel.Namespace + "/" + rel.Name
+			key := releaseUpgradeKey(rel, storageNamespaces[releaseStorageKey(rel)])
 			result.Releases[key] = &UpgradeInfo{
 				CurrentVersion: rel.Chart.Metadata.Version,
 				Error:          message,
@@ -1660,7 +1697,7 @@ func (c *Client) batchCheckUpgrades(namespace, username string, groups []string)
 	}
 
 	for _, rel := range releases {
-		key := rel.Namespace + "/" + rel.Name
+		key := releaseUpgradeKey(rel, storageNamespaces[releaseStorageKey(rel)])
 		currentVersion := rel.Chart.Metadata.Version
 		info := &UpgradeInfo{CurrentVersion: currentVersion}
 
