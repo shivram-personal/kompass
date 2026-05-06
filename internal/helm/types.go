@@ -6,8 +6,9 @@ import (
 
 // HelmRelease represents a Helm release in the list view
 type HelmRelease struct {
-	Name             string    `json:"name"`
-	Namespace        string    `json:"namespace"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	// Empty means Helm stores release metadata in Namespace.
 	StorageNamespace string    `json:"storageNamespace,omitempty"`
 	Chart            string    `json:"chart"`
 	ChartVersion     string    `json:"chartVersion"`
@@ -33,8 +34,9 @@ type HelmRevision struct {
 
 // HelmReleaseDetail contains full details of a Helm release
 type HelmReleaseDetail struct {
-	Name             string            `json:"name"`
-	Namespace        string            `json:"namespace"`
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	// Empty means Helm stores release metadata in Namespace.
 	StorageNamespace string            `json:"storageNamespace,omitempty"`
 	Chart            string            `json:"chart"`
 	ChartVersion     string            `json:"chartVersion"`

@@ -439,6 +439,7 @@ export interface APIResource {
 export interface HelmRelease {
   name: string
   namespace: string
+  // Empty means Helm stores release metadata in namespace.
   storageNamespace?: string
   chart: string
   chartVersion: string
@@ -464,6 +465,7 @@ export interface HelmRevision {
 export interface HelmReleaseDetail {
   name: string
   namespace: string
+  // Empty means Helm stores release metadata in namespace.
   storageNamespace?: string
   chart: string
   chartVersion: string

@@ -29,10 +29,11 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
   const isForbidden = isForbiddenError(releasesError)
 
   // Lazy load upgrade info after releases are loaded
-  const { data: upgradeInfo, isLoading: upgradeLoading, refetch: refetchUpgradeInfo } = useHelmBatchUpgradeInfo(
+  const { data: upgradeInfo, isLoading: upgradeLoading, error: upgradeError, refetch: refetchUpgradeInfo } = useHelmBatchUpgradeInfo(
     namespace || undefined,
     Boolean(releases && releases.length > 0)
   )
+  const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade checks failed'
 
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(async () => {
     await Promise.all([refetchReleases(), refetchUpgradeInfo()])
@@ -232,6 +233,11 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
 
             {/* Releases Table */}
             <div className="flex-1 overflow-auto">
+              {upgradeError && (
+                <div className="m-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-300">
+                  Upgrade checks failed: {upgradeErrorMessage}
+                </div>
+              )}
               {isLoading ? (
                 <PaneLoader className="h-full" />
               ) : isForbidden ? (
