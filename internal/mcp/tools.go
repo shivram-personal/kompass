@@ -16,7 +16,10 @@ import (
 
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/internal/timeline"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
@@ -172,6 +175,38 @@ func registerTools(server *mcp.Server) {
 		Annotations: readOnly,
 	}, logToolCall("list_packages", handleListPackages))
 
+	// --- Issues (read-only) ---
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "issues",
+		Description: "Unified cluster-health view. Combines hardcoded problem detection " +
+			"(failing Deployments / StatefulSets / CronJobs / HPAs / Nodes / Jobs / PVCs), " +
+			"recent K8s Warning events, and a generic CRD .status.conditions[] " +
+			"fallback that lights up Argo / Flux / Knative / Crossplane / cert-manager / " +
+			"KEDA without per-integration code. Severity is normalized to " +
+			"critical / warning / info. Audit findings (best-practice scan) are excluded " +
+			"by default — pass source=audit to opt them in. Use this instead of " +
+			"get_dashboard when you want the full health picture across all sources, or " +
+			"to filter by severity / source / kind / namespace.",
+		Annotations: readOnly,
+	}, logToolCall("issues", handleIssuesTool))
+
+	// --- Search (read-only) ---
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "search",
+		Description: "Free-text resource search across this cluster's cache. Matches on " +
+			"name, namespace, label values, annotation values, container images, and " +
+			"kind. Tokens are AND'd. Modifiers: kind:Pod, ns:foo, label:app=bar, " +
+			"image:redis. Returns ranked hits with optional summary or raw object. " +
+			"Use this instead of list_resources when you don't already know the kind, " +
+			"namespace, or exact name — for example 'find anything called redis' or " +
+			"'show me everything pulling from quay.io/x'. Searches typed kinds plus " +
+			"any CRDs already warmed in the cache; cold CRDs need a list_resources " +
+			"call first to start watching.",
+		Annotations: readOnly,
+	}, logToolCall("search", handleSearch))
+
 	// --- Workload logs tool (read-only) ---
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -290,6 +325,23 @@ type podLogsInput struct {
 	Name      string `json:"name" jsonschema:"pod name"`
 	Container string `json:"container,omitempty" jsonschema:"container name, defaults to first container"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"number of lines to fetch from the end (default 200)"`
+}
+
+type searchInput struct {
+	Q       string `json:"q" jsonschema:"search string. Free tokens AND'd. Modifiers: kind:Pod, ns:foo, label:k=v, image:redis"`
+	Limit   int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
+	Include string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
+	Filter  string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
+}
+
+type issuesInput struct {
+	Namespace string `json:"namespace,omitempty" jsonschema:"filter to one namespace"`
+	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning,info"`
+	Source    string `json:"source,omitempty" jsonschema:"comma-separated: problem,audit,event,condition. audit excluded by default"`
+	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
+	Since     string `json:"since,omitempty" jsonschema:"event lookback window, e.g. 15m or 1h"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity, source, kind, group, namespace, name, reason, message, count (int), cluster, last_seen (unix seconds). Examples: 'severity == \"critical\" && count > 5', 'source == \"condition\" && namespace.startsWith(\"prod-\")'"`
 }
 
 // Tool handlers
@@ -1399,6 +1451,127 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard)
 		items, _ := nsLister.List(labels.Everything())
 		d.ResourceCounts["namespaces"] = len(items)
 	}
+}
+
+func handleIssuesTool(_ context.Context, _ *mcp.CallToolRequest, input issuesInput) (*mcp.CallToolResult, any, error) {
+	provider := issues.NewCacheProvider()
+	if provider == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+	filters := issues.Filters{
+		Severities: parseSeverityList(input.Severity),
+		Sources:    parseSourceList(input.Source),
+		Kinds:      splitCSVStr(input.Kind),
+		Limit:      input.Limit,
+	}
+	if input.Filter != "" {
+		f, err := filter.CachedIssueFilter(input.Filter)
+		if err != nil {
+			return nil, nil, fmt.Errorf("filter: %w", err)
+		}
+		filters.Filter = f
+	}
+	if input.Namespace != "" {
+		filters.Namespaces = []string{input.Namespace}
+	}
+	if d, err := time.ParseDuration(input.Since); err == nil && d > 0 {
+		filters.Since = d
+	}
+	// audit-source opt-in via either source list OR an explicit flag
+	// — honor the source list here since the input doesn't expose a
+	// separate include_audit knob.
+	for _, s := range filters.Sources {
+		if s == issues.SourceAudit {
+			filters.IncludeAudit = true
+			break
+		}
+	}
+	out := issues.Compose(provider, filters)
+	return toJSONResult(map[string]any{
+		"issues": out,
+		"total":  len(out),
+	})
+}
+
+func parseSeverityList(v string) []issues.Severity {
+	if v == "" {
+		return nil
+	}
+	var out []issues.Severity
+	for _, p := range strings.Split(v, ",") {
+		switch strings.ToLower(strings.TrimSpace(p)) {
+		case "critical":
+			out = append(out, issues.SeverityCritical)
+		case "warning":
+			out = append(out, issues.SeverityWarning)
+		case "info":
+			out = append(out, issues.SeverityInfo)
+		}
+	}
+	return out
+}
+
+func parseSourceList(v string) []issues.Source {
+	if v == "" {
+		return nil
+	}
+	var out []issues.Source
+	for _, p := range strings.Split(v, ",") {
+		switch strings.ToLower(strings.TrimSpace(p)) {
+		case "problem":
+			out = append(out, issues.SourceProblem)
+		case "audit":
+			out = append(out, issues.SourceAudit)
+		case "event":
+			out = append(out, issues.SourceEvent)
+		case "condition":
+			out = append(out, issues.SourceCondition)
+		}
+	}
+	return out
+}
+
+func splitCSVStr(v string) []string {
+	if v == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
+	provider := search.NewCacheProvider()
+	if provider == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+	include := search.IncludeSummary
+	switch input.Include {
+	case "raw":
+		include = search.IncludeRaw
+	case "none":
+		include = search.IncludeNone
+	}
+	opts := search.Options{
+		Limit:   input.Limit,
+		Include: include,
+	}
+	if input.Filter != "" {
+		f, err := filter.CachedObjectFilter(input.Filter)
+		if err != nil {
+			return nil, nil, fmt.Errorf("filter: %w", err)
+		}
+		opts.Filter = f
+	}
+	result, err := search.Search(ctx, provider, search.Parse(input.Q), opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	return toJSONResult(result)
 }
 
 // toJSONResult marshals data into a text content MCP result.
