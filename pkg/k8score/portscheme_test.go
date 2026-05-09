@@ -48,6 +48,7 @@ func TestInferPortScheme(t *testing.T) {
 		{"all empty -> empty", "", "", 0, ""},
 
 		{"appProtocol overrides conflicting name", "https", "http", 80, "http"},
+		{"appProtocol cleartext (grpc) wins over https name", "https", "grpc", 443, "http"},
 		{"name overrides conflicting port", "https", "", 80, "https"},
 		{"https in middle of name still matches", "x-https-y", "", 0, "https"},
 		{"name with whitespace trimmed", "  https  ", "", 0, "https"},

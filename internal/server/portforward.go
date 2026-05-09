@@ -37,7 +37,7 @@ type PortForwardSession struct {
 	LocalPort     int       `json:"localPort"`
 	ListenAddress string    `json:"listenAddress"` // "127.0.0.1" or "0.0.0.0"
 	ServiceName   string    `json:"serviceName,omitempty"` // If forwarding to a service
-	Scheme        string    `json:"scheme,omitempty"`      // "https" / "http" / "" — guessed from appProtocol/name/port
+	Scheme        string    `json:"scheme,omitempty"`      // "https", "http", or "" if unknown
 	StartedAt     time.Time `json:"startedAt"`
 	Status        string    `json:"status"` // "running", "stopped", "error"
 	Error         string    `json:"error,omitempty"`
@@ -445,8 +445,7 @@ func resolveNamedPort(pod *corev1.Pod, portName string) (int, bool) {
 }
 
 // validatePodPort checks if the pod actually exposes the requested port and
-// returns the URL scheme inferred from the matching container port's
-// appProtocol/name/number ("https"/"http"/"" — empty when no signal).
+// returns the URL scheme inferred from the matching container port.
 // Uses the caller-supplied impersonated client so the pod read is subject
 // to the user's K8s RBAC.
 func validatePodPort(ctx context.Context, client kubernetes.Interface, namespace, podName string, port int) (string, error) {
@@ -518,7 +517,7 @@ type AvailablePort struct {
 	Protocol      string `json:"protocol"`
 	ContainerName string `json:"containerName"`
 	Name          string `json:"name,omitempty"` // Named port
-	Scheme        string `json:"scheme,omitempty"` // "https" / "http" / "" — guessed from appProtocol/name/port
+	Scheme        string `json:"scheme,omitempty"` // "https", "http", or "" if unknown
 }
 
 // AvailablePortsResponse is the response for the available ports endpoint
