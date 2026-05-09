@@ -1348,6 +1348,7 @@ export interface AvailablePort {
   protocol: string
   containerName?: string
   name?: string
+  scheme?: 'http' | 'https'
 }
 
 export function useAvailablePorts(type: 'pod' | 'service', namespace: string, name: string) {

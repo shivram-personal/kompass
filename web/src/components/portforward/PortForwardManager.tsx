@@ -42,9 +42,14 @@ interface PortForwardSession {
   localPort: number
   listenAddress: string
   serviceName?: string
+  scheme?: 'http' | 'https'
   startedAt: string
   status: 'running' | 'stopped' | 'error'
   error?: string
+}
+
+function sessionUrl(session: PortForwardSession): string {
+  return `${session.scheme || 'http'}://localhost:${session.localPort}`
 }
 
 // --- Shared query ------------------------------------------------------------
@@ -521,7 +526,7 @@ export function PortForwardPanel() {
     async (session: PortForwardSession) => {
       commitInteraction()
       try {
-        await navigator.clipboard.writeText(`http://localhost:${session.localPort}`)
+        await navigator.clipboard.writeText(sessionUrl(session))
       } catch (err) {
         // Clipboard API can reject in non-secure contexts, denied permissions, or
         // when the document isn't focused. Surface the failure — the checkmark
@@ -544,7 +549,7 @@ export function PortForwardPanel() {
   const handleOpenUrl = useCallback(
     (session: PortForwardSession) => {
       commitInteraction()
-      openExternal(`http://localhost:${session.localPort}`)
+      openExternal(sessionUrl(session))
     },
     [commitInteraction]
   )
