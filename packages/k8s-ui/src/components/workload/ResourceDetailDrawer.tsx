@@ -9,6 +9,8 @@ interface ResourceDetailDrawerProps {
   onNavigate?: (resource: SelectedResource) => void
   /** Open directly to YAML view */
   initialTab?: 'detail' | 'yaml'
+  /** Called when the user toggles the YAML view inside the drawer (for URL sync). */
+  onYamlChange?: (yaml: boolean) => void
   /** Controls slide-in/out animation (driven by useAnimatedUnmount) */
   isOpen?: boolean
   /** Whether the drawer is expanded to full-screen WorkloadView */
@@ -28,6 +30,7 @@ interface ResourceDetailDrawerProps {
     resource: SelectedResource
     expanded: boolean
     initialTab?: 'detail' | 'yaml'
+    onYamlChange?: (yaml: boolean) => void
     onClose: () => void
     onExpand?: () => void
     onBack?: () => void
@@ -51,7 +54,7 @@ function getDefaultWidth(kind: string): number {
   return WIDE_KINDS.has(kind.toLowerCase()) ? WIDE_WIDTH : DEFAULT_WIDTH
 }
 
-export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true, expanded, onCollapse, onExpand, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, children }: ResourceDetailDrawerProps) {
+export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, onYamlChange, isOpen = true, expanded, onCollapse, onExpand, onNavigateToResource, headerHeight: headerHeightProp, leftOffset = 0, children }: ResourceDetailDrawerProps) {
   const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartX = useRef(0)
@@ -147,6 +150,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         resource,
         expanded: !!expanded,
         initialTab,
+        onYamlChange,
         onClose,
         onExpand: onExpand ? () => onExpand(resource) : undefined,
         onBack: onCollapse ? () => onCollapse() : undefined,

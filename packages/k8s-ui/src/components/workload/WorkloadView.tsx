@@ -109,6 +109,8 @@ interface WorkloadViewProps {
   activeTab?: TabType
   /** Called when tab changes (for URL sync etc.) */
   onTabChange?: (tab: TabType) => void
+  /** Called when the drawer YAML toggle flips (for URL sync of `?view=yaml`). */
+  onYamlChange?: (yaml: boolean) => void
 
   // ── Render props for platform-specific content ───────────────────────────
   /** Render the logs tab content */
@@ -184,6 +186,7 @@ export function WorkloadView({
   // Tab state
   activeTab: controlledTab,
   onTabChange,
+  onYamlChange,
   // Render props
   renderLogsTab,
   renderMetricsTab,
@@ -223,7 +226,8 @@ export function WorkloadView({
     // a new transition supersedes an in-flight one (rapid clicks).
     // (SKY-833 bug 49)
     startViewTransitionSafe(() => flushSync(() => setShowYaml(yaml)))
-  }, [])
+    onYamlChange?.(yaml)
+  }, [onYamlChange])
 
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [zoom, setZoom] = useState<ZoomLevel>(1)

@@ -110,6 +110,7 @@ interface WorkloadViewProps {
   onClose?: () => void
   onExpand?: () => void
   initialTab?: 'detail' | 'yaml'
+  onYamlChange?: (yaml: boolean) => void
   group?: string
 }
 

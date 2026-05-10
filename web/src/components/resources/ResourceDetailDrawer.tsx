@@ -8,6 +8,8 @@ interface ResourceDetailDrawerProps {
   onNavigate?: (resource: SelectedResource) => void
   /** Open directly to YAML view */
   initialTab?: 'detail' | 'yaml'
+  /** Called when the drawer YAML toggle flips (for `?view=yaml` URL sync). */
+  onYamlChange?: (yaml: boolean) => void
   /** Controls slide-in/out animation (driven by useAnimatedUnmount) */
   isOpen?: boolean
   /** Whether the drawer is expanded to full-screen WorkloadView */
@@ -23,7 +25,7 @@ interface ResourceDetailDrawerProps {
 export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
   return (
     <BaseResourceDetailDrawer {...props}>
-      {({ resource, expanded, initialTab, onClose, onExpand, onBack, onNavigateToResource, onCollapseToDrawer }) => (
+      {({ resource, expanded, initialTab, onYamlChange, onClose, onExpand, onBack, onNavigateToResource, onCollapseToDrawer }) => (
         <WorkloadView
           kind={resource.kind}
           namespace={resource.namespace}
@@ -31,6 +33,7 @@ export function ResourceDetailDrawer(props: ResourceDetailDrawerProps) {
           group={resource.group}
           expanded={expanded}
           initialTab={initialTab}
+          onYamlChange={onYamlChange}
           onClose={onClose}
           onExpand={onExpand}
           onBack={onBack ?? (() => {})}

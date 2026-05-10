@@ -1280,7 +1280,12 @@ function AppInner() {
           <ResourcesView
             namespaces={namespaces}
             selectedResource={routeSelectedResource}
-            onResourceClick={(res) => res ? navigateToResource(res) : setSelectedResource(null)}
+            onResourceClick={(res) => {
+              if (!res) { setSelectedResource(null); return }
+              // Honor `?view=yaml` when restoring from a deep link.
+              const view = new URLSearchParams(window.location.search).get('view')
+              navigateToResource(res, view === 'yaml' ? 'yaml' : 'detail')
+            }}
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
           />
@@ -1374,9 +1379,22 @@ function AppInner() {
         <ResourceDetailDrawer
           resource={drawerResource}
           initialTab={drawerInitialTab}
+          onYamlChange={(yaml) => {
+            setDrawerInitialTab(yaml ? 'yaml' : 'detail')
+            const params = new URLSearchParams(window.location.search)
+            if (yaml) params.set('view', 'yaml'); else params.delete('view')
+            setSearchParams(params, { replace: true })
+          }}
           isOpen={resourceDrawer.isOpen}
           expanded={drawerExpanded}
-          onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail'); setDrawerExpanded(false) }}
+          onClose={() => {
+            setSelectedResource(null)
+            setDrawerInitialTab('detail')
+            setDrawerExpanded(false)
+            const params = new URLSearchParams(window.location.search)
+            params.delete('view')
+            setSearchParams(params, { replace: true })
+          }}
           onNavigate={(res) => navigateToResource(res)}
           onExpand={(res) => {
             suppressViewClearRef.current = true
