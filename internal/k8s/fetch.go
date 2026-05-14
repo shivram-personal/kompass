@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -710,5 +711,26 @@ func SetTypeMeta(resource any) {
 	case *policyv1.PodDisruptionBudget:
 		r.APIVersion = "policy/v1"
 		r.Kind = "PodDisruptionBudget"
+	case *networkingv1.NetworkPolicy:
+		r.APIVersion = "networking.k8s.io/v1"
+		r.Kind = "NetworkPolicy"
+	case *corev1.ServiceAccount:
+		r.APIVersion = "v1"
+		r.Kind = "ServiceAccount"
+	case *corev1.LimitRange:
+		r.APIVersion = "v1"
+		r.Kind = "LimitRange"
+	case *rbacv1.Role:
+		r.APIVersion = "rbac.authorization.k8s.io/v1"
+		r.Kind = "Role"
+	case *rbacv1.ClusterRole:
+		r.APIVersion = "rbac.authorization.k8s.io/v1"
+		r.Kind = "ClusterRole"
+	case *rbacv1.RoleBinding:
+		r.APIVersion = "rbac.authorization.k8s.io/v1"
+		r.Kind = "RoleBinding"
+	case *rbacv1.ClusterRoleBinding:
+		r.APIVersion = "rbac.authorization.k8s.io/v1"
+		r.Kind = "ClusterRoleBinding"
 	}
 }
