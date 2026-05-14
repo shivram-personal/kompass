@@ -2,14 +2,16 @@ package k8s
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	clienttesting "k8s.io/client-go/testing"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
@@ -164,42 +166,164 @@ func TestCapabilitiesAlignment_FullyAllowedProbeSetsEveryField(t *testing.T) {
 	}
 }
 
-// TestApplyDiscoveryGate_DeniesOnNotFoundForDynamic asserts the discovery
-// gate denies a dynamic probe when the API returns NotFound (CRD not
-// installed), and clears the transient so it doesn't shorten the cache TTL.
-// Typed probes (requiresDiscovery=false) are unaffected.
-func TestApplyDiscoveryGate_DeniesOnNotFoundForDynamic(t *testing.T) {
-	notFound := apierrors.NewNotFound(schema.GroupResource{Group: "gateway.networking.k8s.io", Resource: "gateways"}, "")
+// TestCapabilitiesAlignment_DynamicVersionsCoverage asserts every probe
+// marked requiresDiscovery resolves to at least one GVR via
+// supportedCRDFallbacks. Catches the failure mode that motivated this:
+// a hardcoded v1 probe diverging from the supportedCRDFallbacks version
+// list, leading to capabilities reporting `false` on clusters serving
+// only v1beta1.
+func TestCapabilitiesAlignment_DynamicVersionsCoverage(t *testing.T) {
+	probes := resourceProbeTargets(&ResourcePermissions{})
+	for _, p := range probes {
+		if !p.requiresDiscovery {
+			continue
+		}
+		gvrs := resolveProbeGVRs(p)
+		if len(gvrs) == 0 {
+			t.Errorf("dynamic probe %q resolved to zero GVRs — supportedCRDFallbacks must list at least one version for (group=%q, resource=%q).",
+				p.key, p.gvr.Group, p.gvr.Resource)
+			continue
+		}
+		// Every resolved GVR must match the (group, resource) of the probe.
+		for _, gvr := range gvrs {
+			if gvr.Group != p.gvr.Group || gvr.Resource != p.gvr.Resource {
+				t.Errorf("dynamic probe %q resolved GVR %v whose group/resource doesn't match probe gvr %v — supportedCRDFallbacks lookup is buggy.",
+					p.key, gvr, p.gvr)
+			}
+		}
+	}
+}
 
-	// Dynamic + NotFound → denied, transient cleared.
-	allowed, transient := applyDiscoveryGate(true, notFound, true)
-	if allowed {
-		t.Errorf("dynamic probe with NotFound should be denied, got allowed=true")
+// TestProbeKindAccess covers both single-version typed probes and
+// multi-version dynamic probes. The dynamic-CRD cases are the load-bearing
+// ones — they validate that we don't false-negative on clusters serving
+// only a beta version of Gateway API or VPA.
+func TestProbeKindAccess(t *testing.T) {
+	gateways := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Resource: "gateways"}
+
+	// Find the live Gateway probe so we use the real probe configuration.
+	var gatewayProbe resourceProbe
+	for _, p := range resourceProbeTargets(&ResourcePermissions{}) {
+		if p.key == "gateways" {
+			gatewayProbe = p
+			break
+		}
 	}
-	if transient != nil {
-		t.Errorf("dynamic probe with NotFound should clear transient (it's expected, not an API hiccup), got %v", transient)
+	if gatewayProbe.field == nil {
+		t.Fatal("gateway probe not found — alignment with resourceProbeTargets broken")
+	}
+	if !gatewayProbe.requiresDiscovery {
+		t.Fatal("gateway probe should have requiresDiscovery=true")
 	}
 
-	// Typed + NotFound → optimistic-allow preserved (typed GVRs always exist;
-	// if we ever see NotFound from one, it's a transient API hiccup).
-	allowed, transient = applyDiscoveryGate(true, notFound, false)
-	if !allowed {
-		t.Errorf("typed probe with NotFound should preserve optimistic-allow, got allowed=false")
-	}
-	if transient != notFound {
-		t.Errorf("typed probe should preserve the transient error for TTL shortening")
+	// Sanity: supportedCRDFallbacks should have multiple versions for gateways.
+	gvrs := resolveProbeGVRs(gatewayProbe)
+	if len(gvrs) < 2 {
+		t.Fatalf("expected multiple version GVRs for gateways probe, got %v — test premise no longer holds", gvrs)
 	}
 
-	// Dynamic + non-NotFound transient (a server error or arbitrary
-	// network failure) → optimistic-allow preserved. We only gate on the
-	// specific NotFound case because that's "CRD not installed"; everything
-	// else is a real hiccup the reflector will retry.
-	other := &apierrors.StatusError{ErrStatus: metav1.Status{Code: 503, Reason: metav1.StatusReasonServiceUnavailable}}
-	allowed, transient = applyDiscoveryGate(true, other, true)
-	if !allowed {
-		t.Errorf("dynamic probe with non-NotFound transient should preserve optimistic-allow, got allowed=false")
+	// --- Dynamic probe: any version available → allowed.
+	// Simulates "v1beta1 installed, v1 not yet" — the reviewer's main case.
+	t.Run("dynamic_anyVersionAvailable_allowed", func(t *testing.T) {
+		dyn := fakeDynForGVRs(t, func(gvr schema.GroupVersionResource, _ string) (allow bool, notFound bool) {
+			if gvr.Group == gateways.Group && gvr.Resource == gateways.Resource && gvr.Version == "v1beta1" {
+				return true, false
+			}
+			if gvr.Group == gateways.Group && gvr.Resource == gateways.Resource {
+				return false, true // v1 not installed
+			}
+			return true, false
+		})
+		allowed, forbidden, transient := probeKindAccess(context.Background(), dyn, gatewayProbe, "")
+		if !allowed || forbidden || transient != nil {
+			t.Errorf("v1 NotFound but v1beta1 allowed should report allowed=true, got allowed=%v forbidden=%v transient=%v", allowed, forbidden, transient)
+		}
+	})
+
+	// --- Dynamic probe: all versions NotFound → denied (CRD not installed).
+	t.Run("dynamic_allVersionsNotFound_denied", func(t *testing.T) {
+		dyn := fakeDynForGVRs(t, func(gvr schema.GroupVersionResource, _ string) (allow bool, notFound bool) {
+			if gvr.Group == gateways.Group && gvr.Resource == gateways.Resource {
+				return false, true
+			}
+			return true, false
+		})
+		allowed, forbidden, transient := probeKindAccess(context.Background(), dyn, gatewayProbe, "")
+		if allowed || forbidden || transient != nil {
+			t.Errorf("CRD not installed at any version should deny cleanly, got allowed=%v forbidden=%v transient=%v", allowed, forbidden, transient)
+		}
+	})
+
+	// --- Dynamic probe: any version Forbidden → denied (RBAC). RBAC rules
+	// are version-agnostic in K8s so we short-circuit on the first 403.
+	t.Run("dynamic_anyVersionForbidden_denied", func(t *testing.T) {
+		dyn := fakeDyn(t, func(gvr schema.GroupVersionResource, _ string) bool {
+			return !(gvr.Group == gateways.Group && gvr.Resource == gateways.Resource)
+		})
+		allowed, forbidden, transient := probeKindAccess(context.Background(), dyn, gatewayProbe, "")
+		if allowed || !forbidden || transient != nil {
+			t.Errorf("forbidden on any version should report forbidden=true, got allowed=%v forbidden=%v transient=%v", allowed, forbidden, transient)
+		}
+	})
+
+	// --- Typed probe: behaves like probeListAccessWith.
+	t.Run("typed_singleGVRBehavior", func(t *testing.T) {
+		var podsProbe resourceProbe
+		for _, p := range resourceProbeTargets(&ResourcePermissions{}) {
+			if p.key == "pods" {
+				podsProbe = p
+				break
+			}
+		}
+		if podsProbe.requiresDiscovery {
+			t.Fatal("pods probe should have requiresDiscovery=false")
+		}
+		dyn := fakeDyn(t, func(_ schema.GroupVersionResource, _ string) bool { return true })
+		allowed, forbidden, transient := probeKindAccess(context.Background(), dyn, podsProbe, "")
+		if !allowed || forbidden || transient != nil {
+			t.Errorf("typed pods probe with allow-all should report allowed, got allowed=%v forbidden=%v transient=%v", allowed, forbidden, transient)
+		}
+	})
+}
+
+// fakeDynForGVRs is like fakeDyn but the predicate returns (allow, notFound)
+// so tests can distinguish "denied by RBAC" (allow=false, notFound=false →
+// 403 Forbidden) from "version not installed" (allow=false, notFound=true →
+// 404 NotFound). The former is the reviewer's "RBAC denied" case; the latter
+// is the "CRD not installed at this version" case.
+func fakeDynForGVRs(t *testing.T, gate func(gvr schema.GroupVersionResource, namespace string) (allow bool, notFound bool)) dynamic.Interface {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	gvrToListKind := map[schema.GroupVersionResource]string{}
+	perms := &ResourcePermissions{}
+	for _, p := range resourceProbeTargets(perms) {
+		for _, gvr := range resolveProbeGVRs(p) {
+			gvrToListKind[gvr] = gvr.Resource + "List"
+		}
 	}
-	if !errors.Is(transient, other) && transient != error(other) {
-		t.Errorf("dynamic probe with non-NotFound transient should preserve the error, got %v", transient)
-	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind)
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		la, ok := action.(clienttesting.ListAction)
+		if !ok {
+			return false, nil, nil
+		}
+		gvr := la.GetResource()
+		ns := la.GetNamespace()
+		allow, notFound := gate(gvr, ns)
+		if allow {
+			return false, nil, nil
+		}
+		if notFound {
+			return true, nil, apierrors.NewNotFound(
+				schema.GroupResource{Group: gvr.Group, Resource: gvr.Resource},
+				"",
+			)
+		}
+		return true, nil, apierrors.NewForbidden(
+			schema.GroupResource{Group: gvr.Group, Resource: gvr.Resource},
+			"",
+			nil,
+		)
+	})
+	return client
 }

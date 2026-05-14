@@ -656,20 +656,82 @@ func probeListAccessWith(ctx context.Context, dyn dynamic.Interface, gvr schema.
 	return true, false, err
 }
 
-// applyDiscoveryGate handles probe entries marked requiresDiscovery. A
-// NotFound on the list probe means the CRD isn't installed in the cluster
-// (vs. RBAC denial which surfaces as Forbidden, or a real transient like
-// a 5xx). We deny in that case and clear the transient error so a missing
-// CRD doesn't shorten the cache TTL — it's an expected steady-state, not
-// an API hiccup. For non-dynamic probes the behavior is unchanged.
-func applyDiscoveryGate(allowed bool, transient error, requiresDiscovery bool) (bool, error) {
-	if !requiresDiscovery || transient == nil {
-		return allowed, transient
+// probeKindAccess probes a resource kind. For typed probes (single GVR)
+// this is a thin wrapper over probeListAccessWith. For dynamic CRD probes
+// (requiresDiscovery=true) it walks every version registered in
+// supportedCRDFallbacks for the (group, resource) and treats the kind as
+// "not installed" only when every version returns NotFound — otherwise
+// a cluster serving only v1beta1 Gateway API would be wrongly reported
+// as having no Gateway API at all.
+//
+// Returns the same (allowed, forbidden, transient) shape as
+// probeListAccessWith. For dynamic probes the discovery decision lives
+// here, not in a separate gate, because the cross-version reasoning
+// can't be expressed on a single (allowed, transient) tuple — only the
+// full set of per-version outcomes can tell "CRD entirely absent" apart
+// from "this one version missing".
+func probeKindAccess(ctx context.Context, dyn dynamic.Interface, p resourceProbe, namespace string) (allowed bool, forbidden bool, transient error) {
+	if !p.requiresDiscovery {
+		return probeListAccessWith(ctx, dyn, p.gvr, namespace)
 	}
-	if apierrors.IsNotFound(transient) {
-		return false, nil
+	gvrs := resolveProbeGVRs(p)
+	var (
+		sawForbidden    bool
+		lastNonNotFound error
+	)
+	for _, gvr := range gvrs {
+		a, f, t := probeListAccessWith(ctx, dyn, gvr, namespace)
+		if a && t == nil {
+			return true, false, nil
+		}
+		if f {
+			// RBAC rules are version-agnostic in K8s (apiGroups stanza
+			// names the group, not specific versions), so a 403 on any
+			// version means all versions are denied. Short-circuit.
+			sawForbidden = true
+			break
+		}
+		if t != nil && !apierrors.IsNotFound(t) {
+			lastNonNotFound = t
+		}
 	}
-	return allowed, transient
+	if sawForbidden {
+		return false, true, nil
+	}
+	if lastNonNotFound != nil {
+		// At least one version hit a real transient (5xx, network, etc.).
+		// Preserve optimistic-allow so the informer can retry rather than
+		// permanently disabling the resource for the session — matches the
+		// behavior for typed kinds in probeListAccessWith.
+		return true, false, lastNonNotFound
+	}
+	// All versions returned NotFound — CRD truly not installed.
+	return false, false, nil
+}
+
+// resolveProbeGVRs returns the GVRs to probe for a resource. Typed probes
+// return their single configured GVR. Dynamic CRD probes return every
+// version registered in supportedCRDFallbacks for the (group, resource),
+// so the probe matches what the dynamic cache can actually serve. Falls
+// back to the configured GVR if no fallback entry matches (which would
+// be flagged by the alignment test, but we still want to probe something).
+func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
+	if !p.requiresDiscovery {
+		return []schema.GroupVersionResource{p.gvr}
+	}
+	for _, c := range supportedCRDFallbacks {
+		if c.Group != p.gvr.Group || c.Resource != p.gvr.Resource {
+			continue
+		}
+		out := make([]schema.GroupVersionResource, 0, len(c.Versions))
+		for _, v := range c.Versions {
+			out = append(out, schema.GroupVersionResource{Group: c.Group, Version: v, Resource: c.Resource})
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return []schema.GroupVersionResource{p.gvr}
 }
 
 // CheckResourcePermissions probes list access for every typed resource and
@@ -781,8 +843,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 				// namespace, so a cluster-admin who scoped to a namespace still
 				// sees Node counts, Namespace lists, and node metrics.
 				if p.clusterOnly {
-					allowed, _, transient := probeListAccessWith(ctx, dyn, p.gvr, "")
-					allowed, transient = applyDiscoveryGate(allowed, transient, p.requiresDiscovery)
+					allowed, _, transient := probeKindAccess(ctx, dyn, p, "")
 					if transient != nil {
 						hadErrors.Store(true)
 					}
@@ -794,8 +855,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 				if scopeNs == "" {
 					return
 				}
-				nsAllowed, _, nsTransient := probeListAccessWith(ctx, dyn, p.gvr, scopeNs)
-				nsAllowed, nsTransient = applyDiscoveryGate(nsAllowed, nsTransient, p.requiresDiscovery)
+				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, scopeNs)
 				if nsTransient != nil {
 					hadErrors.Store(true)
 				}
@@ -805,8 +865,7 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 				return
 			}
 
-			allowed, forbidden, transient := probeListAccessWith(ctx, dyn, p.gvr, "")
-			allowed, transient = applyDiscoveryGate(allowed, transient, p.requiresDiscovery)
+			allowed, forbidden, transient := probeKindAccess(ctx, dyn, p, "")
 			if transient != nil {
 				hadErrors.Store(true)
 			}
@@ -815,13 +874,13 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 				return
 			}
 			// Cluster-wide denied. Cluster-scoped kinds have no fallback.
-			// Dynamic CRDs that were denied via the discovery gate also skip
-			// the fallback — a namespace probe would hit the same NotFound.
+			// Dynamic CRDs that were marked not-installed (all versions
+			// returned NotFound) also skip the fallback — the namespace
+			// probe would hit the same NotFound for every version.
 			if !forbidden || p.clusterOnly || scopeNs == "" {
 				return
 			}
-			nsAllowed, _, nsTransient := probeListAccessWith(ctx, dyn, p.gvr, scopeNs)
-			nsAllowed, nsTransient = applyDiscoveryGate(nsAllowed, nsTransient, p.requiresDiscovery)
+			nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, scopeNs)
 			if nsTransient != nil {
 				hadErrors.Store(true)
 			}
