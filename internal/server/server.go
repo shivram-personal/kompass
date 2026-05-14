@@ -658,13 +658,18 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Resource permissions come straight from the cached probe result, which
-	// already populates every field of ResourcePermissions via field pointers
-	// in resourceProbeTargets(). Using GetEnabledResources() instead would
-	// silently drop fields that have no typed informer (Gateway, HTTPRoute,
-	// VerticalPodAutoscaler — served via the dynamic cache) and any newly
-	// added struct field that the hand-mapped block here didn't cover. If
-	// the probe hasn't run yet (cache initialized but probe never invoked),
-	// kick one off so the response isn't blank on startup.
+	// populates every field of ResourcePermissions via field pointers in
+	// resourceProbeTargets(). Using GetEnabledResources() instead would
+	// silently drop fields that have no typed informer (the dynamic-cache
+	// CRDs surface via probe-result only). The probe-not-yet-run fallback
+	// kicks off a probe so the response isn't blank on startup.
+	//
+	// Intentionally NOT guarded by s.requireConnected — the frontend polls
+	// /api/capabilities to detect disconnect/loading state, so the endpoint
+	// must still respond when the cluster isn't connected. A nil
+	// caps.Resources (resources field omitted from JSON) is the documented
+	// "no probe data yet" signal; the frontend has separate connection
+	// state to distinguish loading from RBAC restrictions.
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		caps.Resources = result.Perms
 	} else if k8s.GetResourceCache() != nil {

@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -75,6 +76,13 @@ type ResourceSummary struct {
 // every per-type summarizer; all K8s resource types implement
 // metav1.Object, so the cast is universal.
 func summarize(obj runtime.Object) (*ResourceSummary, error) {
+	// Typed-nil-through-interface trap: a (*v1.Pod)(nil) assigned to
+	// runtime.Object compares != nil but calling methods panics. Catch
+	// it once at the boundary so per-type summarizers and
+	// applyLifecycleFields can assume non-nil concrete values.
+	if isNilObject(obj) {
+		return &ResourceSummary{Kind: "Unknown"}, nil
+	}
 	var s *ResourceSummary
 	switch o := obj.(type) {
 	case *corev1.Pod:
@@ -108,24 +116,21 @@ func summarize(obj runtime.Object) (*ResourceSummary, error) {
 	case *corev1.Namespace:
 		s = summarizeNamespace(o)
 	default:
-		// Generic fallback: any typed K8s object exposes name / namespace /
-		// kind / age via the metav1.Object + runtime.Object interfaces.
-		// Returning a usable summary keeps MCP list_resources working for
-		// kinds we haven't written an explicit summarizer for (PV,
-		// StorageClass, NetworkPolicy, ServiceAccount, LimitRange,
-		// PodDisruptionBudget, VPA, RBAC kinds, …) — better than erroring
-		// out and breaking the whole list. Add an explicit case above when
-		// richer per-kind output is genuinely worth maintaining.
+		// Generic fallback is better than erroring — a single unsupported
+		// kind would otherwise break the whole MCP list_resources response.
+		// Add an explicit case above when richer per-kind output is worth
+		// maintaining.
 		s = summarizeGeneric(obj)
 	}
 	applyLifecycleFields(s, obj)
 	return s, nil
 }
 
-// summarizeGeneric builds a minimal ResourceSummary from the metadata any
-// typed K8s object exposes via the metav1.Object interface. Used as the
-// default for kinds without a hand-written summarizer.
+// summarizeGeneric is the default summarizer for kinds without a hand-written case.
 func summarizeGeneric(obj runtime.Object) *ResourceSummary {
+	if isNilObject(obj) {
+		return &ResourceSummary{Kind: "Unknown"}
+	}
 	s := &ResourceSummary{}
 	if kinder, ok := obj.(interface{ GetObjectKind() schema.ObjectKind }); ok {
 		s.Kind = kinder.GetObjectKind().GroupVersionKind().Kind
@@ -152,6 +157,17 @@ func summarizeGeneric(obj runtime.Object) *ResourceSummary {
 	s.Namespace = mo.GetNamespace()
 	s.Age = age(mo.GetCreationTimestamp().Time)
 	return s
+}
+
+// isNilObject handles Go's typed-nil-in-interface trap: a (*v1.Pod)(nil)
+// assigned to a runtime.Object interface compares != nil but calling
+// methods on it panics. Reflection is the only way to detect this case.
+func isNilObject(obj runtime.Object) bool {
+	if obj == nil {
+		return true
+	}
+	v := reflect.ValueOf(obj)
+	return v.Kind() == reflect.Ptr && v.IsNil()
 }
 
 // applyLifecycleFields populates Terminating + Finalizers on a

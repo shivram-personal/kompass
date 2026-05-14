@@ -1,9 +1,8 @@
 // Topology types matching the Go backend
 
-// Per-resource-type RBAC permissions. Field names MUST match the backend
-// JSON keys exactly — see ResourcePermissions in internal/k8s/capabilities.go.
-// A reflection-based Go test enforces the struct↔probe↔informer alignment;
-// this TS interface is the third leg and is kept in sync by hand.
+// Per-resource-type RBAC permissions. Field names must match the JSON keys
+// produced by ResourcePermissions in internal/k8s/capabilities.go — there
+// is no automated check across the Go/TS boundary.
 export interface ResourcePermissions {
   pods: boolean
   services: boolean

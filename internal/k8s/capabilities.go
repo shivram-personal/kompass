@@ -557,18 +557,19 @@ type resourceProbe struct {
 	gvr         schema.GroupVersionResource // For dynamic-client probe
 	clusterOnly bool                        // true: cannot be namespace-scoped (nodes, namespaces, PV, storageclasses)
 	field       *bool                       // Pointer into the boolean view on ResourcePermissions
-	// requiresDiscovery: dynamic-cache CRD entries (Gateway/HTTPRoute/VPA).
-	// For these, a NotFound on the list probe means "CRD isn't installed"
-	// and we report the field as false — instead of the optimistic-allow
-	// behavior used for typed kinds (whose GVR always exists). Without this
-	// gate, capabilities.resources would report `gateways: true` on clusters
-	// that don't have Gateway API installed.
+	// requiresDiscovery marks dynamic-cache CRDs. For these, a NotFound on
+	// the list probe means "CRD isn't installed" and we report the field
+	// as false. Without this gate, capabilities.resources would
+	// optimistically report true on clusters that don't have the CRD
+	// installed, because probeListAccessWith treats NotFound the same as
+	// any other transient error.
 	requiresDiscovery bool
 }
 
-// resourceProbeTargets returns the typed informer kinds we probe access for.
-// Includes Gateway / HTTPRoute even though they live in the dynamic cache —
-// the boolean lives in ResourcePermissions and is consumed by the UI snapshot.
+// resourceProbeTargets returns the resource kinds we probe access for.
+// Includes dynamic-cache CRDs (those tagged requiresDiscovery) so their
+// booleans land on ResourcePermissions for the UI snapshot — the dynamic
+// cache doesn't write here itself.
 func resourceProbeTargets(perms *ResourcePermissions) []resourceProbe {
 	return []resourceProbe{
 		{key: k8score.Pods, gvr: schema.GroupVersionResource{Version: "v1", Resource: "pods"}, field: &perms.Pods},
@@ -663,13 +664,6 @@ func probeListAccessWith(ctx context.Context, dyn dynamic.Interface, gvr schema.
 // "not installed" only when every version returns NotFound — otherwise
 // a cluster serving only v1beta1 Gateway API would be wrongly reported
 // as having no Gateway API at all.
-//
-// Returns the same (allowed, forbidden, transient) shape as
-// probeListAccessWith. For dynamic probes the discovery decision lives
-// here, not in a separate gate, because the cross-version reasoning
-// can't be expressed on a single (allowed, transient) tuple — only the
-// full set of per-version outcomes can tell "CRD entirely absent" apart
-// from "this one version missing".
 func probeKindAccess(ctx context.Context, dyn dynamic.Interface, p resourceProbe, namespace string) (allowed bool, forbidden bool, transient error) {
 	if !p.requiresDiscovery {
 		return probeListAccessWith(ctx, dyn, p.gvr, namespace)
@@ -685,9 +679,13 @@ func probeKindAccess(ctx context.Context, dyn dynamic.Interface, p resourceProbe
 			return true, false, nil
 		}
 		if f {
-			// RBAC rules are version-agnostic in K8s (apiGroups stanza
-			// names the group, not specific versions), so a 403 on any
-			// version means all versions are denied. Short-circuit.
+			// Native K8s RBAC is version-agnostic (apiGroups stanza names
+			// the group, not specific versions), so a 403 on any version
+			// almost always means all versions are denied — short-circuit.
+			// Webhook authorizers (OPA, Kyverno, GKE IAM) can theoretically
+			// gate by version but rarely do; we accept the false-negative
+			// on those clusters in exchange for not multiplying probe
+			// latency by the number of CRD versions.
 			sawForbidden = true
 			break
 		}
@@ -705,16 +703,17 @@ func probeKindAccess(ctx context.Context, dyn dynamic.Interface, p resourceProbe
 		// behavior for typed kinds in probeListAccessWith.
 		return true, false, lastNonNotFound
 	}
-	// All versions returned NotFound — CRD truly not installed.
+	// All versions returned NotFound — CRD truly not installed. Cached for
+	// the full 60s TTL (transient=nil → hadErrors stays false). If the
+	// CRD installs mid-cache, the user sees stale capabilities until the
+	// next TTL expiry or context-switch invalidation; CRD installs are
+	// operator-initiated and rare enough that this is acceptable.
 	return false, false, nil
 }
 
-// resolveProbeGVRs returns the GVRs to probe for a resource. Typed probes
-// return their single configured GVR. Dynamic CRD probes return every
-// version registered in supportedCRDFallbacks for the (group, resource),
-// so the probe matches what the dynamic cache can actually serve. Falls
-// back to the configured GVR if no fallback entry matches (which would
-// be flagged by the alignment test, but we still want to probe something).
+// resolveProbeGVRs returns every version registered in supportedCRDFallbacks
+// for a dynamic probe, so the probe matches what the dynamic cache can
+// actually serve. Typed probes return their single configured GVR.
 func resolveProbeGVRs(p resourceProbe) []schema.GroupVersionResource {
 	if !p.requiresDiscovery {
 		return []schema.GroupVersionResource{p.gvr}
@@ -836,6 +835,16 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 	for i, p := range probes {
 		go func(i int, p resourceProbe) {
 			defer wg.Done()
+			// A panic inside the dynamic client (codec issues, nil-interface
+			// returns from a misbehaving fake in tests, version-skew bugs
+			// in client-go) would otherwise crash the whole server. Recover
+			// so one bad GVR can't take down capabilities probing.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[perms] panic probing %s: %v", SanitizeForLog(p.key), r)
+					hadErrors.Store(true)
+				}
+			}()
 
 			if forceNamespace {
 				// Cluster-only kinds (nodes, namespaces, PV…) have no namespace

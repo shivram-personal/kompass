@@ -59,6 +59,15 @@ func TestCapabilitiesAlignment_AllFieldsProbed(t *testing.T) {
 				field.Name, field.Tag.Get("json"))
 		}
 	}
+
+	// Catch a copy-paste hazard: two probes pointing at the same struct
+	// field. The map above silently collapses duplicates, so the loop
+	// would still pass while one of the two probes ran for nothing.
+	if len(probeFields) != len(probes) {
+		t.Errorf("duplicate field pointer detected: %d probes but only %d distinct field addresses — "+
+			"two probe entries are writing to the same ResourcePermissions field.",
+			len(probes), len(probeFields))
+	}
 }
 
 // TestCapabilitiesAlignment_TypedVsDynamic asserts that every probe key
@@ -223,7 +232,8 @@ func TestProbeKindAccess(t *testing.T) {
 	}
 
 	// --- Dynamic probe: any version available → allowed.
-	// Simulates "v1beta1 installed, v1 not yet" — the reviewer's main case.
+	// Simulates "v1beta1 installed, v1 not yet" — the load-bearing case
+	// this whole multi-version walk exists to handle.
 	t.Run("dynamic_anyVersionAvailable_allowed", func(t *testing.T) {
 		dyn := fakeDynForGVRs(t, func(gvr schema.GroupVersionResource, _ string) (allow bool, notFound bool) {
 			if gvr.Group == gateways.Group && gvr.Resource == gateways.Resource && gvr.Version == "v1beta1" {
@@ -284,13 +294,110 @@ func TestProbeKindAccess(t *testing.T) {
 			t.Errorf("typed pods probe with allow-all should report allowed, got allowed=%v forbidden=%v transient=%v", allowed, forbidden, transient)
 		}
 	})
+
+	// --- Mixed Forbidden + NotFound across versions: must report forbidden
+	// regardless of iteration order. RBAC denial on any version short-
+	// circuits, so this exercises that the NotFound on the other version
+	// doesn't fool the loop into ignoring the 403.
+	t.Run("dynamic_mixedForbiddenAndNotFound_denies", func(t *testing.T) {
+		dyn := fakeDynForGVRs(t, func(gvr schema.GroupVersionResource, _ string) (allow bool, notFound bool) {
+			if gvr.Group != gateways.Group || gvr.Resource != gateways.Resource {
+				return true, false
+			}
+			if gvr.Version == "v1" {
+				return false, true // NotFound on v1
+			}
+			return false, false // Forbidden on v1beta1
+		})
+		allowed, forbidden, transient := probeKindAccess(context.Background(), dyn, gatewayProbe, "")
+		if allowed || !forbidden || transient != nil {
+			t.Errorf("mixed Forbidden+NotFound should deny via forbidden=true, got allowed=%v forbidden=%v transient=%v", allowed, forbidden, transient)
+		}
+	})
+
+	// --- Non-NotFound transient + NotFound: must preserve optimistic-allow
+	// with the transient bubbled up so the cache TTL shortens (5s, not 60s).
+	// Without this, a momentary apiserver hiccup on one version would
+	// permanently disable Gateway API for the session.
+	t.Run("dynamic_transientAndNotFound_optimisticAllow", func(t *testing.T) {
+		dyn := fakeDynListReactor(t, func(gvr schema.GroupVersionResource, _ string) (runtime.Object, error) {
+			if gvr.Group != gateways.Group || gvr.Resource != gateways.Resource {
+				return nil, nil // allow
+			}
+			if gvr.Version == "v1" {
+				// 503 service-unavailable — a real transient.
+				return nil, apierrors.NewServiceUnavailable("apiserver hiccup")
+			}
+			// NotFound on v1beta1.
+			return nil, apierrors.NewNotFound(schema.GroupResource{Group: gvr.Group, Resource: gvr.Resource}, "")
+		})
+		allowed, forbidden, transient := probeKindAccess(context.Background(), dyn, gatewayProbe, "")
+		if !allowed || forbidden {
+			t.Errorf("transient+NotFound should optimistic-allow, got allowed=%v forbidden=%v", allowed, forbidden)
+		}
+		if transient == nil {
+			t.Errorf("transient+NotFound should preserve the transient error so the cache TTL shortens")
+		}
+	})
+
+	// --- resolveProbeGVRs empty-fallback branch: a dynamic probe whose GVR
+	// isn't registered in supportedCRDFallbacks should still return its
+	// configured GVR. The alignment test catches this for real probes, but
+	// guard against a future simplification that drops the len(out)>0
+	// safety net and returns nil.
+	t.Run("resolveProbeGVRs_emptyFallback", func(t *testing.T) {
+		var sentinel bool
+		syntheticGVR := schema.GroupVersionResource{Group: "synthetic.example.com", Version: "v1", Resource: "widgets"}
+		p := resourceProbe{
+			key:               "synthetic-widgets",
+			gvr:               syntheticGVR,
+			field:             &sentinel,
+			requiresDiscovery: true,
+		}
+		got := resolveProbeGVRs(p)
+		if len(got) != 1 || got[0] != syntheticGVR {
+			t.Errorf("dynamic probe without supportedCRDFallbacks entry should fall back to [p.gvr], got %v", got)
+		}
+	})
+}
+
+// fakeDynListReactor builds a dynamic.Interface whose list calls run an
+// arbitrary reactor returning (object, error). Use when the predicate-based
+// fakeDyn helpers aren't expressive enough — e.g. tests that need to inject
+// specific error types like ServiceUnavailable.
+func fakeDynListReactor(t *testing.T, react func(gvr schema.GroupVersionResource, namespace string) (runtime.Object, error)) dynamic.Interface {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	gvrToListKind := map[schema.GroupVersionResource]string{}
+	perms := &ResourcePermissions{}
+	for _, p := range resourceProbeTargets(perms) {
+		for _, gvr := range resolveProbeGVRs(p) {
+			gvrToListKind[gvr] = gvr.Resource + "List"
+		}
+	}
+	client := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind)
+	client.PrependReactor("list", "*", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		la, ok := action.(clienttesting.ListAction)
+		if !ok {
+			return false, nil, nil
+		}
+		obj, err := react(la.GetResource(), la.GetNamespace())
+		if err != nil {
+			return true, nil, err
+		}
+		if obj != nil {
+			return true, obj, nil
+		}
+		return false, nil, nil // fall through (empty list)
+	})
+	return client
 }
 
 // fakeDynForGVRs is like fakeDyn but the predicate returns (allow, notFound)
 // so tests can distinguish "denied by RBAC" (allow=false, notFound=false →
 // 403 Forbidden) from "version not installed" (allow=false, notFound=true →
-// 404 NotFound). The former is the reviewer's "RBAC denied" case; the latter
-// is the "CRD not installed at this version" case.
+// 404 NotFound) — the load-bearing distinction probeKindAccess depends on
+// for the discovery gate.
 func fakeDynForGVRs(t *testing.T, gate func(gvr schema.GroupVersionResource, namespace string) (allow bool, notFound bool)) dynamic.Interface {
 	t.Helper()
 	scheme := runtime.NewScheme()

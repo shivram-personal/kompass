@@ -100,11 +100,7 @@ export function useResourcePermissions(): ResourcePermissions | undefined {
   return useContext(CapabilitiesContext).resources
 }
 
-// isOptionalKind returns true for kinds that represent optional CRD
-// integrations — a false on these means "CRD not installed", not "RBAC
-// denied a kind the user wanted", so we filter them out of restriction
-// reporting. The backend probe gates these with requiresDiscovery so the
-// false isn't an optimistic-allow artifact.
+// See OPTIONAL_RESOURCE_KINDS for why these are filtered.
 function isOptionalKind(kind: string): boolean {
   return (OPTIONAL_RESOURCE_KINDS as ReadonlyArray<string>).includes(kind)
 }
