@@ -79,12 +79,12 @@ func BuildManagedTree(app, appNamespace string, matched []*unstructured.Unstruct
 		Ref:  rootRef,
 		Role: RoleRoot,
 		Tool: ToolArgoCD,
-		// `synthetic: true` signals to UIs (radar-app, hub-web fleet detail)
-		// that this root node was constructed from destination-side discovery
-		// rather than pulled from a real Application CRD — they should hide
-		// action buttons that require the controller (Sync, Rollback, …) and
-		// can render a "controller cluster: <name>" chip if the caller threads
-		// that context through.
+		// `synthetic: true` is reserved for future UI consumers to detect
+		// destination-side discovery (so e.g. a fleet detail page could
+		// suppress controller-only action buttons like Rollback that
+		// only make sense against the real Application CRD). No consumer
+		// reads this flag today; planned for the hub-web fleet detail
+		// page.
 		Data: map[string]any{
 			"namespace": appNamespace,
 			"group":     rootRef.Group,
@@ -127,6 +127,13 @@ func BuildManagedTree(app, appNamespace string, matched []*unstructured.Unstruct
 			// reconcile has applied at least once. Drift (live vs git) can
 			// only be computed against the controller's source; the
 			// destination view doesn't know.
+			//
+			// Health is intentionally left unset here. Per-kind health
+			// derivation (Pod phase, Deployment readiness, etc.) requires
+			// either a status walker or topology-level signal; both live
+			// on the controller-side tree builder and aren't replicated
+			// here. Surfacing per-resource health from the destination
+			// view is V2 — see managed-resources docs for the rationale.
 			Sync: "Synced",
 			Data: map[string]any{"namespace": ref.Namespace, "group": ref.Group},
 		}
@@ -149,9 +156,15 @@ func BuildManagedTree(app, appNamespace string, matched []*unstructured.Unstruct
 
 // summarizeManaged is the BuildManagedTree-local counterpart of the regular
 // Builder's summarize(). Roles are a fixed shape here (1 root + N declared)
-// so we only count Declared + Degraded + OutOfSync. Kept local rather than
-// exporting the server-side summarizeGitOpsTree to avoid widening the
-// package surface for a one-call helper.
+// so the counts collapse to Declared + Degraded (Health Degraded OR Missing,
+// matching the server-side summarizeGitOpsTree convention) + OutOfSync.
+// Kept local rather than exporting the server-side summarizeGitOpsTree to
+// avoid widening the package surface for a one-call helper.
+//
+// Health is currently never set by BuildManagedTree (see BuildManagedTree's
+// per-node comment about V2 health derivation), so Summary.Degraded will be
+// 0 in practice today — the case is still handled here so the summary
+// stays correct once health derivation lands.
 func summarizeManaged(nodes []Node) Summary {
 	var s Summary
 	for _, n := range nodes {

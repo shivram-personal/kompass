@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Clock3, GitBranch, GitCommit, Loader2, Pause
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
+import { Tooltip } from '../ui/Tooltip'
 import type { GitOpsHealthStatus, GitOpsInsight, GitOpsIssue, GitOpsRemediation, SyncStatus } from '../../types'
 
 // ---------------------------------------------------------------------------
@@ -172,10 +173,9 @@ export interface GitOpsDetailLayoutProps {
   // Navigation
   onNavigateRoot: () => void                  // back to /gitops list
   onNavigateParent?: () => void               // breadcrumb parent click
-  // Keyboard shortcut scope — set to "gitops" or whatever the caller's
-  // keyboard registry expects. Optional; layout doesn't register
-  // shortcuts itself (caller does via useRegisterShortcut or equivalent),
-  // since shortcut registration is router-aware in OSS.
+  // (No keyboard-shortcut prop on the layout — registration is
+  // router-aware so callers wire `useRegisterShortcut` or equivalent
+  // themselves.)
 
   // Fleet context — when true, render a destination cluster chip in the
   // header next to the title. Hub-web sets this to surface cross-cluster
@@ -301,13 +301,12 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   </>
                 )}
                 {terminating && (
-                  <span
-                    className="badge border border-orange-500/40 bg-orange-500/10 text-orange-400"
-                    title={terminatingChipTooltip}
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    Terminating
-                  </span>
+                  <Tooltip content={terminatingChipTooltip}>
+                    <span className="badge border border-orange-500/40 bg-orange-500/10 text-orange-400">
+                      <Trash2 className="h-3 w-3" />
+                      Terminating
+                    </span>
+                  </Tooltip>
                 )}
                 <span className="inline-flex shrink-0 items-center rounded border border-theme-border bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary">
                   {identity.toolLabel} · {identity.kindLabel}
@@ -541,9 +540,11 @@ function AppFact({ label, value }: { label: string; value: string }) {
   // handles row breaks. max-w-full + truncate guard against single facts
   // wider than the screen (very long destination URLs).
   return (
-    <span className="inline-flex min-w-0 max-w-full items-baseline gap-1" title={value}>
+    <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
       <span className="shrink-0 text-theme-text-tertiary">{label}:</span>
-      <span className="block truncate text-theme-text-primary">{value}</span>
+      <Tooltip content={value} delay={400} wrapperClassName="min-w-0">
+        <span className="block truncate text-theme-text-primary">{value}</span>
+      </Tooltip>
     </span>
   )
 }
@@ -605,15 +606,16 @@ function ActionButton({
       : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
   const tooltip = disabled && disabledReason ? disabledReason : (description || label)
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={loading || disabled}
-      title={tooltip}
-      className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variantClass}`}
-    >
-      {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
-      {label}
-    </button>
+    <Tooltip content={tooltip}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={loading || disabled}
+        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variantClass}`}
+      >
+        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
+        {label}
+      </button>
+    </Tooltip>
   )
 }

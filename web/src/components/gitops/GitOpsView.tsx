@@ -1307,7 +1307,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
         kindLabel: apiKind?.kind ?? kind,
       }}
       parent={parent}
-      status={status ? { sync: status.sync as never, health: status.health as never, suspended: effectiveSuspended } : null}
+      status={status ? { sync: status.sync, health: status.health, suspended: effectiveSuspended } : null}
       terminating={terminating}
       terminatingChipTooltip={terminatingChipTooltip}
       terminatingActionTooltip={terminatingActionTooltip}

@@ -250,6 +250,31 @@ var managedScanKinds = []managedScanKind{
 //               "<app>:" OR label app.kubernetes.io/instance=<app>.
 //   - namespace (optional): restrict the synthetic root's display ns +
 //               filter matched resources to this namespace.
+// namespaceAllowedForManagedResources reports whether a resource in `ns`
+// should be visible to a caller with the given allowed-namespace set.
+//
+// Semantics of allowedSet (mirrors getUserNamespaces' contract):
+//   - nil   → no per-namespace filter; everything passes (admin or auth off)
+//   - non-nil → namespaced resources need an explicit membership entry;
+//     cluster-scoped resources (ns=="") pass regardless, matching the
+//     existing canAccessGitOpsRef behavior for cluster-scoped kinds.
+//
+// Extracted from the inline filter in handleGitOpsManagedResources so the
+// nil-vs-populated distinction is testable in isolation — that semantic
+// has been miswritten once already (the "nil treated as empty set"
+// regression). The 3-case table-driven test in
+// gitops_managed_resources_test.go pins it.
+func namespaceAllowedForManagedResources(ns string, allowedSet map[string]struct{}) bool {
+	if ns == "" {
+		return true
+	}
+	if allowedSet == nil {
+		return true
+	}
+	_, ok := allowedSet[ns]
+	return ok
+}
+
 func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -295,6 +320,15 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 	}
 
 	matched := make([]*unstructured.Unstructured, 0, 32)
+	// kindErrors accumulates per-kind list failures so a kind-class
+	// blackout (informer-sync stuck post-restart, cluster-wide RBAC
+	// denial) is visible to the caller as a warning rather than
+	// indistinguishable from "this app legitimately manages 0
+	// resources." A single-kind failure (CRD not installed, narrow
+	// RBAC) is expected and the scan continues; if every kind fails,
+	// the warning surfaces in the response so the SPA can render an
+	// inline note.
+	var kindErrors []string
 	for _, mk := range managedScanKinds {
 		// Empty namespace = list across all namespaces from the cache. We
 		// filter to nsFilter + RBAC inline below so we don't need per-ns
@@ -303,7 +337,9 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 		if err != nil {
 			// One kind missing (e.g. CRD not installed, or a probe denial
 			// on an RBAC-tight cluster) is non-fatal — the rest of the
-			// scan still produces useful output.
+			// scan still produces useful output. Record so we can warn
+			// when the blackout is wider than one kind.
+			kindErrors = append(kindErrors, mk.Kind+": "+err.Error())
 			continue
 		}
 		for _, obj := range objs {
@@ -311,13 +347,8 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 			if nsFilter != "" && ns != nsFilter {
 				continue
 			}
-			// Cluster-scoped resources (ns == "") pass the RBAC gate if any
-			// namespace is allowed — the existing canAccessGitOpsRef logic
-			// elsewhere handles cluster-scoped kinds the same way.
-			if ns != "" && allowedSet != nil {
-				if _, ok := allowedSet[ns]; !ok {
-					continue
-				}
+			if !namespaceAllowedForManagedResources(ns, allowedSet) {
+				continue
 			}
 			if !gitopstree.ArgoTrackingMatches(obj, app) {
 				continue
@@ -327,6 +358,25 @@ func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Req
 	}
 
 	tree := gitopstree.BuildManagedTree(app, nsFilter, matched)
+	if len(kindErrors) > 0 {
+		// Log when more than a couple of kinds failed — single-kind
+		// errors (one CRD missing) are noise; a widespread blackout is
+		// a real operator signal. The threshold isn't precise — it's the
+		// difference between "this cluster is missing some optional
+		// CRDs" and "the informer cache or RBAC is broken across most
+		// kinds we'd typically scan." Log all errors when ≥3 fail.
+		if len(kindErrors) >= 3 {
+			log.Printf("[gitops] managed-resources: %d/%d kinds failed to list for app=%s: %v",
+				len(kindErrors), len(managedScanKinds), sanitizeForLog(app), kindErrors)
+		}
+		// Surface the failure to the caller as a tree warning so the SPA
+		// can render an inline note ("Some resource kinds couldn't be
+		// scanned — the list may be incomplete") instead of presenting
+		// a partial result as authoritative.
+		tree.Warnings = append(tree.Warnings,
+			fmt.Sprintf("Some resource kinds couldn't be scanned (%d of %d failed); the list may be incomplete.",
+				len(kindErrors), len(managedScanKinds)))
+	}
 	s.writeJSON(w, tree)
 }
 
