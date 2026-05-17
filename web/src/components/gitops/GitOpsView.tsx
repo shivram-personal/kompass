@@ -2,14 +2,13 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNod
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Settings, Tag, Trash2, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleAlert, CircleDot, GitBranch, HeartPulse, LayoutGrid, List, Loader2, RefreshCw, Search, Tag, Trash2 } from 'lucide-react'
 import yaml from 'yaml'
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
-  GitOpsIssuesBand,
+  GitOpsDetailLayout,
   GitOpsTreeGraph,
-  GitOpsStatusStrip,
   HealthStatusBadge,
   SyncStatusBadge,
   formatCompactAge,
@@ -17,6 +16,10 @@ import {
   initNavigationMap,
   kindToPlural,
   type APIResource,
+  type ArgoActionHandlers,
+  type FluxActionHandlers,
+  type GitOpsDetailMetadata,
+  type GitOpsDetailTab,
   type GitOpsResourceTree,
   type GitOpsInsightRef,
   type GitOpsTreeFilters,
@@ -1186,9 +1189,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const isFluxWorkload = kind === 'kustomizations' || kind === 'helmreleases'
   const isFlux = tool === 'flux'
   const isArgoApp = kind === 'applications'
-  const graphShellClass = graphFullscreen
-    ? 'fixed inset-0 z-[80] flex min-h-0 min-w-0 flex-col bg-theme-base'
-    : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
 
   // Set the browser tab title so users with multiple resource tabs open can
   // tell which is which without focusing each tab. Restore on unmount so a
@@ -1253,322 +1253,179 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     enabled: shortcutsEnabled && isArgoApp && isRunning,
   })
 
+  // Adapt the OSS-internal row + insights data into the layout's props.
+  // The bulk of the JSX is now in <GitOpsDetailLayout>; this wrapper does
+  // the OSS-specific things the layout can't (call OSS-side data hooks,
+  // open OSS dialogs, talk to OSS Toast, hit OSS keyboard registry).
+  const detail: GitOpsDetailMetadata = {
+    project: detailRow?.project,
+    repository: detailRow?.repository ? formatSourceRepo(detailRow.repository) : undefined,
+    path: detailRow?.path || undefined,
+    chart: detailRow?.chart || undefined,
+    destination: formatDestination(detailRow?.destination, detailRow?.destinationNamespace),
+    autoSyncMode: insightsQ.data?.summary?.autoSyncMode,
+  }
+
+  const argoHandlers: ArgoActionHandlers | undefined = isArgoApp ? {
+    onSyncRequested: () => setSyncDialogOpen(true),
+    onRefresh: (refreshType) => {
+      setRefreshKind(refreshType)
+      argoRefresh.mutate({ namespace, name, hard: refreshType === 'hard' })
+    },
+    onTerminate: () => argoTerminate.mutate({ namespace, name }),
+    onSuspend: () => argoSuspend.mutate({ namespace, name }),
+    onResume: () => argoResume.mutate({ namespace, name }),
+    syncing: argoSync.isPending,
+    refreshing: argoRefresh.isPending,
+    refreshingKind: refreshKind,
+    terminating: argoTerminate.isPending,
+    suspending: argoSuspend.isPending,
+    resuming: argoResume.isPending,
+    autoSyncEnabled: argoAutoSyncEnabled,
+    isRunning,
+  } : undefined
+
+  const fluxHandlers: FluxActionHandlers | undefined = isFlux ? {
+    onReconcile: () => fluxReconcile.mutate({ kind, namespace, name }),
+    onSyncWithSource: () => fluxSyncWithSource.mutate({ kind, namespace, name }),
+    onSuspend: () => fluxSuspend.mutate({ kind, namespace, name }),
+    onResume: () => fluxResume.mutate({ kind, namespace, name }),
+    reconciling: fluxReconcile.isPending,
+    syncingWithSource: fluxSyncWithSource.isPending,
+    suspending: fluxSuspend.isPending,
+    resuming: fluxResume.isPending,
+  } : undefined
+
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-theme-base">
-      {!graphFullscreen && <div className="shrink-0 border-b border-theme-border bg-theme-base px-4 py-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="min-w-0">
-            {/* Breadcrumb collapses into the title row: parent ("GitOps") +
-                resource name on one line. Tool + Kind are *properties* of
-                this resource, not navigation, so they live as a neutral
-                chip alongside the status badges instead of as breadcrumb
-                segments. Future nested cases (app-of-apps) can extend the
-                breadcrumb with intermediate parent links here. */}
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => navigate('/gitops')}
-                className="shrink-0 text-xs font-medium text-sky-500 transition-colors hover:text-sky-400"
-              >
-                GitOps
-              </button>
-              <span className="shrink-0 text-xs text-theme-text-tertiary">/</span>
-              {/* Parent breadcrumb segment when the user opened this CR
-                  from inside another CR's tree (app-of-apps, Flux
-                  Kustomization-applies-Kustomization, etc). Without this,
-                  navigation between nested GitOps surfaces feels like
-                  unrelated jumps; with it, the lineage is always visible
-                  and clickable. The segment renders smaller than the
-                  current title to avoid competing for visual weight. */}
-              {parent && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const params = new URLSearchParams()
-                      if (parent.group) params.set('apiGroup', parent.group)
-                      navigate({
-                        pathname: gitOpsDetailPath(parent.kind, parent.namespace || '_', parent.name),
-                        search: params.toString(),
-                      })
-                    }}
-                    className="shrink-0 truncate max-w-[200px] text-xs font-medium text-sky-500 transition-colors hover:text-sky-400"
-                    title={`Open parent: ${parent.namespace ? `${parent.namespace}/` : ''}${parent.name}`}
-                  >
-                    {parent.namespace ? `${parent.namespace}/` : ''}{parent.name}
-                  </button>
-                  <span className="shrink-0 text-xs text-theme-text-tertiary">/</span>
-                </>
-              )}
-              <h1 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">
-                {namespace ? `${namespace}/` : ''}{name}
-              </h1>
-              {/* When Terminating, suppress Sync/Health badges entirely.
-                  They reflect the last observed reconcile state and become
-                  factually stale the moment deletion is initiated — Flux
-                  is processing finalizers, not syncing, and the resource
-                  isn't "Progressing" toward a healthy state, it's being
-                  torn down. Showing "Syncing · Progressing · Terminating"
-                  side-by-side is contradictory and actively misleading;
-                  Argo CD's own UI suppresses these badges for the same
-                  reason. The Terminating chip becomes the sole status
-                  indicator. */}
-              {status && !terminating && (
-                <>
-                  <SyncStatusBadge sync={status.sync} suspended={effectiveSuspended} />
-                  {!effectiveSuspended && <HealthStatusBadge health={status.health} />}
-                </>
-              )}
-              {terminating && (
-                <Tooltip content={terminatingChipTooltip}>
-                  <span className="badge border border-orange-500/40 bg-orange-500/10 text-orange-400">
-                    <Trash2 className="h-3 w-3" />
-                    Terminating
-                  </span>
-                </Tooltip>
-              )}
-              <span className="inline-flex shrink-0 items-center rounded border border-theme-border bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary">
-                {tool === 'argo' ? 'ArgoCD' : 'FluxCD'} · {apiKind?.kind ?? kind}
-              </span>
-            </div>
-            {/* Header carries the *spec/config* facts — where this app lives
-                and how it syncs. The deployment row (status strip below)
-                carries dynamic per-deploy facts (latest revision, age,
-                resource health). Splitting static config from live state
-                avoids the "I changed nothing but everything looks different"
-                effect of mixing them. */}
-            <div className="mt-2 flex flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
-              <AppFact label="Project" value={detailRow?.project || '-'} />
-              {detailRow?.repository && <AppFact label="Source" value={formatSourceRepo(detailRow.repository)} />}
-              {detailRow?.path && <AppFact label="Path" value={detailRow.path} />}
-              {detailRow?.chart && <AppFact label="Chart" value={detailRow.chart} />}
-              <AppFact label="Destination" value={formatDestination(detailRow?.destination, detailRow?.destinationNamespace)} />
-              {insightsQ.data?.summary?.autoSyncMode && (
-                <AppFact label="Sync mode" value={insightsQ.data.summary.autoSyncMode} />
-              )}
-            </div>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {isArgoApp && (
-              <>
-                <ActionButton label="Sync…" description="Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision)." icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
-                <ActionButton
-                  label="Refresh"
-                  description="Re-check Git for new commits and recompute sync status. Doesn't apply anything."
-                  icon={RotateCw}
-                  loading={argoRefresh.isPending && refreshKind === 'normal'}
-                  onClick={() => {
-                    setRefreshKind('normal')
-                    argoRefresh.mutate({ namespace, name, hard: false })
-                  }}
-                />
-                <ActionButton
-                  label="Hard refresh"
-                  description="Like Refresh, but also bypasses Argo's manifest cache (re-renders Helm/Kustomize)."
-                  icon={RotateCw}
-                  loading={argoRefresh.isPending && refreshKind === 'hard'}
-                  onClick={() => {
-                    setRefreshKind('hard')
-                    argoRefresh.mutate({ namespace, name, hard: true })
-                  }}
-                />
-                {isRunning && <ActionButton label="Terminate" description="Cancel the in-progress sync operation." icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
-                {argoAutoSyncEnabled
-                  ? <ActionButton label="Disable auto-sync" description="Stop Argo from automatically syncing Git changes. Manual Sync still works." icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
-                  : <ActionButton label="Enable auto-sync" description="Re-enable automatic syncing of Git changes to the cluster." icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
-              </>
-            )}
-            {isFlux && (
-              <>
-                <ActionButton label="Reconcile" description="Tell Flux to reconcile this resource now: re-read its source, re-apply the manifests, update status. Skips waiting for the regular reconciliation interval." icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
-                {isFluxWorkload && (
-                  <ActionButton
-                    label="Sync with source"
-                    description="Reconcile the upstream source CR (GitRepository/HelmRepository) first — re-fetching from Git or Helm — then reconcile this resource against the refreshed source. Useful right after pushing a commit when you don't want to wait for the source's poll interval."
-                    icon={GitCommit}
-                    loading={fluxSyncWithSource.isPending}
-                    onClick={() => fluxSyncWithSource.mutate({ kind, namespace, name })}
-                    disabled={terminating}
-                    disabledReason={terminating ? terminatingActionTooltip : undefined}
-                  />
-                )}
-                {status?.suspended
-                  ? <ActionButton label="Resume" description="Resume Flux reconciliation. Flux will start applying changes from the source again on its normal interval." icon={Play} loading={fluxResume.isPending} onClick={() => fluxResume.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
-                  : <ActionButton label="Suspend" description="Pause Flux reconciliation. The resource stays exactly as-is — new commits in the source won't be applied until you resume." icon={Pause} loading={fluxSuspend.isPending} onClick={() => fluxSuspend.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
-              </>
-            )}
-          </div>
-        </div>
-      </div>}
-      {!graphFullscreen && (
-        <>
-          <GitOpsStatusStrip insight={insightsQ.data} loading={insightsQ.isLoading} />
-          <GitOpsIssuesBand
-            issues={insightsQ.data?.issues}
-            terminating={terminating}
-            onSelectIssue={(issue) => {
-              const ref = issue.refs?.[0]
-              if (!ref) return
-              setAppView('changes')
-              setChangesFocusKey(insightChangeKey(ref))
-              // Window the highlight: 4s is long enough to find the row
-              // visually but short enough that it doesn't linger if the user
-              // navigates away and comes back.
-              window.setTimeout(() => setChangesFocusKey(null), 4000)
-            }}
-            remediationPending={applyResource.isPending || argoSync.isPending}
-            onRemediate={(remediation) => {
-              if (remediation.kind === 'create-namespace' && remediation.target) {
-                const nsName = remediation.target
-                const yaml = `apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ${nsName}\n`
-                applyResource.mutate(
-                  { yaml, mode: 'apply' },
-                  {
-                    onSuccess: () => {
-                      // Defer the success toast until we know whether the
-                      // follow-on sync was triggered, so a successful
-                      // create-namespace followed by a sync failure doesn't
-                      // produce a "Triggering a sync" toast that argoSync's
-                      // own error toast immediately contradicts.
-                      if (kind === 'applications') {
-                        argoSync.mutate(
-                          { namespace, name },
-                          {
-                            onSuccess: () => {
-                              showSuccess(
-                                `Created namespace ${nsName}`,
-                                'Sync triggered to retry the apply.',
-                              )
-                            },
-                            onError: () => {
-                              // argoSync's mutation meta already raises its
-                              // own "Failed to trigger sync" toast; here we
-                              // tell the user explicitly that the *namespace*
-                              // landed even though the sync didn't, so they
-                              // know to click Sync manually.
-                              showSuccess(
-                                `Created namespace ${nsName}`,
-                                "Couldn't trigger sync automatically — click Sync to retry.",
-                              )
-                            },
-                          },
-                        )
-                      } else {
-                        // Non-Argo callers don't get the auto-sync chain; the
-                        // create-namespace landing is the only thing to report.
-                        showSuccess(`Created namespace ${nsName}`)
-                      }
+    <GitOpsDetailLayout
+      identity={{
+        kind,
+        group,
+        namespace,
+        name,
+        toolLabel: tool === 'argo' ? 'ArgoCD' : 'FluxCD',
+        kindLabel: apiKind?.kind ?? kind,
+      }}
+      parent={parent}
+      status={status ? { sync: status.sync as never, health: status.health as never, suspended: effectiveSuspended } : null}
+      terminating={terminating}
+      terminatingChipTooltip={terminatingChipTooltip}
+      terminatingActionTooltip={terminatingActionTooltip}
+      detail={detail}
+      insight={insightsQ.data ?? null}
+      insightLoading={insightsQ.isLoading}
+      onSelectIssue={(issue) => {
+        const ref = issue.refs?.[0]
+        if (!ref) return
+        setAppView('changes')
+        setChangesFocusKey(insightChangeKey(ref))
+        // Window the highlight: 4s is long enough to find the row visually
+        // but short enough that it doesn't linger if the user navigates
+        // away and back.
+        window.setTimeout(() => setChangesFocusKey(null), 4000)
+      }}
+      remediationPending={applyResource.isPending || argoSync.isPending}
+      onRemediate={(remediation) => {
+        if (remediation.kind === 'create-namespace' && remediation.target) {
+          const nsName = remediation.target
+          const yamlManifest = `apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ${nsName}\n`
+          applyResource.mutate(
+            { yaml: yamlManifest, mode: 'apply' },
+            {
+              onSuccess: () => {
+                // Defer the success toast until we know whether the follow-on
+                // sync was triggered, so a successful create-namespace + sync
+                // failure doesn't yield a misleading "sync triggered" toast.
+                if (kind === 'applications') {
+                  argoSync.mutate(
+                    { namespace, name },
+                    {
+                      onSuccess: () => {
+                        showSuccess(`Created namespace ${nsName}`, 'Sync triggered to retry the apply.')
+                      },
+                      onError: () => {
+                        showSuccess(`Created namespace ${nsName}`, "Couldn't trigger sync automatically — click Sync to retry.")
+                      },
                     },
-                    onError: (err: unknown) => {
-                      const msg = err instanceof Error ? err.message : 'Unknown error'
-                      showError(
-                        `Couldn't create namespace ${nsName}`,
-                        msg.includes('forbidden')
-                          ? 'Radar lacks RBAC to create namespaces in this cluster. Create it manually or have a cluster-admin do it.'
-                          : msg,
-                      )
-                    },
-                  },
+                  )
+                } else {
+                  showSuccess(`Created namespace ${nsName}`)
+                }
+              },
+              onError: (err: unknown) => {
+                const msg = err instanceof Error ? err.message : 'Unknown error'
+                showError(
+                  `Couldn't create namespace ${nsName}`,
+                  msg.includes('forbidden')
+                    ? 'Radar lacks RBAC to create namespaces in this cluster. Create it manually or have a cluster-admin do it.'
+                    : msg,
                 )
-              }
-            }}
-          />
-          {helmValues && (
-            <div className="shrink-0 border-b border-theme-border bg-theme-base">
-              <button
-                type="button"
-                onClick={() => setHelmValuesOpen((v) => !v)}
-                className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
-                aria-expanded={helmValuesOpen}
-              >
-                {helmValuesOpen ? (
-                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
-                )}
-                <Settings className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
-                <span className="font-medium text-theme-text-primary">Helm values</span>
-                <span className="tabular-nums text-theme-text-tertiary">
-                  {helmValues.keyCount} {helmValues.keyCount === 1 ? 'key' : 'keys'}
-                </span>
-                {helmValues.source === 'argo-parameters' && (
-                  <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">parameters</span>
-                )}
-              </button>
-              {helmValuesOpen && (
-                <div className="border-t border-theme-border bg-theme-surface px-4 py-3">
-                  <CodeViewer code={helmValues.yaml} language="yaml" showLineNumbers maxHeight="320px" />
-                </div>
-              )}
-            </div>
-          )}
-        </>
+              },
+            },
+          )
+        }
+      }}
+      helmValues={helmValues}
+      helmValuesOpen={helmValuesOpen}
+      onToggleHelmValues={() => setHelmValuesOpen((v) => !v)}
+      helmValuesContent={helmValues ? <CodeViewer code={helmValues.yaml} language="yaml" showLineNumbers maxHeight="320px" /> : null}
+      isArgoApp={isArgoApp}
+      isFlux={isFlux}
+      isFluxWorkload={isFluxWorkload}
+      argo={argoHandlers}
+      flux={fluxHandlers}
+      activeTab={appView as GitOpsDetailTab}
+      onTabChange={(tab) => setAppView(tab)}
+      fullscreen={graphFullscreen}
+      onToggleFullscreen={() => setGraphFullscreen(!graphFullscreen)}
+      resourceLoading={resourceQ.isLoading}
+      resourceError={(resourceQ.error as Error | null) ?? null}
+      onNavigateRoot={() => navigate('/gitops')}
+      onNavigateParent={parent ? () => {
+        const params = new URLSearchParams()
+        if (parent.group) params.set('apiGroup', parent.group)
+        navigate({
+          pathname: gitOpsDetailPath(parent.kind, parent.namespace || '_', parent.name),
+          search: params.toString(),
+        })
+      } : undefined}
+      manageDocumentTitle={false /* OSS handles it via the in-effect-above */}
+      renderTabBarCounts={({ tab }) => (
+        tab === 'topology' && tree ? <TopologyCounts tree={tree} /> : null
       )}
-
-      {resourceQ.isLoading ? (
-        <div className="flex flex-1 items-center justify-center text-theme-text-secondary">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading GitOps resource…
-        </div>
-      ) : resourceQ.error ? (
-        <div className="p-4 text-sm text-red-500">Failed to load resource: {(resourceQ.error as Error).message}</div>
-      ) : (
-        <div className={graphShellClass}>
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-4 py-2">
-            <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-1">
-              <ViewButton active={appView === 'topology'} icon={GitBranch} label="Topology" onClick={() => setAppView('topology')} />
-              <ViewButton active={appView === 'changes'} icon={GitCommit} label="Resources" onClick={() => setAppView('changes')} />
-              <ViewButton active={appView === 'activity'} icon={Clock3} label="Activity" onClick={() => setAppView('activity')} />
-            </div>
-            {graphFullscreen ? (
-              <div className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">
-                {namespace ? `${namespace}/` : ''}{name}
-              </div>
-            ) : (
-              appView === 'topology' && tree && <TopologyCounts tree={tree} />
-            )}
-            <div className="flex items-center gap-2">
-              {appView === 'topology' && (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setGraphSearch('')
-                      setGraphKinds(new Set())
-                      setGraphSync(new Set())
-                      setGraphHealth(new Set())
-                      setGraphNamespaces(new Set())
-                      setGraphRoles(new Set())
-                    }}
-                    className="rounded px-2 py-1 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                  >
-                    Clear filters
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setGraphFullscreen(!graphFullscreen)}
-                    className="rounded-md border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-                  >
-                    {graphFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {appView === 'activity' ? (
+      renderTabBarAccessory={({ tab }) => (
+        tab === 'topology' ? (
+          <button
+            type="button"
+            onClick={() => {
+              setGraphSearch('')
+              setGraphKinds(new Set())
+              setGraphSync(new Set())
+              setGraphHealth(new Set())
+              setGraphNamespaces(new Set())
+              setGraphRoles(new Set())
+            }}
+            className="rounded px-2 py-1 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+          >
+            Clear filters
+          </button>
+        ) : null
+      )}
+      renderTabBody={({ tab }) => {
+        if (tab === 'activity') {
+          return (
             <GitOpsActivityInsightView
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
-              // Only Argo apps support rollback. Skip the callback entirely
-              // for entries with non-numeric IDs (Flux conditions reuse the
-              // ID slot for condition.type) so the button doesn't render and
-              // then silently fail when clicked.
               onRollback={isArgoApp ? (item) => {
                 if (parseRollbackID(item.id) == null) return
                 setRollbackTarget(item)
               } : undefined}
             />
-          ) : appView === 'changes' ? (
+          )
+        }
+        if (tab === 'changes') {
+          return (
             <GitOpsChangesView
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
@@ -1576,43 +1433,46 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               focusKey={changesFocusKey}
               tree={tree}
             />
-          ) : (
-            <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
-              <GitOpsGraphFilterRail
-                facets={graphFacets}
+          )
+        }
+        // topology
+        return (
+          <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
+            <GitOpsGraphFilterRail
+              facets={graphFacets}
+              preset={graphPreset}
+              onPresetChange={setGraphPreset}
+              search={graphSearch}
+              onSearchChange={setGraphSearch}
+              kinds={graphKinds}
+              onToggleKind={(value) => toggleSet(graphKinds, setGraphKinds, value)}
+              sync={graphSync}
+              onToggleSync={(value) => toggleSet(graphSync, setGraphSync, value)}
+              health={graphHealth}
+              onToggleHealth={(value) => toggleSet(graphHealth, setGraphHealth, value)}
+              namespaces={graphNamespaces}
+              onToggleNamespace={(value) => toggleSet(graphNamespaces, setGraphNamespaces, value)}
+              roles={graphRoles}
+              onToggleRole={(value) => toggleSet(graphRoles, setGraphRoles, value)}
+            />
+            <div className="min-h-0 min-w-0 border-l border-theme-border max-lg:border-l-0 max-lg:border-t">
+              <GitOpsTreeGraph
+                tree={tree}
+                loading={treeQ.isLoading}
+                error={treeQ.error as Error | null}
+                onNodeClick={openResourceFromTree}
                 preset={graphPreset}
                 onPresetChange={setGraphPreset}
-                search={graphSearch}
-                onSearchChange={setGraphSearch}
-                kinds={graphKinds}
-                onToggleKind={(value) => toggleSet(graphKinds, setGraphKinds, value)}
-                sync={graphSync}
-                onToggleSync={(value) => toggleSet(graphSync, setGraphSync, value)}
-                health={graphHealth}
-                onToggleHealth={(value) => toggleSet(graphHealth, setGraphHealth, value)}
-                namespaces={graphNamespaces}
-                onToggleNamespace={(value) => toggleSet(graphNamespaces, setGraphNamespaces, value)}
-                roles={graphRoles}
-                onToggleRole={(value) => toggleSet(graphRoles, setGraphRoles, value)}
+                query={graphSearch}
+                onQueryChange={setGraphSearch}
+                filters={graphFilters}
+                showToolbar={false}
               />
-              <div className="min-h-0 min-w-0 border-l border-theme-border max-lg:border-l-0 max-lg:border-t">
-                <GitOpsTreeGraph
-                  tree={tree}
-                  loading={treeQ.isLoading}
-                  error={treeQ.error as Error | null}
-                  onNodeClick={openResourceFromTree}
-                  preset={graphPreset}
-                  onPresetChange={setGraphPreset}
-                  query={graphSearch}
-                  onQueryChange={setGraphSearch}
-                  filters={graphFilters}
-                  showToolbar={false}
-                />
-              </div>
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        )
+      }}
+    >
       {/* Modals — portaled to body, only render the ones for the current tool. */}
       {isArgoApp && (
         <>
@@ -1622,9 +1482,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             pending={argoSync.isPending}
             onCancel={() => setSyncDialogOpen(false)}
             onConfirm={(opts) => {
-              // Close on success only — on failure keep the dialog open so
-              // the user doesn't lose their form context (revision, advanced
-              // toggles). The error toast fires globally via mutation meta.
               argoSync.mutate({ namespace, name, ...opts }, {
                 onSuccess: () => setSyncDialogOpen(false),
               })
@@ -1638,8 +1495,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             pending={argoRollback.isPending}
             onCancel={() => setRollbackTarget(null)}
             onConfirm={(opts) => {
-              // Defensive: history may have refreshed between modal-open and
-              // confirm, leaving the captured id no longer parseable.
               const id = parseRollbackID(rollbackTarget?.id)
               if (id == null) {
                 showError('Rollback target became invalid', 'The history entry changed while the dialog was open. Reselect a target and try again.')
@@ -1653,10 +1508,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           />
         </>
       )}
-    </div>
+    </GitOpsDetailLayout>
   )
 }
-
 // formatSourceRepo drops the protocol prefix from a Git source URL so the
 // row reads as "github.com/org/repo" instead of the redundant
 // "https://github.com/org/repo". Leaves non-https URLs alone so SSH-style
@@ -1748,48 +1602,10 @@ function formatDestination(server: string | undefined, namespace: string | undef
   return namespace ? `${host}, Namespace: ${namespace}` : host
 }
 
-function AppFact({ label, value }: { label: string; value: string }) {
-  // inline-flex (not flex) so each fact sizes to its content; the parent's
-  // flex-wrap handles row breaks at narrow viewports. max-w-full is the
-  // safety net for the rare case of a single value wider than the screen
-  // (truncate + tooltip kicks in then). Without it, very long destinations
-  // would force the page to scroll horizontally.
-  return (
-    <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
-      <span className="shrink-0 text-theme-text-tertiary">{label}:</span>
-      <Tooltip content={value} delay={400} wrapperClassName="min-w-0">
-        <span className="block truncate text-theme-text-primary">{value}</span>
-      </Tooltip>
-    </span>
-  )
-}
-
-function ViewButton({
-  active,
-  icon: Icon,
-  label,
-  onClick,
-}: {
-  active: boolean
-  icon: ComponentType<{ className?: string }>
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-medium transition-colors ${
-        active
-          ? 'bg-skyhook-500 text-white'
-          : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-      }`}
-    >
-      <Icon className="h-3.5 w-3.5" />
-      {label}
-    </button>
-  )
-}
+// AppFact + ViewButton + ActionButton moved into
+// @skyhook-io/k8s-ui's GitOpsDetailLayout (shared with hub-web's fleet
+// detail page). The OSS wrapper above mounts the layout instead of
+// rendering its own header chrome.
 
 function GitOpsGraphFilterRail({
   facets,
@@ -2289,54 +2105,7 @@ function SummaryTile({ label, value, tone = 'neutral' }: { label: string; value:
   )
 }
 
-function ActionButton({
-  label,
-  description,
-  icon: Icon,
-  loading,
-  disabled,
-  disabledReason,
-  danger,
-  primary,
-  onClick,
-}: {
-  label: string
-  description?: string
-  icon: ComponentType<{ className?: string }>
-  loading?: boolean
-  disabled?: boolean
-  // Replaces the tooltip when the button is disabled. The user otherwise
-  // hits a greyed-out button with no explanation — "Suspend (action label)"
-  // tells them nothing about *why* it's disabled. With this set the tooltip
-  // becomes "Cannot reconcile a resource pending deletion" or similar.
-  disabledReason?: string
-  danger?: boolean
-  primary?: boolean
-  onClick: () => void
-}) {
-  // primary → brand fill (one per page); danger → red (destructive);
-  // default → bordered ghost on theme surface (secondary actions).
-  const variantClass = primary
-    ? 'btn-brand'
-    : danger
-      ? 'border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
-      : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-  const tooltip = disabled && disabledReason ? disabledReason : (description || label)
-  return (
-    <Tooltip content={tooltip}>
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={loading || disabled}
-        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variantClass}`}
-      >
-        {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
-        {label}
-      </button>
-    </Tooltip>
-  )
-}
-
+// ActionButton moved into @skyhook-io/k8s-ui's GitOpsDetailLayout.
 
 // describeTerminating produces two complementary strings:
 //   - chipTooltip: full context for the Terminating chip's hover (finalizers

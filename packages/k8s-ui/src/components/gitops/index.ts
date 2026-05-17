@@ -6,3 +6,15 @@ export { GitOpsTreeGraph } from './tree'
 export { gitOpsFilterSet, hasGitOpsTreeFilters, matchesGitOpsTreeFilters } from './tree'
 export type { GitOpsTreeFilters, GitOpsTreePreset } from './tree'
 export * from './insights'
+export { GitOpsDetailLayout } from './GitOpsDetailLayout'
+export type {
+  GitOpsDetailLayoutProps,
+  GitOpsDetailIdentity,
+  GitOpsDetailLineage,
+  GitOpsDetailStatus,
+  GitOpsDetailMetadata,
+  GitOpsDetailTab,
+  ArgoActionHandlers,
+  FluxActionHandlers,
+  GitOpsHelmValuesData,
+} from './GitOpsDetailLayout'
