@@ -227,10 +227,11 @@ func TestSynthesizeManagedBy_LabelsBeatTopologyWalk(t *testing.T) {
 }
 
 // TestSynthesizeManagedBy_CycleSafe pins behavior on a self-referential
-// EdgeManages chain. Without the visited-set guard, walkTopmostOwner would
-// loop forever. Such a cycle is impossible from real K8s ownerReferences
-// (single controller, parent set before child) but a corrupted topology
-// should degrade gracefully rather than hang.
+// EdgeManages chain. The walk must terminate AND must not return the
+// starting node itself (which would produce a self-referential ManagedBy).
+// Such a cycle is impossible from real K8s ownerReferences (single
+// controller, parent set before child) but a corrupted topology should
+// degrade gracefully — returning the first found owner, not self.
 func TestSynthesizeManagedBy_CycleSafe(t *testing.T) {
 	topo := &Topology{
 		Nodes: []Node{
@@ -243,9 +244,14 @@ func TestSynthesizeManagedBy_CycleSafe(t *testing.T) {
 		},
 	}
 	got := SynthesizeManagedBy(nil, "Deployment", "demo", "a", topo, nil, nil)
-	// Either ref is acceptable — the test only asserts termination + a non-nil ref.
 	if len(got) != 1 {
 		t.Fatalf("want 1 manager ref under cycle, got %d (%+v)", len(got), got)
+	}
+	if got[0].Name == "a" {
+		t.Errorf("walkTopmostOwner returned the starting node as its own owner: %+v", got[0])
+	}
+	if got[0].Name != "b" {
+		t.Errorf("want first found owner b, got %+v", got[0])
 	}
 }
 
@@ -272,13 +278,20 @@ func TestGetRelationships_BackCompat_PDBManagedByPreserved(t *testing.T) {
 	provider := &stubProvider{pdbs: []*policyv1.PodDisruptionBudget{pdb}}
 	topo := &Topology{Nodes: []Node{{ID: "poddisruptionbudget/prod/api-pdb", Kind: KindPDB, Name: "api-pdb"}}}
 
-	rel := GetRelationships("PodDisruptionBudget", "prod", "api-pdb", topo, provider, nil)
-	if rel == nil || len(rel.ManagedBy) != 1 {
-		t.Fatalf("want 1 ManagedBy ref for PDB with Argo annotation via back-compat path, got %+v", rel)
-	}
-	got := rel.ManagedBy[0]
-	if got.Kind != "Application" || got.Namespace != "argocd" || got.Name != "storefront" {
-		t.Errorf("want Argo Application/argocd/storefront from PDB annotation, got %+v", got)
+	// Long-form and short-form aliases must both surface the chip; production
+	// callers and back-compat callers can pass either, matching the other
+	// switches in this file (storage chain) and server.go's kind resolution.
+	for _, kind := range []string{"PodDisruptionBudget", "poddisruptionbudgets", "pdb", "pdbs"} {
+		t.Run(kind, func(t *testing.T) {
+			rel := GetRelationships(kind, "prod", "api-pdb", topo, provider, nil)
+			if rel == nil || len(rel.ManagedBy) != 1 {
+				t.Fatalf("want 1 ManagedBy ref for PDB via kind=%q, got %+v", kind, rel)
+			}
+			got := rel.ManagedBy[0]
+			if got.Kind != "Application" || got.Namespace != "argocd" || got.Name != "storefront" {
+				t.Errorf("want Argo Application/argocd/storefront via kind=%q, got %+v", kind, got)
+			}
+		})
 	}
 }
 

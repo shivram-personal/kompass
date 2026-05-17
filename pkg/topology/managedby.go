@@ -195,8 +195,11 @@ func walkTopmostOwner(kind, namespace, name string, topo *Topology, dp DynamicPr
 		ownerOf = func(target string) string { return owners[target] }
 	}
 
-	visited := make(map[string]bool)
+	// Seed visited with the starting node so a cycle that loops back to the
+	// queried resource (A→B→A) returns the first found owner (B) instead of
+	// walking one extra hop and producing a self-referential ManagedBy ref.
 	cur := buildNodeID(kind, namespace, name, dp)
+	visited := map[string]bool{cur: true}
 	var topRef *ResourceRef
 	for {
 		next := ownerOf(cur)

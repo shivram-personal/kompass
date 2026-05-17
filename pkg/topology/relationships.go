@@ -574,35 +574,35 @@ func lookupTypedMetadata(kindLower, namespace, name string, provider ResourcePro
 				return i
 			}
 		}
-	case "poddisruptionbudget", "poddisruptionbudgets":
+	case "poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs":
 		pdbs, _ := provider.PodDisruptionBudgets()
 		for _, p := range pdbs {
 			if p.Namespace == namespace && p.Name == name {
 				return p
 			}
 		}
-	case "networkpolicy", "networkpolicies":
+	case "networkpolicy", "networkpolicies", "netpol":
 		nps, _ := provider.NetworkPolicies()
 		for _, n := range nps {
 			if n.Namespace == namespace && n.Name == name {
 				return n
 			}
 		}
-	case "horizontalpodautoscaler", "horizontalpodautoscalers":
+	case "horizontalpodautoscaler", "horizontalpodautoscalers", "hpa", "hpas":
 		hpas, _ := provider.HorizontalPodAutoscalers()
 		for _, h := range hpas {
 			if h.Namespace == namespace && h.Name == name {
 				return h
 			}
 		}
-	case "persistentvolumeclaim", "persistentvolumeclaims":
+	case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
 		pvcs, _ := provider.PersistentVolumeClaims()
 		for _, p := range pvcs {
 			if p.Namespace == namespace && p.Name == name {
 				return p
 			}
 		}
-	case "persistentvolume", "persistentvolumes":
+	case "persistentvolume", "persistentvolumes", "pv", "pvs":
 		// Cluster-scoped: ignore namespace.
 		pvs, _ := provider.PersistentVolumes()
 		for _, p := range pvs {
