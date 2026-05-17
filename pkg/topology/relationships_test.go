@@ -2,7 +2,111 @@ package topology
 
 import (
 	"testing"
+
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// stubProvider supplies a typed K8s resource for the kinds GetRelationships
+// inspects for Pod hygiene fields and ManagedBy synthesis. Other methods
+// return empty slices so calls fall through cleanly.
+type stubProvider struct {
+	pods     []*corev1.Pod
+	services []*corev1.Service
+	pdbs     []*policyv1.PodDisruptionBudget
+}
+
+func (s *stubProvider) Pods() ([]*corev1.Pod, error)         { return s.pods, nil }
+func (s *stubProvider) Services() ([]*corev1.Service, error) { return s.services, nil }
+func (s *stubProvider) Deployments() ([]*appsv1.Deployment, error) {
+	return nil, nil
+}
+func (s *stubProvider) DaemonSets() ([]*appsv1.DaemonSet, error)         { return nil, nil }
+func (s *stubProvider) StatefulSets() ([]*appsv1.StatefulSet, error)     { return nil, nil }
+func (s *stubProvider) ReplicaSets() ([]*appsv1.ReplicaSet, error)       { return nil, nil }
+func (s *stubProvider) Jobs() ([]*batchv1.Job, error)                    { return nil, nil }
+func (s *stubProvider) CronJobs() ([]*batchv1.CronJob, error)            { return nil, nil }
+func (s *stubProvider) Ingresses() ([]*networkingv1.Ingress, error)      { return nil, nil }
+func (s *stubProvider) ConfigMaps() ([]*corev1.ConfigMap, error)         { return nil, nil }
+func (s *stubProvider) Secrets() ([]*corev1.Secret, error)               { return nil, nil }
+func (s *stubProvider) PersistentVolumeClaims() ([]*corev1.PersistentVolumeClaim, error) {
+	return nil, nil
+}
+func (s *stubProvider) PersistentVolumes() ([]*corev1.PersistentVolume, error) { return nil, nil }
+func (s *stubProvider) HorizontalPodAutoscalers() ([]*autoscalingv2.HorizontalPodAutoscaler, error) {
+	return nil, nil
+}
+func (s *stubProvider) PodDisruptionBudgets() ([]*policyv1.PodDisruptionBudget, error) {
+	return s.pdbs, nil
+}
+func (s *stubProvider) NetworkPolicies() ([]*networkingv1.NetworkPolicy, error) { return nil, nil }
+func (s *stubProvider) Nodes() ([]*corev1.Node, error)                          { return nil, nil }
+func (s *stubProvider) GetResourceStatus(kind, namespace, name string) *ResourceStatus {
+	return nil
+}
+
+// TestGetRelationships_PodHygieneFields covers T2: pods carry
+// ServiceAccount, Node, and ManagedBy refs derived from spec + labels.
+func TestGetRelationships_PodHygieneFields(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "demo",
+			Name:      "web-abc-xyz",
+			Annotations: map[string]string{
+				argoTrackingIDAnnotation: "argocd_guestbook:apps/Deployment:demo/web",
+			},
+		},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: "web-sa",
+			NodeName:           "node-1",
+		},
+	}
+	provider := &stubProvider{pods: []*corev1.Pod{pod}}
+
+	topo := &Topology{
+		Nodes: []Node{{ID: "pod/demo/web-abc-xyz", Kind: KindPod, Name: "web-abc-xyz"}},
+		Edges: []Edge{},
+	}
+
+	rel := GetRelationships("Pod", "demo", "web-abc-xyz", topo, provider, nil)
+	if rel == nil {
+		t.Fatal("expected non-nil Relationships for pod with hygiene fields")
+	}
+	if rel.ServiceAccount == nil || rel.ServiceAccount.Kind != "ServiceAccount" || rel.ServiceAccount.Name != "web-sa" || rel.ServiceAccount.Namespace != "demo" {
+		t.Errorf("ServiceAccount: want {Kind:ServiceAccount NS:demo Name:web-sa}, got %+v", rel.ServiceAccount)
+	}
+	if rel.Node == nil || rel.Node.Kind != "Node" || rel.Node.Name != "node-1" {
+		t.Errorf("Node: want {Kind:Node Name:node-1}, got %+v", rel.Node)
+	}
+	if len(rel.ManagedBy) != 1 || rel.ManagedBy[0].Kind != "Application" || rel.ManagedBy[0].Name != "guestbook" {
+		t.Errorf("ManagedBy: want [{Application/argocd/guestbook}], got %+v", rel.ManagedBy)
+	}
+}
+
+// TestGetRelationships_PodHygieneFields_EmptySAandUnscheduled verifies that
+// optional fields are properly omitted when the source data is empty. The
+// nil-result short-circuit must also still kick in.
+func TestGetRelationships_PodHygieneFields_EmptySAandUnscheduled(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "demo", Name: "lone"},
+		Spec:       corev1.PodSpec{ /* SA empty, NodeName empty */ },
+	}
+	provider := &stubProvider{pods: []*corev1.Pod{pod}}
+	topo := &Topology{
+		Nodes: []Node{{ID: "pod/demo/lone", Kind: KindPod, Name: "lone"}},
+	}
+
+	rel := GetRelationships("Pod", "demo", "lone", topo, provider, nil)
+	if rel != nil {
+		t.Errorf("expected nil for pod with no edges and no hygiene data, got %+v", rel)
+	}
+}
+
 
 // TestGetRelationships_IncomingEdgeProtects_DispatchesByKind verifies that
 // incoming "protects" edges split into rel.PDBs vs rel.NetworkPolicies based

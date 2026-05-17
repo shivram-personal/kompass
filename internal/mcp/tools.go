@@ -523,8 +523,11 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		}
 	}
 
-	// Try typed cache first
+	// Try typed cache first. rawObj is the un-minified resource, threaded
+	// into attachResourceExtras so ManagedBy synthesis can disambiguate by
+	// group (avoids Knative Service vs core Service kind/plural collisions).
 	var resourceData any
+	var rawObj any
 	obj, err := k8s.FetchResource(cache, kind, namespace, name)
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs
@@ -533,6 +536,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 			return nil, nil, fmt.Errorf("resource not found: %w", dynErr)
 		}
 		resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
+		rawObj = u
 	} else if err != nil {
 		return nil, nil, fmt.Errorf("resource not found: %w", err)
 	} else {
@@ -542,6 +546,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 			return nil, nil, fmt.Errorf("failed to minify: %w", minErr)
 		}
 		resourceData = minified
+		rawObj = obj
 	}
 
 	includes := parseIncludes(input.Include)
@@ -551,13 +556,15 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 
 	// Build enriched response with requested extras
 	result := map[string]any{"resource": resourceData}
-	attachResourceExtras(ctx, cache, result, includes, kind, namespace, name)
+	attachResourceExtras(ctx, cache, result, includes, kind, namespace, name, rawObj)
 	return toJSONResult(result)
 }
 
 // attachResourceExtras populates optional extras (events, relationships, metrics, logs)
-// on the result map based on the includes set.
-func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, namespace, name string) {
+// on the result map based on the includes set. rawObj is the already-fetched
+// resource (typed or *unstructured); passed through so relationship synthesis
+// uses the authoritative object instead of a group-blind kind/name lookup.
+func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, namespace, name string, rawObj any) {
 	if includes["events"] {
 		if eventLister := cache.Events(); eventLister != nil {
 			var events []*corev1.Event
@@ -599,9 +606,9 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 			log.Printf("[mcp] Failed to build topology for relationships %s/%s/%s: %v", kind, namespace, name, err)
 		} else {
 			displayKind := normalizeDisplayKind(kind)
-			if rels := topology.GetRelationships(displayKind, namespace, name, topo,
+			if rels := topology.GetRelationshipsWithObject(displayKind, namespace, name, rawObj, topo,
 				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())); rels != nil {
+				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), nil); rels != nil {
 				result["relationships"] = rels
 			}
 		}

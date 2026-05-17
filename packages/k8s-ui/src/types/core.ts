@@ -415,6 +415,7 @@ export interface ResourceRef {
 export interface Relationships {
   owner?: ResourceRef
   deployment?: ResourceRef   // Grandparent Deployment (for Pods owned by ReplicaSets)
+  managedBy?: ResourceRef[]  // Topmost meaningful manager(s): GitOps controller (ArgoCD Application / Flux Kustomization / Flux HelmRelease), Helm release, or the topmost K8s owner. Synthesized server-side; replaces client-side detectGitOpsOwner.
   children?: ResourceRef[]
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
@@ -427,6 +428,8 @@ export interface Relationships {
   pdbs?: ResourceRef[]              // PodDisruptionBudgets protecting this workload
   networkPolicies?: ResourceRef[]   // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy variants selecting this workload
   pods?: ResourceRef[]
+  serviceAccount?: ResourceRef      // For Pods: derived from pod.spec.serviceAccountName
+  node?: ResourceRef                // For scheduled Pods: derived from pod.spec.nodeName
 }
 
 // Parsed X.509 certificate metadata (from backend cert parsing)

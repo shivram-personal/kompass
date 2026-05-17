@@ -294,6 +294,18 @@ type Relationships struct {
 	PDBs            []ResourceRef `json:"pdbs,omitempty"`            // PodDisruptionBudgets protecting this workload
 	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload
 	Pods            []ResourceRef `json:"pods,omitempty"`            // For Service: pods it routes to
+
+	// ServiceAccount is the ServiceAccount bound to this Pod (Pod-only field,
+	// derived from pod.Spec.ServiceAccountName). Omitted when the SA name is empty.
+	ServiceAccount *ResourceRef `json:"serviceAccount,omitempty"`
+	// Node is the Node this Pod is scheduled on (Pod-only field, derived from
+	// pod.Spec.NodeName). Omitted when the Pod is unscheduled.
+	Node *ResourceRef `json:"node,omitempty"`
+	// ManagedBy walks the owner-ref chain up to the topmost meaningful manager
+	// — ArgoCD Application > Flux Kustomization/HelmRelease > Helm release >
+	// topmost K8s owner (Deployment > ReplicaSet > Pod). Empty when no
+	// meaningful manager is detectable.
+	ManagedBy []ResourceRef `json:"managedBy,omitempty"`
 }
 
 // CertificateInfo holds parsed X.509 certificate metadata for a single certificate.

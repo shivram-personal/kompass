@@ -23,7 +23,7 @@ import {
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind } from '../../utils/navigation'
-import { detectGitOpsOwner, type GitOpsOwnerRef } from '../../utils/gitops-owner'
+import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors'
@@ -311,7 +311,7 @@ export function WorkloadView({
 
   // Metadata
   const metadata = useMemo(() => extractMetadata(kind, resource), [kind, resource])
-  const gitopsOwner = useMemo(() => detectGitOpsOwner(resource), [resource])
+  const gitopsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
   // When the resource itself is a portal GitOps CR (Application, Kustomization,
   // HelmRelease, etc.), surface a link to its dedicated GitOps detail page —
   // the drawer's renderer is thorough but the tab has the tree + insights +
