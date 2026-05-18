@@ -64,12 +64,25 @@ export interface FleetClusterStamp {
   id: string
   name: string
 }
-export type FleetDestinationMatch = 'in_cluster' | 'inferred' | 'unmatched'
+export type FleetDestinationMatch = 'in_cluster' | 'exact' | 'inferred' | 'unmatched'
+// FleetDestinationConfidence is a coarse signal the SPA uses to style
+// the destination chip. `high` = URL-equality match (either direct or
+// via Argo cluster-secret), `medium` = name-equality match (more
+// fragile, more likely to be a false positive when two clusters share
+// a name). `unmatched` rows omit this field.
+export type FleetDestinationConfidence = 'high' | 'medium'
 export interface FleetDestinationStamp {
   cluster_id?: string
   cluster_name?: string
   namespace?: string
   match: FleetDestinationMatch
+  // Confidence + reason are populated for non-unmatched rows. They power
+  // the chip's visual treatment (a checkmark on high-confidence matches)
+  // and its title= tooltip respectively. Both come from the hub —
+  // adding new values shouldn't break the SPA (unknown confidence
+  // falls back to no special styling).
+  confidence?: FleetDestinationConfidence
+  reason?: string
   raw_server?: string
   raw_name?: string
 }
@@ -1050,20 +1063,32 @@ function DestinationCell({
   if (dest.match === 'in_cluster') {
     return <span className="block truncate text-theme-text-tertiary">same cluster</span>
   }
-  if (dest.match === 'inferred' && dest.cluster_id && dest.cluster_name) {
+  if ((dest.match === 'exact' || dest.match === 'inferred') && dest.cluster_id && dest.cluster_name) {
     const handleClick = (e: React.MouseEvent) => {
       e.stopPropagation()
       onDestinationClick?.(row, dest)
     }
     const short = shortClusterName(dest.cluster_name)
+    // High-confidence (URL match): solid sky chip with a small ✓ marker.
+    // Medium-confidence (name match): same chip styling but no marker, and
+    // a slightly muted border tone so operators can tell at a glance
+    // which destinations are URL-verified vs name-only. Tooltip carries
+    // the human-readable reason from the hub.
+    const highConfidence = dest.confidence === 'high'
+    const tooltipReason = dest.reason ? ` (${dest.reason})` : ''
     return (
       <button
         type="button"
         onClick={handleClick}
-        className="block max-w-full truncate rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-xs font-medium text-sky-600 hover:bg-sky-500/20 dark:text-sky-300"
-        title={`Open workloads in ${dest.cluster_name}`}
+        className={
+          'block max-w-full truncate rounded px-1.5 py-0.5 text-xs font-medium hover:bg-sky-500/20 dark:text-sky-300 ' +
+          (highConfidence
+            ? 'border border-sky-500/50 bg-sky-500/15 text-sky-700'
+            : 'border border-sky-500/25 bg-sky-500/5 text-sky-600')
+        }
+        title={`Open workloads in ${dest.cluster_name}${tooltipReason}`}
       >
-        {short}
+        {highConfidence ? '✓ ' : ''}{short}
       </button>
     )
   }

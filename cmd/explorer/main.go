@@ -262,13 +262,23 @@ func main() {
 					log.Printf("[cloud] panic in cloud tunnel: %v — local Radar continues to serve", r)
 				}
 			}()
+			// Try to discover the external API server URL from
+			// kube-public/cluster-info so the hub can correlate this
+			// cluster against Argo CD's destination references. Best-
+			// effort: empty when the ConfigMap is absent (managed K8s)
+			// or RBAC denies the read. 3s timeout — the connect path
+			// shouldn't block on a single ConfigMap GET.
+			discoverCtx, cancel := context.WithTimeout(rootCtx, 3*time.Second)
+			apiServerURL := cloud.DiscoverAPIServerURL(discoverCtx, k8s.GetClient())
+			cancel()
 			runErr := cloud.Run(rootCtx, cloud.Config{
-				URL:         *cloudURL,
-				Token:       *cloudToken,
-				ClusterID:   *cloudClusterName,
-				ClusterName: *cloudClusterName,
-				Namespace:   os.Getenv("MY_POD_NAMESPACE"),
-				Handler:     srv.Handler(),
+				URL:          *cloudURL,
+				Token:        *cloudToken,
+				ClusterID:    *cloudClusterName,
+				ClusterName:  *cloudClusterName,
+				Namespace:    os.Getenv("MY_POD_NAMESPACE"),
+				APIServerURL: apiServerURL,
+				Handler:      srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {
 				log.Printf("[cloud] tunnel exited: %v", runErr)

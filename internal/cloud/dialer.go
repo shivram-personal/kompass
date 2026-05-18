@@ -30,6 +30,13 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 	if cfg.Namespace != "" {
 		headers.Set("X-Radar-Namespace", cfg.Namespace)
 	}
+	// Validate before send — the value comes from a ConfigMap on the
+	// cluster, and a corrupted ConfigMap shouldn't be able to inject
+	// header smuggling. Reject silently on bad shape; hub falls back
+	// to name-based correlation.
+	if u, err := validateAPIServerURL(cfg.APIServerURL); err == nil && u != "" {
+		headers.Set("X-Radar-API-Server-URL", u)
+	}
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
