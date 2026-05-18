@@ -116,9 +116,6 @@ func TestBuildManagedTree_SyntheticRootAndDeclaredChildren(t *testing.T) {
 	if tree.Root.Ref.Name != "web" {
 		t.Errorf("root Name = %q, want web", tree.Root.Ref.Name)
 	}
-	if synthetic, _ := tree.Root.Data["synthetic"].(bool); !synthetic {
-		t.Errorf("root Data.synthetic = %v, want true", tree.Root.Data["synthetic"])
-	}
 	if tree.Root.Tool != ToolArgoCD {
 		t.Errorf("root Tool = %q, want %q", tree.Root.Tool, ToolArgoCD)
 	}

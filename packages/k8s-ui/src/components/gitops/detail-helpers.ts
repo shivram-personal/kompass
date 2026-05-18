@@ -20,11 +20,19 @@ export function formatGitOpsSourceUrl(repo: string): string {
 
 // formatGitOpsDestination collapses the canonical in-cluster API server
 // URL to the literal "in-cluster" so the destination cell reads cleanly
-// for the common case. Any other server URL gets its protocol stripped
-// for the same reason as the source. Namespace is appended on the same
-// line so operators see "<host>, Namespace: <ns>" without two lookups.
+// for the common case. Empty/whitespace-only server also renders as
+// "in-cluster" — matches Argo's default-when-unspecified semantics
+// (controller-managed apps without an explicit destination target the
+// same cluster the controller runs in). Any other server URL gets its
+// protocol stripped for the same reason as the source. Namespace is
+// appended on the same line so operators see "<host>, Namespace: <ns>"
+// without two lookups.
 export function formatGitOpsDestination(server: string | undefined, namespace: string | undefined): string {
-  let host = (server || '').trim()
+  // Normalize: trim whitespace, drop any trailing slash so Argo 2.13's
+  // "https://kubernetes.default.svc/" variant (the in-cluster URL with a
+  // trailing slash that some controller versions emit) matches the literal
+  // we collapse to "in-cluster".
+  let host = (server || '').trim().replace(/\/+$/, '')
   if (host === '' || host === 'https://kubernetes.default.svc' || host === 'in-cluster') {
     host = 'in-cluster'
   } else {
@@ -46,8 +54,10 @@ export function gitOpsInsightChangeKey(ref: { kind: string; namespace?: string; 
 //   - id is missing
 //   - id is non-numeric (Flux condition rows reuse the same slot for
 //     condition.type, which we never want to interpret as a rollback id)
-//   - id is non-positive (Number("") === 0 passes Number.isFinite, so
-//     we guard `> 0` explicitly).
+//   - id is non-positive ("0" and negative strings parse fine via
+//     Number() but aren't valid Argo history ids — Argo's id sequence
+//     starts at 1; rolling back to id 0 would unhelpfully target the
+//     first revision).
 export function parseArgoRollbackID(id: string | undefined): number | null {
   if (!id) return null
   const n = Number(id)

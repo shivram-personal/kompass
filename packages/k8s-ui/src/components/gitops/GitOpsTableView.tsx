@@ -40,8 +40,10 @@ import {
 //   - Caller owns data fetching + normalization (use the exported
 //     normalizeArgoApplication / normalizeFluxKustomization /
 //     normalizeFluxHelmRelease helpers to convert raw CRDs to GitOpsRow)
-//   - Optional `extraLeadingColumns` prepend caller-specific columns
-//     (Hub uses this for Cluster + Deployed-to)
+//   - Fleet info (controller cluster, destination match) is rendered
+//     INLINE in the canonical Application + Destination cells via
+//     `row._cluster` / `row._destination` stamps. OSS rows leave these
+//     undefined; the cells fall back to the standard rendering.
 //   - Optional `crossClusterCount` + destination filter chips render only
 //     when the caller passes them (Hub-only — single-cluster Radar omits)
 //   - All UI state (mode, search, filters, sort, view mode) is owned
@@ -103,21 +105,6 @@ export interface GitOpsRow {
   _destination?: FleetDestinationStamp
 }
 
-// GitOpsExtraColumn is the leading-column hook hub-web uses to inject
-// Cluster + Deployed-to columns. The render function receives the full
-// GitOpsRow including any _cluster / _destination stamping.
-export interface GitOpsExtraColumn {
-  key: string
-  label: string
-  // CSS width class for the <th>; pairs with min-width to handle truncation.
-  width?: string
-  render: (row: GitOpsRow) => ReactNode
-  // Optional: limit visibility to specific modes. e.g. hub-web's
-  // Deployed-to column is Applications-only because Flux deploys
-  // in-cluster.
-  visibleForMode?: GitOpsMode
-}
-
 export type DestinationFilter = 'all' | 'this-cluster' | 'cross-cluster' | 'unmatched'
 
 // ----- Component props -------------------------------------------------------
@@ -135,18 +122,12 @@ export interface GitOpsTableViewProps {
   // Row click — caller routes to its own detail page.
   onRowClick: (row: GitOpsRow) => void
 
-  // Optional cross-cluster surfaces (Hub-only). Leading columns prepend,
-  // trailing columns append. Most fleet info (controller cluster, deploy
-  // destination) lives inline in the Application + Destination cells via
-  // `row._cluster` / `row._destination`; these props are extension hooks
-  // for future fleet-only columns that don't fit those cells.
-  extraLeadingColumns?: GitOpsExtraColumn[]
-  extraTrailingColumns?: GitOpsExtraColumn[]
   // Called when the user clicks the destination cluster chip in the
   // Destination cell. Fleet-only; OSS leaves undefined. Caller routes to
   // the destination cluster's workloads view (filtered by the Argo
   // instance label) — the chip itself stops row-click propagation.
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
+  // Cross-cluster surfaces (Hub-only); OSS leaves these undefined.
   crossClusterCount?: number
   destinationFilter?: DestinationFilter
   onDestinationFilterChange?: (next: DestinationFilter) => void
@@ -173,8 +154,6 @@ export function GitOpsTableView({
   counts,
   onRefresh,
   onRowClick,
-  extraLeadingColumns,
-  extraTrailingColumns,
   onDestinationClick,
   crossClusterCount,
   destinationFilter,
@@ -467,9 +446,9 @@ export function GitOpsTableView({
               No applications match the current filters.
             </div>
           ) : viewMode === 'tiles' ? (
-            <GitOpsTiles rows={filteredRows} onOpen={onRowClick} extraLeadingColumns={extraLeadingColumns} extraTrailingColumns={extraTrailingColumns} mode={mode} />
+            <GitOpsTiles rows={filteredRows} onOpen={onRowClick} />
           ) : (
-            <GitOpsTable rows={filteredRows} onOpen={onRowClick} onDestinationClick={onDestinationClick} extraLeadingColumns={extraLeadingColumns} extraTrailingColumns={extraTrailingColumns} mode={mode} />
+            <GitOpsTable rows={filteredRows} onOpen={onRowClick} onDestinationClick={onDestinationClick} />
           )}
         </div>
       </div>
@@ -853,30 +832,15 @@ function GitOpsTable({
   rows,
   onOpen,
   onDestinationClick,
-  extraLeadingColumns,
-  extraTrailingColumns,
-  mode,
 }: {
   rows: GitOpsRow[]
   onOpen: (row: GitOpsRow) => void
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
-  extraLeadingColumns?: GitOpsExtraColumn[]
-  extraTrailingColumns?: GitOpsExtraColumn[]
-  mode: GitOpsMode
 }) {
-  const visibleLeading = (extraLeadingColumns ?? []).filter(
-    (c) => !c.visibleForMode || c.visibleForMode === mode,
-  )
-  const visibleTrailing = (extraTrailingColumns ?? []).filter(
-    (c) => !c.visibleForMode || c.visibleForMode === mode,
-  )
   return (
     <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
       <thead className="sticky top-0 z-10 bg-theme-surface">
         <tr className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
-          {visibleLeading.map((c) => (
-            <TableHead key={c.key} className={c.width ?? 'w-[12%]'}>{c.label}</TableHead>
-          ))}
           <TableHead className="w-[22%]">Application</TableHead>
           <TableHead className="w-[9%]">Project</TableHead>
           <TableHead className="w-[9%]">Sync</TableHead>
@@ -884,9 +848,6 @@ function GitOpsTable({
           <TableHead className="w-[20%]">Source</TableHead>
           <TableHead className="w-[14%]">Destination</TableHead>
           <TableHead className="w-[10%]">Last Sync</TableHead>
-          {visibleTrailing.map((c) => (
-            <TableHead key={c.key} className={c.width ?? 'w-[12%]'}>{c.label}</TableHead>
-          ))}
         </tr>
       </thead>
       <tbody>
@@ -899,9 +860,6 @@ function GitOpsTable({
               row.terminating && 'opacity-70',
             )}
           >
-            {visibleLeading.map((c) => (
-              <TableCell key={c.key}>{c.render(row)}</TableCell>
-            ))}
             <TableCell>
               <div className="flex min-w-0 items-center gap-2">
                 <span className={`h-8 w-1 shrink-0 rounded-full ${statusStripe(row)}`} />
@@ -950,9 +908,6 @@ function GitOpsTable({
                 ? <span className="text-orange-400/80">Pending {formatRelativeAge(row.terminationStartedAt ?? '') || 'now'}</span>
                 : formatRelativeAge(row.lastSync || row.createdAt)}
             </TableCell>
-            {visibleTrailing.map((c) => (
-              <TableCell key={c.key}>{c.render(row)}</TableCell>
-            ))}
           </tr>
         ))}
       </tbody>
@@ -963,25 +918,14 @@ function GitOpsTable({
 function GitOpsTiles({
   rows,
   onOpen,
-  extraLeadingColumns,
-  extraTrailingColumns,
-  mode,
 }: {
   rows: GitOpsRow[]
   onOpen: (row: GitOpsRow) => void
-  extraLeadingColumns?: GitOpsExtraColumn[]
-  extraTrailingColumns?: GitOpsExtraColumn[]
-  mode: GitOpsMode
 }) {
-  // Tile view collapses leading + trailing into one "extras" row at the
-  // top of each tile — the table's lead/trail distinction is positional
-  // but the tile is a card without that geometry, so we present them as
-  // labeled metadata together (leading first, then trailing).
-  const combined = [...(extraLeadingColumns ?? []), ...(extraTrailingColumns ?? [])]
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3 p-4">
       {rows.map((row) => (
-        <GitOpsTile key={row.id} row={row} onOpen={onOpen} extraLeadingColumns={combined} mode={mode} />
+        <GitOpsTile key={row.id} row={row} onOpen={onOpen} />
       ))}
     </div>
   )
@@ -990,13 +934,9 @@ function GitOpsTiles({
 function GitOpsTile({
   row,
   onOpen,
-  extraLeadingColumns,
-  mode,
 }: {
   row: GitOpsRow
   onOpen: (row: GitOpsRow) => void
-  extraLeadingColumns?: GitOpsExtraColumn[]
-  mode: GitOpsMode
 }) {
   const source = compactRepoSource(row.repository || row.chart, row.path || row.chart)
   const revision = row.targetRevision || ''
@@ -1004,9 +944,6 @@ function GitOpsTile({
   const recencyClass = recencyTone(lastSyncRaw)
   const dest = row.destination ? compactClusterURL(row.destination) : ''
   const ns = row.destinationNamespace || row.namespace
-  const visibleExtras = (extraLeadingColumns ?? []).filter(
-    (c) => !c.visibleForMode || c.visibleForMode === mode,
-  )
   return (
     <button
       type="button"
@@ -1018,16 +955,6 @@ function GitOpsTile({
     >
       <div className={clsx('h-1 w-full', statusStripe(row))} />
       <div className="flex flex-1 flex-col gap-3 px-4 pb-4 pt-3">
-        {visibleExtras.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 text-[11px] text-theme-text-tertiary">
-            {visibleExtras.map((c) => (
-              <span key={c.key} className="inline-flex items-center gap-1">
-                <span className="text-theme-text-tertiary">{c.label}:</span>
-                {c.render(row)}
-              </span>
-            ))}
-          </div>
-        )}
         <div className="line-clamp-2 break-all text-[15px] font-semibold leading-tight text-theme-text-primary">
           {row.name}
         </div>
@@ -1168,7 +1095,10 @@ export function shortClusterName(full: string): string {
   }
   if (full.startsWith('arn:aws:eks:')) {
     const slash = full.lastIndexOf('/')
-    return slash >= 0 ? full.slice(slash + 1) : full
+    // `slash >= 0 && full.slice(slash + 1)` → empty when the slash is
+    // the last char (malformed ARN like `cluster/`). Fall back to the
+    // full input so the chip never renders blank.
+    return (slash >= 0 ? full.slice(slash + 1) : '') || full
   }
   return full
 }

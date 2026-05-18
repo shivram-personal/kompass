@@ -79,16 +79,9 @@ func BuildManagedTree(app, appNamespace string, matched []*unstructured.Unstruct
 		Ref:  rootRef,
 		Role: RoleRoot,
 		Tool: ToolArgoCD,
-		// `synthetic: true` is reserved for future UI consumers to detect
-		// destination-side discovery (so e.g. a fleet detail page could
-		// suppress controller-only action buttons like Rollback that
-		// only make sense against the real Application CRD). No consumer
-		// reads this flag today; planned for the hub-web fleet detail
-		// page.
 		Data: map[string]any{
 			"namespace": appNamespace,
 			"group":     rootRef.Group,
-			"synthetic": true,
 		},
 	}
 

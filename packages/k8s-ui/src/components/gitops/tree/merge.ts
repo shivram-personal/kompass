@@ -12,7 +12,7 @@ import type { GitOpsResourceTree, GitOpsTreeEdge, GitOpsTreeNode, GitOpsTreeRef 
 //      ownerReferences past the resources it manages directly — it never
 //      sees ReplicaSets, Pods, EndpointSlices, etc.
 //
-//   2. The destination cluster's /api/gitops/managed-resources?tracking_id=...
+//   2. The destination cluster's /api/gitops/managed-resources?app=...
 //      response ("destination tree"). Discovered by Argo's tracking
 //      annotation in the destination cluster's actual workloads. Carries
 //      the LIVE health/info from the in-cluster informer (more authoritative
@@ -50,9 +50,9 @@ export function mergeGitOpsTrees(
   }
 
   // Pass 1: walk controller nodes; for any match in destination, overlay
-  // its live health + info onto the controller node. Argo's per-resource
-  // sync state stays controller-side — it's Argo-internal and the
-  // destination informer doesn't compute it.
+  // its live health, info, and topologyStatus onto the controller node.
+  // Argo's per-resource sync state stays controller-side — it's
+  // Argo-internal and the destination informer doesn't compute it.
   const nodes: GitOpsTreeNode[] = controller.nodes.map((n) => {
     const dest = destByKey.get(refKey(n.ref))
     if (!dest) return n

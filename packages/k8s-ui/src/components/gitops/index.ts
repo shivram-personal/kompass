@@ -24,7 +24,6 @@ export type {
   GitOpsMode,
   GitOpsViewMode,
   SortKey,
-  GitOpsExtraColumn,
   DestinationFilter,
   FleetClusterStamp,
   FleetDestinationStamp,
@@ -41,7 +40,7 @@ export {
   getGitOpsTool,
 } from './detail-helpers'
 export { SyncOptionsDialog } from './SyncOptionsDialog'
-export type { SyncOptionsDialogProps } from './SyncOptionsDialog'
+export type { SyncOptionsDialogProps, ArgoSyncOpts } from './SyncOptionsDialog'
 export { RollbackDialog } from './RollbackDialog'
 export type { RollbackDialogProps } from './RollbackDialog'
 export type { GitOpsGraphFilterRailProps, GitOpsTreeFacets } from './GitOpsGraphFilterRail'

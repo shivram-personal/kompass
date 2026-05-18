@@ -15,19 +15,26 @@ import { DialogPortal } from '../ui/DialogPortal'
 // falls through to the Application's targetRevision.
 // =============================================================================
 
+// ArgoSyncOpts is the payload shape the dialog passes to its onConfirm
+// callback (and that downstream POSTs to `/api/argo/applications/{ns}/{name}/sync`
+// expect). Exported separately so consumers can type the mutationFn arg
+// without redeclaring the structure — keeps OSS and Hub in lockstep on
+// the wire shape.
+export interface ArgoSyncOpts {
+  revision?: string
+  prune: boolean
+  dryRun: boolean
+  force: boolean
+  applyOnly: boolean
+  syncOptions: string[]
+}
+
 export interface SyncOptionsDialogProps {
   open: boolean
   appLabel: string
   pending?: boolean
   onCancel: () => void
-  onConfirm: (opts: {
-    revision?: string
-    prune: boolean
-    dryRun: boolean
-    force: boolean
-    applyOnly: boolean
-    syncOptions: string[]
-  }) => void
+  onConfirm: (opts: ArgoSyncOpts) => void
 }
 
 export function SyncOptionsDialog({ open, appLabel, pending, onCancel, onConfirm }: SyncOptionsDialogProps) {
