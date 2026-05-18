@@ -56,8 +56,8 @@ func DiscoverAPIServerURL(ctx context.Context, client kubernetes.Interface) stri
 	// directly was non-deterministic — different invocations could return
 	// different URLs on a multi-cluster kubeconfig, flaking hub correlation.
 	if cfg.CurrentContext != "" {
-		if ctx := cfg.Contexts[cfg.CurrentContext]; ctx != nil && ctx.Cluster != "" {
-			if cluster := cfg.Clusters[ctx.Cluster]; cluster != nil {
+		if kubeCtx := cfg.Contexts[cfg.CurrentContext]; kubeCtx != nil && kubeCtx.Cluster != "" {
+			if cluster := cfg.Clusters[kubeCtx.Cluster]; cluster != nil {
 				if u := validClusterServer(cluster.Server); u != "" {
 					return u
 				}

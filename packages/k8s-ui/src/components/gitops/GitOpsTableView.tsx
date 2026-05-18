@@ -19,6 +19,7 @@ import {
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { Tooltip } from '../ui/Tooltip'
 import { getGitOpsResourceStatus } from './detail-helpers'
+import { toggleSet } from './GitOpsGraphFilterRail'
 import { parseContextName } from '../../utils/context-name'
 
 // =============================================================================
@@ -1261,13 +1262,6 @@ function compactClusterURL(dest: string): string {
   return dest
     .replace(/^https?:\/\//, '')
     .replace(/^kubernetes\.default\.svc(:\d+)?\/?$/, 'in-cluster')
-}
-
-function toggleSet(set: Set<string>, setter: (next: Set<string>) => void, value: string) {
-  const next = new Set(set)
-  if (next.has(value)) next.delete(value)
-  else next.add(value)
-  setter(next)
 }
 
 // formatRelativeAge — inline relative-time formatter. Returns "" for unparseable

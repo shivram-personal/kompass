@@ -143,33 +143,6 @@ func BuildManagedTree(app, appNamespace string, matched []*unstructured.Unstruct
 		Root:    root,
 		Nodes:   nodes,
 		Edges:   edges,
-		Summary: summarizeManaged(nodes),
+		Summary: summarize(nodes),
 	}
-}
-
-// summarizeManaged is the BuildManagedTree-local counterpart of the regular
-// Builder's summarize(). Roles are a fixed shape here (1 root + N declared)
-// so the counts collapse to Declared + Degraded (Health Degraded OR Missing,
-// matching the server-side summarizeGitOpsTree convention) + OutOfSync.
-// Kept local rather than exporting the server-side summarizeGitOpsTree to
-// avoid widening the package surface for a one-call helper.
-//
-// Health is currently never set by BuildManagedTree (see BuildManagedTree's
-// per-node comment about V2 health derivation), so Summary.Degraded will be
-// 0 in practice today — the case is still handled here so the summary
-// stays correct once health derivation lands.
-func summarizeManaged(nodes []Node) Summary {
-	var s Summary
-	for _, n := range nodes {
-		if n.Role == RoleDeclared {
-			s.Declared++
-		}
-		if n.Health == "Degraded" || n.Health == "Missing" {
-			s.Degraded++
-		}
-		if n.Sync == "OutOfSync" {
-			s.OutOfSync++
-		}
-	}
-	return s
 }
