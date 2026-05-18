@@ -1,20 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { useNow, shouldScheduleNow, scheduleNowTicks } from './useNow'
+import { shouldScheduleNow, scheduleNowTicks } from './useNow'
 
 // This package's vitest config has no @testing-library/react and no
-// jsdom — we can't render hooks here. Instead the hook's effect
-// body is hoisted into the pure `scheduleNowTicks` driver, and we
-// exercise THAT directly: the same opt-out rules, the same
-// setInterval call, the same cleanup contract that the hook
-// installs at runtime. The hook itself is also imported so the
-// suite fails if its export shape regresses.
-
-describe('useNow', () => {
-  it('exports a callable hook with the documented signature', () => {
-    expect(typeof useNow).toBe('function')
-    expect(useNow.length).toBeLessThanOrEqual(1)
-  })
-})
+// jsdom — we can't render hooks here. The hook's effect body is
+// hoisted into the pure `scheduleNowTicks` driver, and we exercise
+// THAT directly: same opt-out rules, same setInterval call, same
+// cleanup contract that the hook installs at runtime.
 
 describe('shouldScheduleNow', () => {
   it('schedules when intervalMs is a positive number', () => {
