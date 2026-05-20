@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -31,6 +32,7 @@ type Client struct {
 	discovered       bool
 	discoveryService *ServiceInfo // discovered service info for port-forward
 	manualURL        string       // --prometheus-url override
+	headers          map[string]string
 
 	// K8s clients for discovery
 	k8sClient   kubernetes.Interface
@@ -88,6 +90,29 @@ func SetManualURL(rawURL string) {
 	}
 }
 
+// SetHeaders sets HTTP headers attached to every Prometheus request on the
+// global client. Pass nil or an empty map to clear.
+func SetHeaders(h map[string]string) {
+	clientMu.RLock()
+	c := globalClient
+	clientMu.RUnlock()
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.headers = copyHeaders(h)
+}
+
+func copyHeaders(h map[string]string) map[string]string {
+	if len(h) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h))
+	maps.Copy(out, h)
+	return out
+}
+
 // SetURL overrides discovery with a specific Prometheus URL.
 // Clears existing connection state so the next EnsureConnected uses this URL.
 func (c *Client) SetURL(rawURL string) {
@@ -127,8 +152,16 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	defer clientMu.Unlock()
 
 	manualURL := ""
+	var headers map[string]string
 	if globalClient != nil {
+		// SetURL / SetHeaders write these under the per-client mutex after
+		// dropping clientMu, so reading without c.mu here would race even
+		// though we hold clientMu exclusively. copyHeaders also detaches the
+		// map from the old client so a late mutation can't bleed through.
+		globalClient.mu.RLock()
 		manualURL = globalClient.manualURL
+		headers = copyHeaders(globalClient.headers)
+		globalClient.mu.RUnlock()
 	}
 
 	globalClient = &Client{
@@ -136,6 +169,7 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 		k8sConfig:   config,
 		contextName: contextName,
 		manualURL:   manualURL,
+		headers:     headers,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -225,6 +259,7 @@ func (c *Client) doQuery(ctx context.Context, reqURL string) (*QueryResult, erro
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -255,6 +290,16 @@ func (c *Client) doQuery(ctx context.Context, reqURL string) (*QueryResult, erro
 	return parseQueryResult(promResp.Data)
 }
 
+// applyHeaders attaches the configured custom headers to req under the
+// client's read lock, so a concurrent SetHeaders / Reinitialize doesn't race.
+func (c *Client) applyHeaders(req *http.Request) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+}
+
 // probe checks if a Prometheus endpoint is reachable and has data.
 // An instance that responds HTTP 200 but returns zero results for "up"
 // (no active scrape targets) is treated as unreachable so discovery
@@ -267,6 +312,7 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 	if err != nil {
 		return false
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -275,6 +321,12 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Surface auth failures explicitly — otherwise a misconfigured Bearer
+		// token shows up as "Prometheus not found" after discovery falls
+		// through every candidate.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			errorlog.Record("prometheus", "error", "endpoint %s returned HTTP %d (check --prometheus-header credentials)", addr, resp.StatusCode)
+		}
 		return false
 	}
 
