@@ -96,19 +96,6 @@ func copyHeaders(h map[string]string) map[string]string {
 	return out
 }
 
-// SetURL overrides discovery with a specific Prometheus URL.
-// Clears existing connection state so the next EnsureConnected uses this URL.
-func (c *Client) SetURL(rawURL string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.manualURL = strings.TrimRight(rawURL, "/")
-	c.baseURL = ""
-	c.basePath = ""
-	c.prom = nil
-	c.discovered = false
-	c.discoveryService = nil
-}
-
 // GetClient returns the global Prometheus client (may be nil).
 func GetClient() *Client {
 	clientMu.RLock()

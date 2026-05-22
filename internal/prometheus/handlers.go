@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -52,23 +51,16 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, client.GetStatus())
 }
 
-// handleConnect triggers Prometheus discovery and connection.
-// Accepts optional "url" query param to override discovery with a specific endpoint.
+// handleConnect triggers Prometheus discovery and connection. The endpoint
+// has no body or query parameters — the Prometheus URL is configured at
+// process startup via --prometheus-url, never per-request. Accepting a URL
+// here would let any caller redirect Prometheus queries to an arbitrary
+// host (SSRF) since radar binds to 0.0.0.0 by default.
 func handleConnect(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
 		return
-	}
-
-	// Allow URL override via query param (resets existing connection)
-	if overrideURL := r.URL.Query().Get("url"); overrideURL != "" {
-		u, err := url.Parse(overrideURL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-			writeError(w, http.StatusBadRequest, "invalid URL: must be a valid HTTP(S) URL")
-			return
-		}
-		client.SetURL(overrideURL)
 	}
 
 	_, _, err := client.EnsureConnected(r.Context())
