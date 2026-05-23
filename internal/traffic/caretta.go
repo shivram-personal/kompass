@@ -19,7 +19,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
-	promclient "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/pkg/prom"
 )
 
 const (
@@ -336,7 +336,7 @@ func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr st
 	query := "caretta_links_observed"
 	if opts.Namespace != "" {
 		// Filter by namespace (either client or server)
-		safeNS := promclient.SanitizeLabelValue(opts.Namespace)
+		safeNS := prom.SanitizeLabelValue(opts.Namespace)
 		query = fmt.Sprintf(`caretta_links_observed{client_namespace="%s"} or caretta_links_observed{server_namespace="%s"}`,
 			safeNS, safeNS)
 	}

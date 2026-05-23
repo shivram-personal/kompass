@@ -29,7 +29,7 @@ type Client struct {
 
 	// Discovery state
 	discovered       bool
-	discoveryService *ServiceInfo // discovered service info for port-forward
+	discoveryService *prom.ServiceInfo // discovered service info for port-forward
 	manualURL        string       // --prometheus-url override
 	headers          map[string]string
 
@@ -147,17 +147,17 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 }
 
 // GetStatus returns the current Prometheus connection status.
-func (c *Client) GetStatus() Status {
+func (c *Client) GetStatus() prom.Status {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	var svc *ServiceInfo
+	var svc *prom.ServiceInfo
 	if c.discoveryService != nil {
 		cp := *c.discoveryService
 		svc = &cp
 	}
 
-	return Status{
+	return prom.Status{
 		Available:   c.baseURL != "",
 		Connected:   c.baseURL != "",
 		Address:     c.baseURL,
@@ -253,7 +253,7 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 }
 
 // QueryRange executes a Prometheus range query via the underlying pkg/prom.Client.
-func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*QueryResult, error) {
+func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*prom.QueryResult, error) {
 	if _, _, err := c.EnsureConnected(ctx); err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 }
 
 // Query executes a Prometheus instant query via the underlying pkg/prom.Client.
-func (c *Client) Query(ctx context.Context, query string) (*QueryResult, error) {
+func (c *Client) Query(ctx context.Context, query string) (*prom.QueryResult, error) {
 	if _, _, err := c.EnsureConnected(ctx); err != nil {
 		return nil, err
 	}

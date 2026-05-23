@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/prom"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -45,7 +46,7 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, Status{Available: false, Error: "Prometheus client not initialized"})
+		writeJSON(w, http.StatusOK, prom.Status{Available: false, Error: "Prometheus client not initialized"})
 		return
 	}
 	writeJSON(w, http.StatusOK, client.GetStatus())
@@ -128,10 +129,10 @@ type ResourceMetricsResponse struct {
 	Kind      string         `json:"kind"`
 	Namespace string         `json:"namespace,omitempty"`
 	Name      string         `json:"name"`
-	Category  MetricCategory `json:"category"`
+	Category  prom.MetricCategory `json:"category"`
 	Unit      string         `json:"unit"`
 	Range     string         `json:"range"`
-	Result    *QueryResult   `json:"result"`
+	Result    *prom.QueryResult   `json:"result"`
 	Query     string         `json:"query,omitempty"` // PromQL query used (included when result is empty for diagnostics)
 	Hint      string         `json:"hint,omitempty"`  // Contextual hint when results are empty (e.g. cri-docker label issues)
 }
@@ -149,14 +150,14 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
 	// Validate kind is supported
 	supported := false
-	for _, k := range SupportedKinds() {
+	for _, k := range prom.SupportedKinds() {
 		if strings.EqualFold(k, kind) {
 			kind = k // normalize casing
 			supported = true
@@ -169,7 +170,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate category
-	validCategories := CategoriesForKind(kind)
+	validCategories := prom.CategoriesForKind(kind)
 	categoryValid := false
 	for _, c := range validCategories {
 		if c == category {
@@ -182,7 +183,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := BuildQuery(kind, namespace, name, category)
+	query := prom.BuildQuery(kind, namespace, name, category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "cannot build query for "+kind+"/"+string(category))
 		return
@@ -200,7 +201,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, query = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
-		func() string { return BuildQueryNoContainerFilter(kind, namespace, name, category) },
+		func() string { return prom.BuildQueryNoContainerFilter(kind, namespace, name, category) },
 		fmt.Sprintf("Primary query empty for %s/%s/%s (%s)", kind, namespace, name, category))
 
 	resp := ResourceMetricsResponse{
@@ -208,7 +209,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		Namespace: namespace,
 		Name:      name,
 		Category:  category,
-		Unit:      CategoryUnitForKind(kind, category),
+		Unit:      prom.CategoryUnitForKind(kind, category),
 		Range:     rangeStr,
 		Result:    result,
 	}
@@ -241,12 +242,12 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 	}
 	kind = "Node"
 
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
-	validCategories := CategoriesForKind(kind)
+	validCategories := prom.CategoriesForKind(kind)
 	categoryValid := false
 	for _, c := range validCategories {
 		if c == category {
@@ -259,7 +260,7 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	query := BuildQuery(kind, "", name, category)
+	query := prom.BuildQuery(kind, "", name, category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "cannot build query for "+kind+"/"+string(category))
 		return
@@ -280,7 +281,7 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 		Kind:     kind,
 		Name:     name,
 		Category: category,
-		Unit:     CategoryUnitForKind(kind, category),
+		Unit:     prom.CategoryUnitForKind(kind, category),
 		Range:    rangeStr,
 		Result:   result,
 	}
@@ -295,10 +296,10 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 // NamespaceMetricsResponse is the response shape for namespace-level metrics.
 type NamespaceMetricsResponse struct {
 	Namespace string         `json:"namespace"`
-	Category  MetricCategory `json:"category"`
+	Category  prom.MetricCategory `json:"category"`
 	Unit      string         `json:"unit"`
 	Range     string         `json:"range"`
-	Result    *QueryResult   `json:"result"`
+	Result    *prom.QueryResult   `json:"result"`
 }
 
 // handleNamespaceMetrics returns aggregate metrics for a namespace.
@@ -310,12 +311,12 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespace := chi.URLParam(r, "namespace")
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
-	query := BuildNamespaceQuery(namespace, category)
+	query := prom.BuildNamespaceQuery(namespace, category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "unsupported category for namespace: "+string(category))
 		return
@@ -333,13 +334,13 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, _ = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
-		func() string { return BuildNamespaceQueryNoContainerFilter(namespace, category) },
+		func() string { return prom.BuildNamespaceQueryNoContainerFilter(namespace, category) },
 		fmt.Sprintf("Namespace query empty for %s (%s)", namespace, category))
 
 	writeJSON(w, http.StatusOK, NamespaceMetricsResponse{
 		Namespace: namespace,
 		Category:  category,
-		Unit:      CategoryUnit(category),
+		Unit:      prom.CategoryUnit(category),
 		Range:     rangeStr,
 		Result:    result,
 	})
@@ -347,10 +348,10 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 
 // ClusterMetricsResponse is the response shape for cluster-level metrics.
 type ClusterMetricsResponse struct {
-	Category MetricCategory `json:"category"`
+	Category prom.MetricCategory `json:"category"`
 	Unit     string         `json:"unit"`
 	Range    string         `json:"range"`
-	Result   *QueryResult   `json:"result"`
+	Result   *prom.QueryResult   `json:"result"`
 }
 
 // handleClusterMetrics returns aggregate metrics for the entire cluster.
@@ -361,12 +362,12 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	category := MetricCategory(r.URL.Query().Get("category"))
+	category := prom.MetricCategory(r.URL.Query().Get("category"))
 	if category == "" {
-		category = CategoryCPU
+		category = prom.CategoryCPU
 	}
 
-	query := BuildClusterQuery(category)
+	query := prom.BuildClusterQuery(category)
 	if query == "" {
 		writeError(w, http.StatusBadRequest, "unsupported category for cluster: "+string(category))
 		return
@@ -384,12 +385,12 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, _ = retryWithoutContainerFilter(r.Context(), client, result, query, category, start, end, step,
-		func() string { return BuildClusterQueryNoContainerFilter(category) },
+		func() string { return prom.BuildClusterQueryNoContainerFilter(category) },
 		fmt.Sprintf("Cluster query empty (%s)", category))
 
 	writeJSON(w, http.StatusOK, ClusterMetricsResponse{
 		Category: category,
-		Unit:     CategoryUnit(category),
+		Unit:     prom.CategoryUnit(category),
 		Range:    rangeStr,
 		Result:   result,
 	})
@@ -441,8 +442,8 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 // when the primary result is empty and the category uses that filter. This handles
 // cri-docker and other setups where cAdvisor metrics lack the container label.
 // Returns the updated result (original or fallback) and the query that produced it.
-func retryWithoutContainerFilter(ctx context.Context, client *Client, result *QueryResult, query string, category MetricCategory, start, end time.Time, step time.Duration, buildFallback func() string, logPrefix string) (*QueryResult, string) {
-	if len(result.Series) > 0 || !CategoryUsesContainerFilter(category) {
+func retryWithoutContainerFilter(ctx context.Context, client *Client, result *prom.QueryResult, query string, category prom.MetricCategory, start, end time.Time, step time.Duration, buildFallback func() string, logPrefix string) (*prom.QueryResult, string) {
+	if len(result.Series) > 0 || !prom.CategoryUsesContainerFilter(category) {
 		return result, query
 	}
 	fallbackQuery := buildFallback()

@@ -27,12 +27,12 @@ func RegisterRoutes(r chi.Router) {
 func handleSummary(w http.ResponseWriter, r *http.Request) {
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, CostSummary{Available: false, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (summary): %v", err)
-		writeJSON(w, http.StatusOK, CostSummary{Available: false, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.CostSummary{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 	writeJSON(w, http.StatusOK, pkgopencost.ComputeCostSummaryFromProm(
@@ -57,12 +57,12 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, WorkloadCostResponse{Namespace: ns, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (workloads): %v", err)
-		writeJSON(w, http.StatusOK, WorkloadCostResponse{Namespace: ns, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.WorkloadCostResponse{Namespace: ns, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 
@@ -119,12 +119,12 @@ func stripReplicaSetSuffix(name string) string {
 func handleTrend(w http.ResponseWriter, r *http.Request) {
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, CostTrendResponse{Available: false, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (trend): %v", err)
-		writeJSON(w, http.StatusOK, CostTrendResponse{Available: false, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.CostTrendResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 	writeJSON(w, http.StatusOK, pkgopencost.ComputeCostTrendFromProm(
@@ -135,12 +135,12 @@ func handleTrend(w http.ResponseWriter, r *http.Request) {
 func handleNodes(w http.ResponseWriter, r *http.Request) {
 	client := prometheuspkg.GetClient()
 	if client == nil {
-		writeJSON(w, http.StatusOK, NodeCostResponse{Available: false, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 	if _, _, err := client.EnsureConnected(r.Context()); err != nil {
 		log.Printf("[opencost] EnsureConnected failed (nodes): %v", err)
-		writeJSON(w, http.StatusOK, NodeCostResponse{Available: false, Reason: ReasonNoPrometheus})
+		writeJSON(w, http.StatusOK, pkgopencost.NodeCostResponse{Available: false, Reason: pkgopencost.ReasonNoPrometheus})
 		return
 	}
 	writeJSON(w, http.StatusOK, pkgopencost.ComputeNodeCosts(r.Context(), client.Prom()))

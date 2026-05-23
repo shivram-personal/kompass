@@ -115,7 +115,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 // from a pkg/prom.Candidate.
 func (c *Client) setDiscoveryServiceFromCandidate(cand prom.Candidate) {
 	c.mu.Lock()
-	c.discoveryService = &ServiceInfo{
+	c.discoveryService = &prom.ServiceInfo{
 		Namespace: cand.Namespace,
 		Name:      cand.Name,
 		Port:      cand.Port,
