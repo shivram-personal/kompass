@@ -140,16 +140,8 @@ func ComputeWorkloadsFromProm(ctx context.Context, client *prom.Client, namespac
 		allocCost := wl.CPUCost + wl.MemoryCost
 		usageCost := wl.CPUUsageCost + wl.MemoryUsageCost
 		wl.HourlyCost = allocCost
-		if allocCost > 0 && usageCost > 0 {
-			wl.Efficiency = roundTo((usageCost/allocCost)*100, 1)
-			if wl.Efficiency > 100 {
-				wl.Efficiency = 100
-			}
-			wl.IdleCost = allocCost - usageCost
-			if wl.IdleCost < 0 {
-				wl.IdleCost = 0
-			}
-		}
+		wl.Efficiency = efficiencyPct(usageCost, allocCost)
+		wl.IdleCost = idleFromUsage(usageCost, allocCost)
 		wl.HourlyCost = roundTo(wl.HourlyCost, 4)
 		wl.CPUCost = roundTo(wl.CPUCost, 4)
 		wl.MemoryCost = roundTo(wl.MemoryCost, 4)

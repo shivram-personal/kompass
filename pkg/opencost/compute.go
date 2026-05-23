@@ -228,11 +228,8 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 			usageCost := rowEff * allocCost
 			nc.CPUUsageCost = usageCost * safeRatio(nc.CPUCost, allocCost)
 			nc.MemoryUsageCost = usageCost - nc.CPUUsageCost
-			nc.Efficiency = roundTo(rowEff*100, 1)
-			nc.IdleCost = allocCost - usageCost
-			if nc.IdleCost < 0 {
-				nc.IdleCost = 0
-			}
+			nc.Efficiency = efficiencyPct(usageCost, allocCost)
+			nc.IdleCost = idleFromUsage(usageCost, allocCost)
 			// Accumulate cost-weighted, matching ComputeCostSummaryFromProm.
 			// An unweighted mean would let a $0.01 row at 10% efficiency
 			// drag down the cluster number identically to a $100 row.
@@ -253,13 +250,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 		return namespaces[i].HourlyCost > namespaces[j].HourlyCost
 	})
 
-	var clusterEfficiency float64
-	if totalAllocCost > 0 && totalUsageCost > 0 {
-		clusterEfficiency = roundTo((totalUsageCost/totalAllocCost)*100, 1)
-		if clusterEfficiency > 100 {
-			clusterEfficiency = 100
-		}
-	}
+	clusterEfficiency := efficiencyPct(totalUsageCost, totalAllocCost)
 
 	// Normalize window-total to hourly. OpenCost's /allocation returns
 	// totalCost summed over the entire window; we want rate so the UI can
@@ -414,16 +405,8 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		nc.MemoryUsageCost = memUsageMap[nc.Name]
 		allocCost := nc.CPUCost + nc.MemoryCost
 		usageCost := nc.CPUUsageCost + nc.MemoryUsageCost
-		if allocCost > 0 && usageCost > 0 {
-			nc.Efficiency = roundTo((usageCost/allocCost)*100, 1)
-			if nc.Efficiency > 100 {
-				nc.Efficiency = 100
-			}
-			nc.IdleCost = allocCost - usageCost
-			if nc.IdleCost < 0 {
-				nc.IdleCost = 0
-			}
-		}
+		nc.Efficiency = efficiencyPct(usageCost, allocCost)
+		nc.IdleCost = idleFromUsage(usageCost, allocCost)
 		totalAllocCost += allocCost
 		totalUsageCost += usageCost
 		totalHourlyCost += nc.HourlyCost
@@ -440,17 +423,8 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		return namespaces[i].HourlyCost > namespaces[j].HourlyCost
 	})
 
-	var clusterEfficiency, totalIdleCost float64
-	if totalAllocCost > 0 && totalUsageCost > 0 {
-		clusterEfficiency = roundTo((totalUsageCost/totalAllocCost)*100, 1)
-		if clusterEfficiency > 100 {
-			clusterEfficiency = 100
-		}
-		totalIdleCost = totalAllocCost - totalUsageCost
-		if totalIdleCost < 0 {
-			totalIdleCost = 0
-		}
-	}
+	clusterEfficiency := efficiencyPct(totalUsageCost, totalAllocCost)
+	totalIdleCost := idleFromUsage(totalUsageCost, totalAllocCost)
 
 	totalHourlyCost = roundTo(totalHourlyCost, 4)
 	totalStorageCost = roundTo(totalStorageCost, 4)
@@ -505,4 +479,31 @@ func roundTo(val float64, places int) float64 {
 	}
 	pow := math.Pow(10, float64(places))
 	return math.Round(val*pow) / pow
+}
+
+// efficiencyPct returns 100 * usage / alloc rounded to 1 decimal,
+// clamped to [0, 100]. Returns 0 when usage or alloc is non-positive
+// (treated as "no data" — distinct from "100% idle").
+func efficiencyPct(usage, alloc float64) float64 {
+	if usage <= 0 || alloc <= 0 {
+		return 0
+	}
+	eff := roundTo((usage/alloc)*100, 1)
+	if eff > 100 {
+		eff = 100
+	}
+	return eff
+}
+
+// idleFromUsage returns max(alloc - usage, 0) but only when both are
+// positive. Mirrors efficiencyPct's "no data ≠ 100% idle" semantics.
+func idleFromUsage(usage, alloc float64) float64 {
+	if usage <= 0 || alloc <= 0 {
+		return 0
+	}
+	idle := alloc - usage
+	if idle < 0 {
+		return 0
+	}
+	return idle
 }
