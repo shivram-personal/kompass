@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"log"
 	"sort"
 
 	"github.com/skyhook-io/radar/pkg/prom"
@@ -19,6 +20,7 @@ func ComputeNodeCosts(ctx context.Context, client *prom.Client) *NodeCostRespons
 
 	totalResult, err := client.Query(ctx, `node_total_hourly_cost`)
 	if err != nil {
+		log.Printf("[opencost] node_total_hourly_cost query failed: %v", err)
 		return &NodeCostResponse{Available: false, Reason: ReasonQueryError}
 	}
 	if len(totalResult.Series) == 0 {

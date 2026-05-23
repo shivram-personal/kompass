@@ -3,6 +3,7 @@ package prom
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -59,10 +60,11 @@ func (c *Client) issueQuery(ctx context.Context, path string, params url.Values)
 type ProbeReason string
 
 const (
-	ProbeReasonTransportError ProbeReason = "transport_error"   // network/HTTP failure
-	ProbeReasonNotPrometheus  ProbeReason = "not_prometheus"    // 200 but response body isn't prom JSON (captive portal, login page)
-	ProbeReasonPromError      ProbeReason = "prom_error"        // prom responded with status=error
-	ProbeReasonEmptyInstance  ProbeReason = "empty_instance"    // prom responded success but zero "up" results
+	ProbeReasonTransportError ProbeReason = "transport_error" // network/HTTP failure
+	ProbeReasonAuthError      ProbeReason = "auth_error"      // HTTP 401/403 — credentials rejected
+	ProbeReasonNotPrometheus  ProbeReason = "not_prometheus"  // 200 but response body isn't prom JSON (captive portal, login page)
+	ProbeReasonPromError      ProbeReason = "prom_error"      // prom responded with status=error
+	ProbeReasonEmptyInstance  ProbeReason = "empty_instance"  // prom responded success but zero "up" results
 )
 
 // Probe checks if a Prometheus endpoint is reachable and has at least one
@@ -78,6 +80,10 @@ func (c *Client) Probe(ctx context.Context) (bool, ProbeReason) {
 
 	body, err := c.t.Do(probeCtx, "GET", "/api/v1/query", url.Values{"query": {"up"}})
 	if err != nil {
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) && (httpErr.StatusCode == 401 || httpErr.StatusCode == 403) {
+			return false, ProbeReasonAuthError
+		}
 		return false, ProbeReasonTransportError
 	}
 

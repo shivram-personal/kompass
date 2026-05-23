@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"log"
 	"sort"
 	"time"
 
@@ -46,6 +47,7 @@ func ComputeCostTrendFromProm(ctx context.Context, client *prom.Client, opts Tre
 
 	result, err := client.QueryRange(ctx, query, start, end, step)
 	if err != nil {
+		log.Printf("[opencost] PromQL trend range query failed (range=%s): %v", label, err)
 		return &CostTrendResponse{Available: false, Reason: ReasonQueryError}
 	}
 	if len(result.Series) == 0 {

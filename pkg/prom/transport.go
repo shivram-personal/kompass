@@ -59,8 +59,9 @@ func NewHTTPTransport(baseURL, basePath string, httpClient *http.Client) *HTTPTr
 }
 
 // Do issues a request and returns the response body bytes. Non-2xx status
-// codes yield a *HTTPError that the Client unwraps to preserve upstream
-// Prometheus error payloads when useful.
+// codes yield a *HTTPError; callers can use errors.As to extract the
+// status code and upstream body (Probe distinguishes 401/403 from other
+// transport errors this way, for example).
 func (t *HTTPTransport) Do(ctx context.Context, method, path string, params url.Values) ([]byte, error) {
 	full := t.BaseURL + t.BasePath + path
 	if len(params) > 0 {

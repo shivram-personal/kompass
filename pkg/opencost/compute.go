@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"log"
 	"math"
 	"sort"
 	"strconv"
@@ -115,6 +116,7 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 		IncludeIdle: true,
 	})
 	if err != nil {
+		log.Printf("[opencost] /allocation summary failed: %v", err)
 		return &CostSummary{Available: false, Reason: ReasonQueryError}
 	}
 	if resp == nil || len(resp.Data) == 0 {
@@ -182,9 +184,9 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 			}
 			totalIdleCost += idle
 			// Intentionally do NOT add __idle__ to totalHourlyCost —
-			// totalHourlyCost is the sum of allocated namespace spend.
-			// If callers need the full node cost they can request that
-			// separately (e.g., the Nodes tab hits /assets).
+			// totalHourlyCost is the sum of allocated spend. Idle is
+			// surfaced separately as TotalIdleCost so callers can render
+			// or sum it as needed.
 			continue
 		}
 		// OpenCost aggregates orphan pods (those with no controller) into a
@@ -331,6 +333,9 @@ func safeRatio(num, den float64) float64 {
 //     the typed reason to the UI.
 //   - Numbers are rounded to 4 decimal places for cleaner JSON.
 func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts SummaryOptions) *CostSummary {
+	if client == nil {
+		return &CostSummary{Available: false, Reason: ReasonNoPrometheus}
+	}
 	if opts.Currency == "" {
 		opts.Currency = "USD"
 	}
@@ -341,9 +346,11 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	cpuResult, err := client.Query(ctx,
 		`sum by (namespace) (label_replace(avg_over_time(container_cpu_allocation{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() node_cpu_hourly_cost)`)
 	if err != nil {
+		log.Printf("[opencost] CPU allocation query failed, trying opencost_container_cpu_cost_total: %v", err)
 		cpuResult, err = client.Query(ctx,
 			`sum by (namespace) (label_replace(rate(opencost_container_cpu_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
+			log.Printf("[opencost] CPU allocation fallback query also failed: %v", err)
 			return &CostSummary{Available: false, Reason: ReasonQueryError}
 		}
 	}
@@ -351,9 +358,11 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 	memResult, err := client.Query(ctx,
 		`sum by (namespace) (label_replace(avg_over_time(container_memory_allocation_bytes{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
 	if err != nil {
+		log.Printf("[opencost] memory allocation query failed, trying opencost_container_memory_cost_total: %v", err)
 		memResult, err = client.Query(ctx,
 			`sum by (namespace) (label_replace(rate(opencost_container_memory_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
+			log.Printf("[opencost] memory allocation fallback query also failed: %v", err)
 			return &CostSummary{Available: false, Reason: ReasonQueryError}
 		}
 	}
@@ -362,16 +371,28 @@ func ComputeCostSummaryFromProm(ctx context.Context, client *prom.Client, opts S
 		return &CostSummary{Available: false, Reason: ReasonNoMetrics}
 	}
 
+	// Usage queries are best-effort: efficiency / idle are derived from them
+	// and zero out cleanly if the queries fail, but a silent failure here can
+	// look identical to a low-utilization workload — so log when it happens.
 	cpuUsageRes, cpuUsageErr := client.Query(ctx,
 		`sum by (namespace) (label_replace(rate(container_cpu_usage_seconds_total{container!="", namespace!=""}[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() node_cpu_hourly_cost)`)
+	if cpuUsageErr != nil {
+		log.Printf("[opencost] CPU usage query failed (efficiency will be 0 for affected rows): %v", cpuUsageErr)
+	}
 	cpuUsageMap := lastValuePerLabel(cpuUsageRes, cpuUsageErr, "namespace")
 
 	memUsageRes, memUsageErr := client.Query(ctx,
 		`sum by (namespace) (label_replace(container_memory_working_set_bytes{container!="", namespace!=""}, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
+	if memUsageErr != nil {
+		log.Printf("[opencost] memory usage query failed (efficiency will be 0 for affected rows): %v", memUsageErr)
+	}
 	memUsageMap := lastValuePerLabel(memUsageRes, memUsageErr, "namespace")
 
 	storageRes, storageErr := client.Query(ctx,
 		`sum by (namespace) (pv_hourly_cost * on(persistentvolume) group_left(namespace) kube_persistentvolume_claim_ref)`)
+	if storageErr != nil {
+		log.Printf("[opencost] storage cost query failed (storage costs will be 0): %v", storageErr)
+	}
 	storageMap := lastValuePerLabel(storageRes, storageErr, "namespace")
 
 	nsMap := make(map[string]*NamespaceCost)

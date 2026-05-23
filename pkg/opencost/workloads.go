@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"log"
 	"sort"
 	"strings"
 
@@ -41,9 +42,11 @@ func ComputeWorkloadsFromProm(ctx context.Context, client *prom.Client, namespac
 	cpuResult, err := client.Query(ctx,
 		`sum by (pod) ((avg_over_time(container_cpu_allocation{exported_namespace="`+safeNS+`"}[1h]) or avg_over_time(container_cpu_allocation{namespace="`+safeNS+`", exported_namespace=""}[1h])) * on(node) group_left() node_cpu_hourly_cost)`)
 	if err != nil {
+		log.Printf("[opencost] workloads CPU query failed for ns=%s, trying opencost_container_cpu_cost_total: %v", namespace, err)
 		cpuResult, err = client.Query(ctx,
 			`sum by (pod) (rate(opencost_container_cpu_cost_total{exported_namespace="`+safeNS+`"}[1h]) or rate(opencost_container_cpu_cost_total{namespace="`+safeNS+`", exported_namespace=""}[1h]))`)
 		if err != nil {
+			log.Printf("[opencost] workloads CPU fallback query also failed for ns=%s: %v", namespace, err)
 			return &WorkloadCostResponse{Namespace: namespace, Available: false, Reason: ReasonQueryError}
 		}
 	}
@@ -51,17 +54,33 @@ func ComputeWorkloadsFromProm(ctx context.Context, client *prom.Client, namespac
 	memResult, err := client.Query(ctx,
 		`sum by (pod) ((avg_over_time(container_memory_allocation_bytes{exported_namespace="`+safeNS+`"}[1h]) or avg_over_time(container_memory_allocation_bytes{namespace="`+safeNS+`", exported_namespace=""}[1h])) / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
 	if err != nil {
+		log.Printf("[opencost] workloads memory query failed for ns=%s, trying opencost_container_memory_cost_total: %v", namespace, err)
 		memResult, err = client.Query(ctx,
 			`sum by (pod) (rate(opencost_container_memory_cost_total{exported_namespace="`+safeNS+`"}[1h]) or rate(opencost_container_memory_cost_total{namespace="`+safeNS+`", exported_namespace=""}[1h]))`)
 		if err != nil {
+			log.Printf("[opencost] workloads memory fallback query also failed for ns=%s: %v", namespace, err)
 			return &WorkloadCostResponse{Namespace: namespace, Available: false, Reason: ReasonQueryError}
 		}
 	}
 
 	cpuUsageResult, cpuUsageErr := client.Query(ctx,
 		`sum by (pod) (label_replace(rate(container_cpu_usage_seconds_total{container!="", namespace="`+safeNS+`"}[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() node_cpu_hourly_cost)`)
+	if cpuUsageErr != nil {
+		log.Printf("[opencost] workloads CPU usage query failed for ns=%s (efficiency will be 0): %v", namespace, cpuUsageErr)
+	}
 	memUsageResult, memUsageErr := client.Query(ctx,
 		`sum by (pod) (label_replace(container_memory_working_set_bytes{container!="", namespace="`+safeNS+`"}, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
+	if memUsageErr != nil {
+		log.Printf("[opencost] workloads memory usage query failed for ns=%s (efficiency will be 0): %v", namespace, memUsageErr)
+	}
+
+	if len(cpuResult.Series) == 0 && len(memResult.Series) == 0 {
+		// Queries succeeded but returned nothing — either the namespace has
+		// no scraped pods or OpenCost metrics aren't present. Surface the
+		// typed reason so the UI can render contextual guidance rather than
+		// an empty list.
+		return &WorkloadCostResponse{Namespace: namespace, Available: false, Reason: ReasonNoMetrics}
+	}
 
 	podCPUUsage := lastValuePerLabel(cpuUsageResult, cpuUsageErr, "pod")
 	podMemUsage := lastValuePerLabel(memUsageResult, memUsageErr, "pod")

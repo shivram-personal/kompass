@@ -18,8 +18,9 @@ import (
 //  4. Dynamic cluster-wide discovery with scoring (via pkg/prom.Discover)
 //
 // Well-known + dynamic candidate enumeration lives in pkg/prom.Discover so
-// it can be shared with non-desktop callers. This function owns the
-// *desktop-specific* port-forward fallback behavior.
+// it can be shared by any consumer of the package. This function owns
+// Radar's port-forward fallback, which is only needed when Radar runs
+// outside the cluster and can't reach in-cluster Service DNS directly.
 //
 // The lock is only held briefly to read/write state, not during network I/O.
 func (c *Client) discover(ctx context.Context) (string, string, error) {
@@ -87,8 +88,8 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 	}
 
 	// Fallback: start a port-forward to the highest-priority candidate and
-	// retry. This is the desktop-specific path — connector and backend have
-	// in-cluster network access and therefore never reach this code.
+	// retry. This path is only reached when Radar runs outside the cluster;
+	// in-cluster deployments resolve a candidate directly above.
 	best := candidates[0]
 	log.Printf("[prometheus] No candidate reachable in-cluster, starting port-forward to %s/%s...",
 		best.Namespace, best.Name)

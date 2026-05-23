@@ -2,6 +2,7 @@ package opencost
 
 import (
 	"context"
+	"log"
 	"sort"
 	"time"
 )
@@ -60,6 +61,7 @@ func ComputeCostTrend(ctx context.Context, client *RESTClient, opts TrendOptions
 		IncludeIdle: false, // idle is a summary concept; drop it here to keep the chart focused on spend
 	})
 	if err != nil {
+		log.Printf("[opencost] /allocation trend failed (window=%s step=%s): %v", window, step, err)
 		return &CostTrendResponse{Available: false, Reason: ReasonQueryError, Range: window}
 	}
 	if resp == nil || len(resp.Data) == 0 {
@@ -67,6 +69,7 @@ func ComputeCostTrend(ctx context.Context, client *RESTClient, opts TrendOptions
 	}
 
 	bucketHours := windowHours(step)
+	skippedBuckets := 0
 
 	// Walk buckets in order. For each bucket, accumulate per-aggregate
 	// totals and the bucket timestamp (parsed from one row's Start, since
@@ -79,6 +82,12 @@ func ComputeCostTrend(ctx context.Context, client *RESTClient, opts TrendOptions
 			continue
 		}
 		ts := bucketTimestamp(bucket)
+		if ts == 0 {
+			// No parseable Start on any row — skip rather than stamping all
+			// points at the Unix epoch, which would collapse the chart.
+			skippedBuckets++
+			continue
+		}
 		var bucketTotal float64
 		for name, a := range bucket {
 			if a == nil || name == "__idle__" {
@@ -98,6 +107,10 @@ func ComputeCostTrend(ctx context.Context, client *RESTClient, opts TrendOptions
 			Timestamp: ts,
 			Value:     roundTo(bucketTotal/bucketHours, 4),
 		})
+	}
+
+	if skippedBuckets > 0 {
+		log.Printf("[opencost] trend dropped %d bucket(s) with no parseable timestamp (window=%s step=%s)", skippedBuckets, window, step)
 	}
 
 	if len(totals) == 0 {
@@ -147,10 +160,10 @@ func ComputeCostTrend(ctx context.Context, client *RESTClient, opts TrendOptions
 
 // defaultStep picks a sensible bucket size for a window. We bias toward
 // fewer, coarser buckets than a typical charting library would because
-// OpenCost's /allocation with step= enabled scales roughly with bucket
-// count — a 24h query at 1h step takes ~30s on our test cluster, vs ~3s
-// at 6h step. Callers that proxy through a short-deadline RPC pipeline
-// (e.g. ~10s) need the response well under 5s, which is load-bearing.
+// OpenCost's /allocation with step= scales roughly with bucket count —
+// a 24h query at 1h step takes ~30s on a test cluster vs ~3s at 6h step.
+// Callers behind short request deadlines need the response well under
+// that budget.
 //
 // Bucket counts we target: 1h → 12, 24h → 4, 7d → 7, 30d → 15.
 func defaultStep(window string) string {

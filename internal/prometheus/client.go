@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"log"
 	"maps"
 	"net/http"
 	"strings"
@@ -126,10 +127,10 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	manualURL := ""
 	var headers map[string]string
 	if globalClient != nil {
-		// SetURL / SetHeaders write these under the per-client mutex after
-		// dropping clientMu, so reading without c.mu here would race even
-		// though we hold clientMu exclusively. copyHeaders also detaches the
-		// map from the old client so a late mutation can't bleed through.
+		// SetManualURL / SetHeaders write these under the per-client mutex
+		// after dropping clientMu, so reading without c.mu here would race
+		// even though we hold clientMu exclusively. copyHeaders also detaches
+		// the map from the old client so a late mutation can't bleed through.
 		globalClient.mu.RLock()
 		manualURL = globalClient.manualURL
 		headers = copyHeaders(globalClient.headers)
@@ -176,11 +177,11 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	c.mu.RUnlock()
 
 	if base != "" && cached != nil {
-		ok, _ := cached.Probe(ctx)
+		ok, reason := cached.Probe(ctx)
 		if ok {
 			return base, bp, nil
 		}
-		// Stale — clear and rediscover
+		log.Printf("[prometheus] cached connection to %s failed probe (reason=%s), rediscovering", base, reason)
 		c.mu.Lock()
 		c.baseURL = ""
 		c.basePath = ""
@@ -192,10 +193,11 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	return c.discover(ctx)
 }
 
-// Prom returns the underlying pkg/prom.Client for callers that compose cost
-// math on top of raw Query/QueryRange (e.g. pkg/opencost.ComputeCostSummaryFromProm).
-// Callers must have run EnsureConnected first; returns nil if discovery has
-// not produced a baseURL.
+// Prom returns the underlying pkg/prom.Client for callers that compose
+// cost math on top of raw Query/QueryRange (e.g.,
+// pkg/opencost.ComputeCostSummaryFromProm). Unlike Query/QueryRange this
+// does NOT call EnsureConnected; callers must have done so to ensure a
+// baseURL is set. Returns nil if discovery has not run.
 func (c *Client) Prom() *prom.Client {
 	return c.getPromClient()
 }
@@ -233,10 +235,11 @@ func (c *Client) getPromClient() *prom.Client {
 }
 
 // probe checks if a Prometheus endpoint at `addr` is reachable and has at
-// least one active scrape target, using pkg/prom.Client.Probe. Records an
-// errorlog warning when a candidate is skipped because the instance has no
-// active scrape targets, so operators can see why discovery moved past an
-// otherwise-reachable endpoint.
+// least one active scrape target, using pkg/prom.Client.Probe. Records a
+// targeted log entry for every non-OK outcome so operators can see why a
+// candidate was rejected — particularly important for auth failures (401/403)
+// and empty instances, which would otherwise silently fall through the
+// discovery candidate list.
 func (c *Client) probe(ctx context.Context, addr string) bool {
 	c.mu.RLock()
 	httpC := c.httpClient
@@ -245,11 +248,32 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 	tr := prom.NewHTTPTransport(addr, "", httpC)
 	tr.Headers = headers
 	ok, reason := prom.NewClient(tr).Probe(ctx)
-	if !ok && reason == prom.ProbeReasonEmptyInstance {
-		errorlog.Record("prometheus", "warning",
-			"endpoint %s has no active scrape targets (empty instance), skipping", addr)
+	if !ok {
+		logProbeRejection(addr, reason)
 	}
 	return ok
+}
+
+// logProbeRejection records an appropriate log entry for each rejection
+// reason. Auth failures get errorlog at error level (likely operator
+// misconfiguration); empty instances get warning level (cluster state);
+// other failures use stdlib log so they appear in the discovery audit
+// trail without flooding errorlog.
+func logProbeRejection(addr string, reason prom.ProbeReason) {
+	switch reason {
+	case prom.ProbeReasonAuthError:
+		errorlog.Record("prometheus", "error",
+			"endpoint %s rejected credentials (HTTP 401/403, check --prometheus-header)", addr)
+	case prom.ProbeReasonEmptyInstance:
+		errorlog.Record("prometheus", "warning",
+			"endpoint %s has no active scrape targets (empty instance), skipping", addr)
+	case prom.ProbeReasonNotPrometheus:
+		log.Printf("[prometheus] endpoint %s responded but not in Prometheus format, skipping", addr)
+	case prom.ProbeReasonPromError:
+		log.Printf("[prometheus] endpoint %s returned Prometheus error status, skipping", addr)
+	case prom.ProbeReasonTransportError:
+		log.Printf("[prometheus] endpoint %s unreachable, skipping", addr)
+	}
 }
 
 // QueryRange executes a Prometheus range query via the underlying pkg/prom.Client.
