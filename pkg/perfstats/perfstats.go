@@ -36,9 +36,8 @@ type TopologyStats struct {
 
 // SSEStats covers the SSE broadcaster.
 type SSEStats struct {
-	TotalBroadcasts         int64 `json:"totalBroadcasts"`
-	TotalDrops              int64 `json:"totalDrops"`
-	TotalTopologyOverwrites int64 `json:"totalTopologyOverwrites"`
+	TotalBroadcasts int64 `json:"totalBroadcasts"`
+	TotalDrops      int64 `json:"totalDrops"`
 }
 
 // SampleWindow is the rendered view of one ring buffer.
@@ -115,9 +114,8 @@ type store struct {
 	topologyPayloadBytes   ringBuffer
 	topologyEstimatedNodes ringBuffer
 
-	sseBroadcasts         atomic.Int64
-	sseDrops              atomic.Int64
-	sseTopologyOverwrites atomic.Int64
+	sseBroadcasts atomic.Int64
+	sseDrops      atomic.Int64
 }
 
 var global = &store{}
@@ -150,12 +148,6 @@ func IncSSEBroadcast() { global.sseBroadcasts.Add(1) }
 // IncSSEDrop increments the silent-drop counter (safeSend default case).
 func IncSSEDrop() { global.sseDrops.Add(1) }
 
-// IncSSETopologyOverwrite increments the count of topology snapshots that
-// were superseded by a newer snapshot before the client read them. Placeholder
-// for the 1C coalesce-latest design — wired now so the metric pre-exists
-// when the feature lands.
-func IncSSETopologyOverwrite() { global.sseTopologyOverwrites.Add(1) }
-
 // GetSnapshot returns a consistent point-in-time view of all counters
 // and sample windows for inclusion in /api/diagnostics responses.
 func GetSnapshot() Snapshot {
@@ -169,9 +161,8 @@ func GetSnapshot() Snapshot {
 			EstimatedNodes: global.topologyEstimatedNodes.snapshot(),
 		},
 		SSE: SSEStats{
-			TotalBroadcasts:         global.sseBroadcasts.Load(),
-			TotalDrops:              global.sseDrops.Load(),
-			TotalTopologyOverwrites: global.sseTopologyOverwrites.Load(),
+			TotalBroadcasts: global.sseBroadcasts.Load(),
+			TotalDrops:      global.sseDrops.Load(),
 		},
 	}
 }

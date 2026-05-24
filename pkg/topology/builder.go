@@ -2696,14 +2696,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if len(pods) > 0 && opts.SummaryMode {
 		// Summary mode: collapse the pod tier entirely. Roll each pod's health
 		// onto its owning workload node. Pods with no resolvable workload
-		// (standalone, bare ReplicaSet) fall back to a collapsed PodGroup so
-		// they stay visible without re-introducing thousands of pod nodes.
+		// (standalone, bare ReplicaSet, or a controller whose node wasn't
+		// created) fall back to a collapsed PodGroup so they stay visible
+		// without re-introducing thousands of pod nodes.
+		existingNodeIDs := make(map[string]bool, len(nodes))
+		for _, n := range nodes {
+			existingNodeIDs[n.ID] = true
+		}
 		var orphanPods []*corev1.Pod
 		for _, pod := range pods {
 			if !opts.MatchesNamespaceFilter(pod.Namespace) {
 				continue
 			}
-			workloadID := b.resolvePodWorkloadID(pod, replicaSetToDeployment, replicaSetToRollout, jobIDs)
+			workloadID := b.resolvePodWorkloadID(pod, existingNodeIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs)
 			if workloadID == "" {
 				orphanPods = append(orphanPods, pod)
 				continue
@@ -6790,6 +6795,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 // by default and not the unit a user reasons about at scale).
 func (b *Builder) resolvePodWorkloadID(
 	pod *corev1.Pod,
+	existingNodeIDs map[string]bool,
 	replicaSetToDeployment map[string]string,
 	replicaSetToRollout map[string]string,
 	jobIDs map[string]string,
@@ -6801,6 +6807,7 @@ func (b *Builder) resolvePodWorkloadID(
 		ownerKey := pod.Namespace + "/" + ownerRef.Name
 		switch ownerRef.Kind {
 		case "ReplicaSet":
+			// These maps only hold IDs of nodes that were actually created.
 			if deployID, ok := replicaSetToDeployment[ownerKey]; ok {
 				return deployID
 			}
@@ -6809,9 +6816,20 @@ func (b *Builder) resolvePodWorkloadID(
 			}
 			return "" // bare ReplicaSet — no workload node to attribute to
 		case "DaemonSet":
-			return fmt.Sprintf("daemonset/%s/%s", pod.Namespace, ownerRef.Name)
+			// Unlike the map-backed cases, the DaemonSet/StatefulSet node ID is
+			// synthesized from the owner ref — so it may name a node that was
+			// never created (e.g. the controller list was denied by RBAC while
+			// pods are listable). Gate on the real node set so those pods fall
+			// through to the orphan PodGroup instead of vanishing.
+			if id := fmt.Sprintf("daemonset/%s/%s", pod.Namespace, ownerRef.Name); existingNodeIDs[id] {
+				return id
+			}
+			return ""
 		case "StatefulSet":
-			return fmt.Sprintf("statefulset/%s/%s", pod.Namespace, ownerRef.Name)
+			if id := fmt.Sprintf("statefulset/%s/%s", pod.Namespace, ownerRef.Name); existingNodeIDs[id] {
+				return id
+			}
+			return ""
 		case "Job":
 			if jobID, ok := jobIDs[ownerKey]; ok {
 				return jobID

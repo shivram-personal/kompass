@@ -446,12 +446,13 @@ export function TopologyGraph({
 
   // Structure key for change detection — includes groupLevels so chip↔cardGrid triggers relayout.
   //
-  // Uses an order-independent XOR fold of FNV-1a hashes per ID instead of
-  // sort+join. At 3000+ nodes the join allocated a ~50KB string every time
-  // (and the sort dominated for short ID arrays); the fold is O(n) with
-  // constant memory and detects the same structural changes (add/remove/
-  // rename). Pure reorders no longer trigger a layout, which is correct —
-  // ELK relayouts on reorder were wasted work.
+  // Uses an order-independent fold of per-ID hashes (see foldHash) instead of
+  // sort+join. At thousands of nodes the join allocated tens of KB of string
+  // every render (and the sort dominated for short ID arrays); the fold is
+  // O(n) with constant memory and detects the same structural changes
+  // (add/remove/rename) — combined with the element count in the key. Pure
+  // reorders no longer trigger a layout, which is correct: ELK relayouts on
+  // reorder were wasted work.
   const structureKey = useMemo(() => {
     const t0 = performance.now()
     const nodeHash = foldHash(workingNodes, n => n.id)

@@ -30,11 +30,11 @@ type SSEBroadcaster struct {
 
 	// lastBroadcastMaxEstimated holds the max EstimatedNodes across all
 	// per-group topology builds in the most recent broadcast cycle. Drives
-	// the debounce ladder (see topologyDebounceFor). Sourced here — not
-	// from perfstats — because perfstats' 100-sample ring buffer keeps a
-	// single 5k-pod-namespace visit visible for ~8 minutes after the user
-	// switches away, which produced sticky-high debounce post-namespace-
-	// switch. This reflects only currently-active client groups.
+	// the debounce ladder (see topologyDebounceFor). It reflects only the
+	// currently-active client groups: a sample window over recent builds
+	// would let a brief visit to a big namespace keep the debounce
+	// sticky-high long after the user filtered to a small one, whereas this
+	// settles within one cycle of a namespace switch.
 	lastBroadcastMaxEstimated atomic.Int64
 
 	// watchStopCh is closed to stop the current watchResourceChanges goroutine.
@@ -88,9 +88,9 @@ type SSEEvent struct {
 // The lastBroadcastMaxEstimated input reflects only currently-active client
 // groups, which means a namespace switch settles within one debounce cycle
 // (the next broadcast updates the value, and the cycle after that uses the
-// fresh value). A historical max — eg. from perfstats' 100-sample ring —
-// would keep a brief stint on a big namespace visible for ~8 minutes after
-// the user switched away.
+// fresh value). A max taken over a sample window of recent builds would
+// instead keep a brief stint on a big namespace visible for many cycles
+// after the user switched away.
 func topologyDebounceFor(lastBroadcastMaxEstimated int64, cache interface{ GetResourceCount() int }) time.Duration {
 	estimated := lastBroadcastMaxEstimated
 	if estimated == 0 && cache != nil {

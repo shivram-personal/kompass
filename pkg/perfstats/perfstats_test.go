@@ -77,16 +77,11 @@ func TestSSECounters(t *testing.T) {
 	IncSSEBroadcast()
 	IncSSEBroadcast()
 	IncSSEDrop()
-	IncSSETopologyOverwrite()
-	IncSSETopologyOverwrite()
 	snap := GetSnapshot()
 	if snap.SSE.TotalBroadcasts != 3 {
 		t.Errorf("TotalBroadcasts = %d, want 3", snap.SSE.TotalBroadcasts)
 	}
 	if snap.SSE.TotalDrops != 1 {
 		t.Errorf("TotalDrops = %d, want 1", snap.SSE.TotalDrops)
-	}
-	if snap.SSE.TotalTopologyOverwrites != 2 {
-		t.Errorf("TotalTopologyOverwrites = %d, want 2", snap.SSE.TotalTopologyOverwrites)
 	}
 }

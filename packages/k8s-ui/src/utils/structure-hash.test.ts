@@ -69,3 +69,26 @@ describe('foldHash', () => {
     expect(foldHash(['a', 'a'], id)).not.toBe(foldHash(['b', 'b'], id))
   })
 })
+
+// The production guard against skipped relayouts is the *composed* key
+// (count + foldHash), exactly as TopologyGraph builds it. These tests pin that
+// composition, not just the bare fold — a genuine same-count add/remove/rename
+// must change the composed key so the layout effect doesn't short-circuit.
+describe('composed structure key (count + foldHash)', () => {
+  const id = (s: string) => s
+  // Mirrors TopologyGraph's structureKey shape for the node portion.
+  const composed = (nodeIds: string[]) => `n${nodeIds.length}:${foldHash(nodeIds, id)}`
+
+  it('changes on a same-count rename', () => {
+    expect(composed(['a', 'b', 'c'])).not.toBe(composed(['a', 'b', 'x']))
+  })
+
+  it('changes on add and on remove', () => {
+    expect(composed(['a', 'b'])).not.toBe(composed(['a', 'b', 'c']))
+    expect(composed(['a', 'b', 'c'])).not.toBe(composed(['a', 'b']))
+  })
+
+  it('is stable across reorder (no wasted relayout)', () => {
+    expect(composed(['a', 'b', 'c'])).toBe(composed(['c', 'b', 'a']))
+  })
+})

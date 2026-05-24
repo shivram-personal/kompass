@@ -10,8 +10,8 @@ export function fnv1a32(s: string): number {
 
 // foldHash returns an order-independent fingerprint of the given items as a
 // "<xor>.<sum>" string. Used by TopologyGraph's structureKey change-detection
-// — at 10k+ nodes, sort+join over IDs allocated 50KB+ strings every render;
-// this is O(n) with two uint32 accumulators.
+// — at thousands of nodes, sort+join over IDs allocated tens of KB of string
+// every render; this is O(n) with two uint32 accumulators.
 //
 // Two independent commutative folds (XOR and 32-bit additive sum) are combined
 // because a single collision in the structure key is a false negative on the

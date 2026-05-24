@@ -229,7 +229,9 @@ const LargeClusterThreshold = 1000
 const SummaryModeThreshold = 2000
 
 // PodSummary aggregates pod health for a workload or service in summary mode,
-// stamped onto the owning node's Data as "podSummary".
+// stamped onto the owning node's Data as "podSummary". Invariant maintained by
+// addPodHealth: Total == Healthy + Degraded + Unhealthy. Unknown-phase pods are
+// counted as Unhealthy (matching the bucketing GroupPods uses for PodGroups).
 type PodSummary struct {
 	Total     int `json:"total"`
 	Healthy   int `json:"healthy"`

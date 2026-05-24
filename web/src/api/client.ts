@@ -3064,7 +3064,6 @@ export interface DiagPerfSnapshot {
   sse: {
     totalBroadcasts: number
     totalDrops: number
-    totalTopologyOverwrites: number
   }
 }
 

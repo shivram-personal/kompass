@@ -186,6 +186,119 @@ func TestSummaryModeRequiresNamespaceFilter(t *testing.T) {
 	}
 }
 
+// makeDSOwnedPods creates n pods controlled by the named DaemonSet.
+func makeDSOwnedPods(n int, ns, dsName string) []*corev1.Pod {
+	ctrl := true
+	pods := make([]*corev1.Pod, n)
+	for i := range n {
+		pods[i] = &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      fmt.Sprintf("%s-pod-%d", dsName, i),
+				Namespace: ns,
+				OwnerReferences: []metav1.OwnerReference{
+					{Kind: "DaemonSet", Name: dsName, Controller: &ctrl},
+				},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		}
+	}
+	return pods
+}
+
+func TestSummaryModeDaemonSetPodsAttributed(t *testing.T) {
+	provider := &mockProvider{
+		daemonSets: []*appsv1.DaemonSet{
+			{ObjectMeta: metav1.ObjectMeta{Name: "ds1", Namespace: "big"}},
+		},
+		pods: makeDSOwnedPods(10000, "big", "ds1"),
+	}
+	opts := DefaultBuildOptions()
+	opts.Namespaces = []string{"big"}
+	topo, err := NewBuilder(provider).Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !topo.SummaryMode {
+		t.Fatalf("expected SummaryMode=true (estimated %d)", topo.EstimatedNodes)
+	}
+	ds := findNode(topo, "daemonset/big/ds1")
+	if ds == nil {
+		t.Fatal("daemonset node missing")
+	}
+	summary, ok := ds.Data["podSummary"].(map[string]any)
+	if !ok {
+		t.Fatalf("daemonset node missing podSummary, Data=%v", ds.Data)
+	}
+	if summary["total"] != 10000 {
+		t.Errorf("podSummary.total = %v, want 10000", summary["total"])
+	}
+}
+
+// Regression: when a DaemonSet/StatefulSet controller node was never created
+// (e.g. the controller list was denied by RBAC while pods are listable), its
+// pods must still be visible via an orphan PodGroup — not silently dropped.
+func TestSummaryModeMissingControllerPodsNotDropped(t *testing.T) {
+	provider := &mockProvider{
+		// daemonSets intentionally empty — simulates RBAC denial of the list.
+		pods: makeDSOwnedPods(10000, "big", "ds1"),
+	}
+	opts := DefaultBuildOptions()
+	opts.Namespaces = []string{"big"}
+	topo, err := NewBuilder(provider).Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !topo.SummaryMode {
+		t.Fatalf("expected SummaryMode=true (estimated %d)", topo.EstimatedNodes)
+	}
+	// The controller node does not exist...
+	if findNode(topo, "daemonset/big/ds1") != nil {
+		t.Fatal("did not expect a daemonset node (controller was not listed)")
+	}
+	// ...and there must be no phantom podSummary stamped anywhere.
+	for _, n := range topo.Nodes {
+		if _, ok := n.Data["podSummary"]; ok {
+			t.Errorf("unexpected podSummary on node %s — pods attributed to a non-existent controller", n.ID)
+		}
+	}
+	// ...but the pods are NOT dropped: they fall back to a collapsed PodGroup.
+	if countKind(topo, KindPodGroup) == 0 {
+		t.Error("expected orphan PodGroup for pods whose controller node is absent")
+	}
+}
+
+func TestSummaryModeStandalonePodsFallBackToPodGroup(t *testing.T) {
+	// 10000 deployment-owned pods cross the threshold and attribute to the
+	// Deployment; a handful of standalone pods have no owner and must surface
+	// as orphan PodGroups rather than being attributed or dropped.
+	pods := makeOwnedPods(10000, "big", "web-rs", corev1.PodRunning)
+	standalone := makePods(3, "big") // no OwnerReferences
+	for i, p := range standalone {
+		p.Name = fmt.Sprintf("standalone-%d", i)
+	}
+	pods = append(pods, standalone...)
+	provider := deploymentWithReplicaSet("big", "web", "web-rs", pods)
+
+	opts := DefaultBuildOptions()
+	opts.Namespaces = []string{"big"}
+	topo, err := NewBuilder(provider).Build(opts)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	dep := findNode(topo, "deployment/big/web")
+	if dep == nil {
+		t.Fatal("deployment node missing")
+	}
+	// Standalone pods are not attributed to the deployment.
+	if summary := dep.Data["podSummary"].(map[string]any); summary["total"] != 10000 {
+		t.Errorf("deployment podSummary.total = %v, want 10000 (standalone pods excluded)", summary["total"])
+	}
+	// They surface as orphan PodGroups instead.
+	if countKind(topo, KindPodGroup) == 0 {
+		t.Error("expected orphan PodGroup nodes for standalone pods")
+	}
+}
+
 func TestSummaryModeTrafficAttributesToService(t *testing.T) {
 	// Pods labeled app=web, selected by svc "web-svc"; enough to cross threshold.
 	pods := makeOwnedPods(10000, "big", "web-rs", corev1.PodRunning)

@@ -5,7 +5,7 @@ import {
   ChevronUp,
 } from 'lucide-react'
 import { clsx } from 'clsx'
-import type { NodeKind, HealthStatus } from '../../types'
+import type { NodeKind, HealthStatus, PodSummary } from '../../types'
 import { displayKind } from '../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
@@ -176,7 +176,7 @@ function getStatusStyle(status: HealthStatus): React.CSSProperties {
 // count of pods (and any unhealthy/pending) is still visible without children.
 function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string {
   const base = baseSubtitle(kind, nodeData)
-  const ps = nodeData.podSummary as { total: number; healthy: number; degraded: number; unhealthy: number } | undefined
+  const ps = nodeData.podSummary as PodSummary | undefined
   if (ps && SUMMARY_POD_KINDS.has(kind)) {
     let suffix = `${ps.total} pods`
     if (ps.unhealthy > 0) suffix += ` (${ps.unhealthy} unhealthy)`
