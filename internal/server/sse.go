@@ -563,6 +563,11 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		b.cachedTopologyMu.Lock()
 		b.cachedTopologyDirty = true
 		b.cachedTopologyMu.Unlock()
+		// Forget the last cycle's estimate so a future session doesn't inherit
+		// a disconnected session's debounce (a small namespace shouldn't keep a
+		// big one's 15s cadence). topologyDebounceFor falls back to the resource-
+		// count proxy until the next broadcast records a real estimate.
+		b.lastBroadcastMaxEstimated.Store(0)
 		return
 	}
 
