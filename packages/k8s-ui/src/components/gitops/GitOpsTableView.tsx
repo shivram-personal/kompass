@@ -503,7 +503,7 @@ export function GitOpsTableView({
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
             <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary">
-              <p>{allRows.length === 0 ? 'No applications found.' : 'No applications match the current filters.'}</p>
+              <p>{allRows.length === 0 && !hasGlobalNamespaceFilter ? 'No applications found.' : 'No applications match the current filters.'}</p>
               {hasGlobalNamespaceFilter && globalNamespaces && (
                 <p className="text-xs text-theme-text-tertiary">
                   Viewing {globalNamespaces.length === 1 ? `namespace: ${globalNamespaces[0]}` : `${globalNamespaces.length} namespaces`}
