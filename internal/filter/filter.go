@@ -11,12 +11,12 @@
 //
 // Two compile entry points:
 //
-//   CompileObjectFilter — bindings shaped to a K8s object:
-//     kind, apiVersion, metadata, spec, status, labels, annotations
+//	CompileObjectFilter — bindings shaped to a K8s object:
+//	  kind, apiVersion, metadata, spec, status, labels, annotations
 //
-//   CompileIssueFilter — bindings shaped to an issues.Issue:
-//     severity, source, kind, group, namespace, name, reason, message,
-//     count, last_seen, cluster
+//	CompileIssueFilter — bindings shaped to an issues.Issue:
+//	  severity, source, category, category_group, kind, group, ns,
+//	  name, reason, message, count, last_seen, cluster
 //
 // Both return a Filter whose Match(activation) yields (bool, error).
 // Compile errors are returned verbatim (CEL's parser produces
@@ -96,6 +96,8 @@ var envObject = mustNewEnv(
 var envIssue = mustNewEnv(
 	cel.Variable("severity", cel.StringType),
 	cel.Variable("source", cel.StringType),
+	cel.Variable("category", cel.StringType),
+	cel.Variable("category_group", cel.StringType),
 	cel.Variable("kind", cel.StringType),
 	cel.Variable("group", cel.StringType),
 	cel.Variable("ns", cel.StringType),
@@ -264,4 +266,3 @@ func CachedIssueFilter(expr string) (*Filter, error) {
 	defaultCache.put(key, f)
 	return f, nil
 }
-

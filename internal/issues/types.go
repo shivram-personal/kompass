@@ -80,18 +80,25 @@ type Ref struct {
 // off by the observed problem duration; for condition rows, both timestamps
 // are the condition's lastTransitionTime.
 type Issue struct {
-	Severity  Severity  `json:"severity"`
-	Source    Source    `json:"source"`
-	Kind      string    `json:"kind"`
-	Group     string    `json:"group,omitempty"`
-	Namespace string    `json:"namespace,omitempty"`
-	Name      string    `json:"name"`
-	Reason    string    `json:"reason"`
-	Message   string    `json:"message,omitempty"`
-	FirstSeen time.Time `json:"first_seen,omitzero"`
-	LastSeen  time.Time `json:"last_seen,omitzero"`
-	Count     int       `json:"count,omitempty"`
-	Owner     Ref       `json:"owner,omitzero"`
+	Severity Severity `json:"severity"`
+	Source   Source   `json:"source"`
+	// Category is the user-facing symptom taxonomy (image_pull_failed,
+	// crashloop, …), derived from Source+Kind+Reason by Classify;
+	// CategoryGroup is its coarse rollup (GroupOf). Both are server-emitted
+	// labels so the UI renders them without its own category→group map.
+	// Distinct from Group below, which is the resource's API group.
+	Category      Category  `json:"category,omitempty"`
+	CategoryGroup Group     `json:"category_group,omitempty"`
+	Kind          string    `json:"kind"`
+	Group         string    `json:"group,omitempty"`
+	Namespace     string    `json:"namespace,omitempty"`
+	Name          string    `json:"name"`
+	Reason        string    `json:"reason"`
+	Message       string    `json:"message,omitempty"`
+	FirstSeen     time.Time `json:"first_seen,omitzero"`
+	LastSeen      time.Time `json:"last_seen,omitzero"`
+	Count         int       `json:"count,omitempty"`
+	Owner         Ref       `json:"owner,omitzero"`
 	// RestartCount + LastTerminatedReason carry Pod crash-debugging
 	// context from k8s.Problem through to issues consumers (MCP `issues`
 	// tool + /api/issues + hub fleet_issues). Populated only for Pod

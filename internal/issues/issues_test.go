@@ -67,6 +67,35 @@ func TestCompose_NormalizesProblemSeverity(t *testing.T) {
 	}
 }
 
+func TestCompose_PopulatesCategoryAndGroup(t *testing.T) {
+	// Every composed row carries the derived symptom category + its rollup
+	// group, classified from the detection signal across all sources.
+	p := &fakeProvider{
+		problems:    []k8s.Problem{{Kind: "Pod", Namespace: "ns", Name: "img", Severity: "high", Reason: "ImagePullBackOff"}},
+		scheduling:  []k8s.Problem{{Kind: "Pod", Namespace: "ns", Name: "sched", Severity: "high", Reason: "Unschedulable"}},
+		missingRefs: []k8s.Problem{{Kind: "Pod", Namespace: "ns", Name: "ref", Severity: "high", Reason: "Missing ConfigMap"}},
+	}
+	got := map[string]Issue{}
+	for _, i := range Compose(p, Filters{}) {
+		got[i.Name] = i
+	}
+	checks := []struct {
+		name     string
+		category Category
+		group    Group
+	}{
+		{"img", CategoryImagePullFailed, GroupStartup},
+		{"sched", CategoryUnschedulable, GroupScheduling},
+		{"ref", CategoryMissingConfigRef, GroupConfiguration},
+	}
+	for _, c := range checks {
+		if got[c.name].Category != c.category || got[c.name].CategoryGroup != c.group {
+			t.Errorf("%s: category=%q group=%q, want %q/%q",
+				c.name, got[c.name].Category, got[c.name].CategoryGroup, c.category, c.group)
+		}
+	}
+}
+
 func TestCompose_PodSchedulingWinsOverProblem(t *testing.T) {
 	// A pod stuck post-bind trips both sources: DetectProblems flags it
 	// Pending>5m and DetectScheduling names the actual CNI/volume blocker.
