@@ -284,13 +284,9 @@ func priorityFactorsFor(sev Severity, category string, affectedResources int, en
 	}
 
 	if affectedResources > 1 {
-		// Diminishing weight (capped) so blast radius matters without letting a
-		// single noisy check dominate the queue.
-		w := affectedResources
-		if w > 20 {
-			w = 20
-		}
-		add("blast_radius", "Affected resources", pluralResources(affectedResources), w)
+		// Diminishing weight (capped at 20) so blast radius matters without
+		// letting a single noisy check dominate the queue.
+		add("blast_radius", "Affected resources", pluralResources(affectedResources), min(affectedResources, 20))
 	}
 
 	switch env {
