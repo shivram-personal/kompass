@@ -120,6 +120,14 @@ type Issue struct {
 	// Completed) without the agent needing a follow-up get_resource call.
 	RestartCount         int32  `json:"restart_count,omitempty"`
 	LastTerminatedReason string `json:"last_terminated_reason,omitempty"`
+	// Affected, Members, and MembersTruncated are populated only on grouped
+	// rows (GroupIssues). Affected counts the folded underlying resources by
+	// kind; Members lists them (bounded by maxInlineMembers, with
+	// MembersTruncated set past the cap). Empty on flat rows and on
+	// single-resource grouped issues (no fan-out).
+	Affected         Affected `json:"affected,omitzero"`
+	Members          []Ref    `json:"members,omitempty"`
+	MembersTruncated bool     `json:"members_truncated,omitempty"`
 	// Cluster is left empty here; the hub injects it when emitting
 	// cross-cluster envelopes via fleet_issues.
 	Cluster string `json:"cluster,omitempty"`
@@ -142,6 +150,12 @@ type Filters struct {
 	// nil preserves auth-mode=none and tests where the provider's own
 	// permissions are the only gate.
 	CanReadClusterScoped func(kind, group string) bool
+	// Grouped folds the flat rows into the public grouped model
+	// (GroupIssues) before the cap, so the limit counts issue groups, not
+	// replica fan-out. The public /api/issues + MCP issues set this; flat
+	// callers (summarycontext per-resource index, /api/issues?view=flat)
+	// leave it false.
+	Grouped bool
 }
 
 const (

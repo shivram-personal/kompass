@@ -2417,6 +2417,10 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		Kinds:      splitCSVStr(input.Kind),
 		Limit:      input.Limit,
 		Namespaces: allowedNamespaces,
+		// Agents get the grouped issue model — structured triage objects,
+		// not per-pod evidence rows they'd have to re-aggregate. Raw object
+		// state stays available via get_resource / get_events.
+		Grouped: true,
 		CanReadClusterScoped: func(kind, group string) bool {
 			return canReadClusterScopedKind(ctx, kind, group, "list")
 		},

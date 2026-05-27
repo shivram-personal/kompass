@@ -27,7 +27,8 @@ import (
 //	severity=  critical,warning  (default: all)
 //	kind=      Pod,Deployment,...  (default: all)
 //	filter=    optional CEL predicate over each row (bindings include source)
-//	limit=     default 200, max 1000
+//	limit=     default 200, max 1000 (counts issue groups, not member objects)
+//	view=      flat → raw pre-fold evidence rows (debug); default → grouped
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -59,6 +60,10 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		Severities: severities,
 		Kinds:      splitCSV(q.Get("kind")),
 		Limit:      parseLimit(q.Get("limit")),
+		// Grouped is the product default — one row per subject+category.
+		// ?view=flat returns the raw pre-fold evidence rows for debugging
+		// ("what folded into this group?") and internal inspection.
+		Grouped: q.Get("view") != "flat",
 		CanReadClusterScoped: func(kind, group string) bool {
 			if auth.UserFromContext(r.Context()) == nil {
 				return true

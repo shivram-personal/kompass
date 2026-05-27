@@ -168,21 +168,16 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		out = filtered
 	}
 
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Severity != out[j].Severity {
-			return severityRank(out[i].Severity) > severityRank(out[j].Severity)
-		}
-		if !out[i].LastSeen.Equal(out[j].LastSeen) {
-			return out[i].LastSeen.After(out[j].LastSeen)
-		}
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
-		}
-		if out[i].Namespace != out[j].Namespace {
-			return out[i].Namespace < out[j].Namespace
-		}
-		return out[i].Name < out[j].Name
-	})
+	// Grouped folds the flat evidence rows into the public issue model
+	// before the cap, so the limit counts issue groups rather than replica
+	// fan-out (a 50-pod crashloop is one issue). Flat callers keep the
+	// per-object rows. GroupIssues sorts deterministically; the flat path
+	// uses the same comparator so both orders agree.
+	if f.Grouped {
+		out = GroupIssues(out)
+	} else {
+		sort.SliceStable(out, func(i, j int) bool { return lessIssue(out[i], out[j]) })
+	}
 	stats.TotalMatched = len(out)
 	if !uncapped && len(out) > f.Limit {
 		out = out[:f.Limit]
