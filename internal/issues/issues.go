@@ -251,7 +251,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 					continue
 				}
 				lastSeen := time.Now().Add(-since)
-				out = append(out, Issue{
+				iss := Issue{
 					Severity:  SeverityWarning,
 					Source:    SourceCondition,
 					Kind:      kind,
@@ -263,7 +263,9 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 					FirstSeen: lastSeen,
 					LastSeen:  lastSeen,
 					Count:     1,
-				})
+				}
+				classifyIssue(&iss)
+				out = append(out, iss)
 			}
 		}
 	}
@@ -329,7 +331,7 @@ func fromProblem(p k8s.Problem, now time.Time, source Source) Issue {
 		sev = SeverityCritical
 	}
 	since := now.Add(-time.Duration(p.DurationSeconds) * time.Second)
-	return Issue{
+	iss := Issue{
 		Severity:             sev,
 		Source:               source,
 		Kind:                 p.Kind,
@@ -344,6 +346,23 @@ func fromProblem(p k8s.Problem, now time.Time, source Source) Issue {
 		RestartCount:         p.RestartCount,
 		LastTerminatedReason: p.LastTerminatedReason,
 	}
+	classifyIssue(&iss)
+	return iss
+}
+
+// classifyIssue derives the user-facing Category + its CategoryGroup rollup
+// from the row's detection signal. Pure: same inputs always yield the same
+// labels, so the category stays stable across recomposes (a prerequisite for
+// the future category-in-issue-id contract).
+func classifyIssue(i *Issue) {
+	i.Category = Classify(classifyInput{
+		Source:               i.Source,
+		APIGroup:             i.Group,
+		Kind:                 i.Kind,
+		Reason:               i.Reason,
+		LastTerminatedReason: i.LastTerminatedReason,
+	})
+	i.CategoryGroup = GroupOf(i.Category)
 }
 
 // ---------------------------------------------------------------------------

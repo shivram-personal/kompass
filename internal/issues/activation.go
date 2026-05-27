@@ -11,10 +11,12 @@ func issueToActivation(i Issue) map[string]any {
 		lastSeen = i.LastSeen.Unix()
 	}
 	return map[string]any{
-		"severity":  string(i.Severity),
-		"source":    string(i.Source),
-		"kind":      i.Kind,
-		"group":     i.Group,
+		"severity":       string(i.Severity),
+		"source":         string(i.Source),
+		"category":       string(i.Category),
+		"category_group": string(i.CategoryGroup),
+		"kind":           i.Kind,
+		"group":          i.Group,
 		// `ns` rather than `namespace` — `namespace` is a CEL reserved
 		// identifier and bare references fail at parse time. See
 		// internal/filter.envIssue for the rationale.

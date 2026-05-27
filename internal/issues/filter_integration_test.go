@@ -88,6 +88,35 @@ func TestCompose_WithCELFilter_SourceBinding(t *testing.T) {
 	}
 }
 
+func TestCompose_WithCELFilter_CategoryBinding(t *testing.T) {
+	// category + category_group are filterable bindings, not just output
+	// labels — the UI facet and agents slice on them. Guard that both
+	// compile and match against the derived classification.
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Pod", Namespace: "ns", Name: "img", Severity: "critical", Reason: "ImagePullBackOff"},
+			{Kind: "Pod", Namespace: "ns", Name: "crash", Severity: "critical", Reason: "CrashLoopBackOff"},
+		},
+	}
+	f, err := filter.CompileIssueFilter(`category == "image_pull_failed"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := ComposeWithStats(p, Filters{Filter: f})
+	if len(out) != 1 || out[0].Name != "img" {
+		t.Fatalf(`category=="image_pull_failed" should keep only the image-pull row, got %+v`, out)
+	}
+
+	f, err = filter.CompileIssueFilter(`category_group == "startup"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ = ComposeWithStats(p, Filters{Filter: f})
+	if len(out) != 1 || out[0].Name != "img" {
+		t.Fatalf(`category_group=="startup" should keep only the startup row, got %+v`, out)
+	}
+}
+
 func TestCompose_FilterEvalError_StatsPopulated(t *testing.T) {
 	// Reference an unbound-but-syntactically-valid path that won't
 	// resolve on any actual issue row — the dyn-typed env declares
