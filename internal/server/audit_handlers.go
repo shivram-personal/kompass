@@ -107,10 +107,21 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	// inheriting each cluster's local settings as if they were team policy.
 	// Standalone Radar and the embedded per-cluster audit view omit the param
 	// and keep applying local settings.
-	if !queryTrue(r, "raw") {
-		results = applyAuditSettings(results, getAuditConfig())
+	if queryTrue(r, "raw") {
+		// Raw fan-out (the Hub): just the findings + catalog. The Hub applies
+		// org policy and builds its own rollup, so computing one here is waste.
+		s.writeJSON(w, results)
+		return
 	}
-	s.writeJSON(w, results)
+	results = applyAuditSettings(results, getAuditConfig())
+	// Attach the remediation-queue rollup for standalone + embedded per-cluster
+	// views. Build on a shallow copy: applyAuditSettings returns the shared
+	// cache object verbatim when no settings filter, so mutating it would race
+	// concurrent readers. clusterID/env are empty — single-cluster, and the web
+	// supplies cluster context from the URL when embedded.
+	resp := *results
+	resp.GroupedChecks = bp.BuildChecks(bp.EffectiveFindings(results.Findings, ""), results.Checks, "", "")
+	s.writeJSON(w, &resp)
 }
 
 // queryTrue reports whether a query param parses as a truthy boolean. Tolerant
