@@ -66,8 +66,11 @@ const (
 	SourceCondition  Source = "condition"   // generic CRD .status.conditions[].status=False fallback
 )
 
-// Ref is a lightweight resource reference, used for owner pointers.
+// Ref is a lightweight resource reference for the grouping subject and
+// owner pointers. Group is the API group (empty for core) — carried so
+// owner/affected deep-links can disambiguate CRDs from core kinds.
 type Ref struct {
+	Group     string `json:"group,omitempty"`
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
@@ -87,8 +90,17 @@ type Issue struct {
 	// CategoryGroup is its coarse rollup (GroupOf). Both are server-emitted
 	// labels so the UI renders them without its own category→group map.
 	// Distinct from Group below, which is the resource's API group.
-	Category      Category  `json:"category,omitempty"`
-	CategoryGroup Group     `json:"category_group,omitempty"`
+	Category      Category `json:"category,omitempty"`
+	CategoryGroup Group    `json:"category_group,omitempty"`
+	// ID is the deterministic, cluster-local issue identity —
+	// hash(grouping_scope, subject key, category). Shared by every row that
+	// rolls up to the same subject+category, so consumers can group on it;
+	// the hub namespaces it by cluster_id for global uniqueness.
+	ID string `json:"id,omitempty"`
+	// GroupingScope is the kind of subject this issue groups under
+	// (workload|service|pvc|ingress|node|unknown) — drives the UI section
+	// and is part of ID.
+	GroupingScope Scope     `json:"grouping_scope,omitempty"`
 	Kind          string    `json:"kind"`
 	Group         string    `json:"group,omitempty"`
 	Namespace     string    `json:"namespace,omitempty"`

@@ -38,6 +38,25 @@ type Problem struct {
 	// mean either non-Pod problem or no crash data on this Pod yet.
 	RestartCount         int32
 	LastTerminatedReason string
+	// OwnerKind + OwnerName name the topmost stable controller of a Pod
+	// problem (Pod→Deployment, not the intermediate ReplicaSet), resolved
+	// via topOwnerForPod when the Pod is detected. Empty for non-Pod and
+	// standalone-pod problems — those are their own subject. Lets the
+	// issues layer group member pods under one workload without re-walking
+	// ownerReferences.
+	OwnerKind string
+	OwnerName string
+}
+
+// podOwnerKindName resolves a Pod's topmost stable controller for issue
+// grouping (Pod→Deployment, not ReplicaSet), returning empty strings for
+// standalone pods. Thin wrapper over topOwnerForPod so the pod
+// problem-emission sites stay terse.
+func podOwnerKindName(pod *corev1.Pod) (kind, name string) {
+	if to := topOwnerForPod(pod); to != nil {
+		return to.Kind, to.Name
+	}
+	return "", ""
 }
 
 // DetectProblems scans workloads in cache and returns detected problems.
@@ -181,6 +200,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Problem {
 				severity = "critical"
 			}
 			restartCount, lastTermReason := PodRestartContext(pod)
+			ownerKind, ownerName := podOwnerKindName(pod)
 			problems = append(problems, Problem{
 				Kind:                 "Pod",
 				Namespace:            pod.Namespace,
@@ -193,6 +213,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Problem {
 				DurationSeconds:      int64(ageDur.Seconds()),
 				RestartCount:         restartCount,
 				LastTerminatedReason: lastTermReason,
+				OwnerKind:            ownerKind,
+				OwnerName:            ownerName,
 			})
 		}
 	}

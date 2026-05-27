@@ -265,6 +265,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 					Count:     1,
 				}
 				classifyIssue(&iss)
+				enrichIdentity(&iss)
 				out = append(out, iss)
 			}
 		}
@@ -346,7 +347,16 @@ func fromProblem(p k8s.Problem, now time.Time, source Source) Issue {
 		RestartCount:         p.RestartCount,
 		LastTerminatedReason: p.LastTerminatedReason,
 	}
+	if p.OwnerKind != "" {
+		iss.Owner = Ref{
+			Group:     resolveGroup("", p.OwnerKind),
+			Kind:      p.OwnerKind,
+			Namespace: p.Namespace,
+			Name:      p.OwnerName,
+		}
+	}
 	classifyIssue(&iss)
+	enrichIdentity(&iss)
 	return iss
 }
 
