@@ -461,6 +461,7 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Problem 
 			if !cond.LastTransitionTime.IsZero() {
 				dur = now.Sub(cond.LastTransitionTime.Time)
 			}
+			ownerKind, ownerName := podOwnerKindName(pod)
 			problems = append(problems, Problem{
 				Kind:            "Pod",
 				Namespace:       pod.Namespace,
@@ -472,6 +473,8 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Problem 
 				AgeSeconds:      int64(ageDur.Seconds()),
 				Duration:        FormatAge(dur),
 				DurationSeconds: int64(dur.Seconds()),
+				OwnerKind:       ownerKind,
+				OwnerName:       ownerName,
 			})
 		}
 	}
@@ -920,6 +923,7 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Problem {
 			severity = "high"
 		}
 		ageDur := now.Sub(pod.CreationTimestamp.Time)
+		ownerKind, ownerName := podOwnerKindName(pod)
 		problems = append(problems, Problem{
 			Kind:            "Pod",
 			Namespace:       pod.Namespace,
@@ -931,6 +935,8 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Problem {
 			AgeSeconds:      int64(ageDur.Seconds()),
 			Duration:        FormatAge(ageDur),
 			DurationSeconds: int64(ageDur.Seconds()),
+			OwnerKind:       ownerKind,
+			OwnerName:       ownerName,
 		})
 	}
 	return problems

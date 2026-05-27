@@ -96,6 +96,35 @@ func TestCompose_PopulatesCategoryAndGroup(t *testing.T) {
 	}
 }
 
+func TestCompose_GroupsMemberPodsUnderOwner(t *testing.T) {
+	// Two pods of the same Deployment failing the same way share one issue
+	// ID (the future collapse target); a third pod failing differently gets
+	// its own. Owner + scope are propagated onto every member row.
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Pod", Namespace: "ns", Name: "web-a", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+			{Kind: "Pod", Namespace: "ns", Name: "web-b", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+			{Kind: "Pod", Namespace: "ns", Name: "web-c", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+		},
+	}
+	got := map[string]Issue{}
+	for _, i := range Compose(p, Filters{}) {
+		got[i.Name] = i
+	}
+	if got["web-a"].ID == "" || got["web-a"].ID != got["web-b"].ID {
+		t.Errorf("same owner+category pods must share an ID: a=%q b=%q", got["web-a"].ID, got["web-b"].ID)
+	}
+	if got["web-c"].ID == got["web-a"].ID {
+		t.Error("a different category under the same owner must get a distinct ID")
+	}
+	if want := (Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}); got["web-a"].Owner != want {
+		t.Errorf("owner not propagated: got %+v, want %+v", got["web-a"].Owner, want)
+	}
+	if got["web-a"].GroupingScope != ScopeWorkload {
+		t.Errorf("scope = %q, want workload", got["web-a"].GroupingScope)
+	}
+}
+
 func TestCompose_PodSchedulingWinsOverProblem(t *testing.T) {
 	// A pod stuck post-bind trips both sources: DetectProblems flags it
 	// Pending>5m and DetectScheduling names the actual CNI/volume blocker.
