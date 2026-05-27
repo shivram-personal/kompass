@@ -2703,6 +2703,7 @@ export function ResourcesView({
     setOwnerName('')
     setShowInactiveReplicaSets(false)
     // Drop filter-only URL params; leave path + kind + cross-view params alone.
+    // Host-owned params (namespaces, etc.) are cleaned by onClearNamespaces.
     const params = new URLSearchParams(window.location.search)
     for (const key of ['search', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive']) {
       params.delete(key)

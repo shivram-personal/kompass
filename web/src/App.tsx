@@ -1491,6 +1491,10 @@ function AppInner() {
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
             onClearNamespaces={() => {
+              const params = new URLSearchParams(window.location.search)
+              params.delete('namespaces')
+              params.delete('namespace')
+              setSearchParams(params, { replace: true })
               setNamespaces([])
               setActiveNamespace.mutate({ namespaces: [] })
             }}
@@ -1543,6 +1547,10 @@ function AppInner() {
               setSelectedResource(resource)
             }}
             onClearNamespaces={() => {
+              const params = new URLSearchParams(window.location.search)
+              params.delete('namespaces')
+              params.delete('namespace')
+              setSearchParams(params, { replace: true })
               setNamespaces([])
               setActiveNamespace.mutate({ namespaces: [] })
             }}
