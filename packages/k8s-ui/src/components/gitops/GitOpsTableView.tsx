@@ -513,7 +513,7 @@ export function GitOpsTableView({
                   Viewing {globalNamespaces.length === 1 ? `namespace: ${globalNamespaces[0]}` : `${globalNamespaces.length} namespaces`}
                 </p>
               )}
-              {hasAnyFilter && (
+              {(hasGlobalNamespaceFilter || (allRows.length > 0 && hasLocalFilters)) && (
                 <button
                   type="button"
                   onClick={clearAllFilters}
