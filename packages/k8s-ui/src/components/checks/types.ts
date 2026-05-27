@@ -1,7 +1,7 @@
 // Shared Checks identity contract + data shapes + severity vocabulary.
 //
-// k8s-ui owns these because the Checks queue presentation (ActionItemsView,
-// ActionItemDrawer) is host-agnostic: Radar Hub feeds it fleet-resolved data,
+// k8s-ui owns these because the Checks queue presentation (ChecksView,
+// CheckDrawer) is host-agnostic: Radar Hub feeds it fleet-resolved data,
 // and OSS Radar can feed a single-cluster ("fleet of one") resolve. Hosts map
 // their wire payloads onto these types; the components render against them.
 //
@@ -113,8 +113,8 @@ export interface EffectiveCheckFinding {
   state: EffectiveFindingState;
 }
 
-/** One explainable contribution to an action item's queue ordering. Shown in
- *  the UI so priority is transparent — there is no hidden score. */
+/** One explainable contribution to a check's queue ordering. Shown in the UI
+ *  so priority is transparent — there is no hidden score. */
 export interface PriorityFactor {
   key: string;
   label: string;
@@ -123,11 +123,12 @@ export interface PriorityFactor {
 }
 
 /**
- * A grouped remediation-queue row: one row per failing check, rolling up every
- * resource that fails it. `subject` is the most-severe representative resource;
- * `findings` holds the per-resource detail underneath.
+ * A failing check, rolled up across every resource that fails it — one row of
+ * the remediation queue. `subject` is the most-severe representative resource;
+ * `findings` holds the per-resource detail underneath. (Distinct from CheckMeta,
+ * the check's static definition.)
  */
-export interface CheckActionItem {
+export interface Check {
   id: string;
   source: 'radar_builtin';
   subject: CheckResourceRef;

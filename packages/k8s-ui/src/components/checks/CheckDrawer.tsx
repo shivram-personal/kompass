@@ -3,26 +3,29 @@ import { createPortal } from 'react-dom'
 import { X, ExternalLink, Wrench, ArrowRight, Layers } from 'lucide-react'
 import { ClusterName } from '../ui'
 import type { CheckMeta } from '../audit'
-import type { CheckActionItem, EffectiveCheckFinding, CheckResourceRef } from './types'
+import type { Check, EffectiveCheckFinding, CheckResourceRef } from './types'
 import { SEVERITY_BADGE_CLASS, SEVERITY_FILL_CLASS, SEVERITY_GLOW_CLASS, SEVERITY_LABEL } from './severity'
 
-// The remediation cockpit for one action item. A right-side slide-over portaled
-// to document.body. Host-agnostic: deep-links come from `resourceHref` and the
-// cluster label from `clusterLabel`, so Hub (cross-SPA links, fleet cluster
-// names) and OSS (in-app links, single cluster) both drive it.
+// The remediation cockpit for one failing check. A right-side slide-over
+// portaled to document.body. Host-agnostic: deep-links come from `resourceHref`
+// and the cluster label from `clusterLabel`, so Hub (cross-SPA links, fleet
+// cluster names) and OSS (in-app links, single cluster) both drive it.
 
-export interface ActionItemDrawerProps {
-  item: CheckActionItem
+export interface CheckDrawerProps {
+  check: Check
   meta?: CheckMeta
   /** Resolve a deep-link href for a resource. Omit to render non-link text. */
   resourceHref?: (ref: CheckResourceRef) => string
-  /** Display label for the item's source cluster. Omit (or return falsy) to
+  /** In-app resource navigation (client-side, no reload). Takes precedence over
+   *  resourceHref when both are given — OSS opens its own drawer this way. */
+  onResourceClick?: (ref: CheckResourceRef) => void
+  /** Display label for the check's source cluster. Omit (or return falsy) to
    *  hide the cluster line — e.g. single-cluster OSS. */
-  clusterLabel?: (item: CheckActionItem) => string | undefined
+  clusterLabel?: (check: Check) => string | undefined
   onClose: () => void
 }
 
-export function ActionItemDrawer({ item, meta, resourceHref, clusterLabel, onClose }: ActionItemDrawerProps) {
+export function CheckDrawer({ check, meta, resourceHref, onResourceClick, clusterLabel, onClose }: CheckDrawerProps) {
   const closeRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -38,10 +41,10 @@ export function ActionItemDrawer({ item, meta, resourceHref, clusterLabel, onClo
     closeRef.current?.focus()
   }, [])
 
-  const rep = item.representativeFinding
-  const sev = item.effectiveSeverity
+  const rep = check.representativeFinding
+  const sev = check.effectiveSeverity
   const fromOrgConfig = rep.state.source === 'org_config'
-  const cluster = clusterLabel?.(item)
+  const cluster = clusterLabel?.(check)
 
   return createPortal(
     <div
@@ -51,7 +54,7 @@ export function ActionItemDrawer({ item, meta, resourceHref, clusterLabel, onClo
       }}
       role="dialog"
       aria-modal="true"
-      aria-labelledby="action-item-drawer-title"
+      aria-labelledby="check-drawer-title"
     >
       <div className="flex h-full w-full max-w-xl flex-col border-l border-theme-border/80 bg-theme-surface shadow-2xl">
         {/* Severity-themed header band */}
@@ -68,10 +71,10 @@ export function ActionItemDrawer({ item, meta, resourceHref, clusterLabel, onClo
           <div className="flex flex-col gap-2 pr-8">
             <div className="flex items-center gap-2">
               <span className={`badge-sm text-[11px] font-semibold ${SEVERITY_BADGE_CLASS[sev]}`}>{SEVERITY_LABEL[sev]}</span>
-              <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">{item.category}</span>
+              <span className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">{check.category}</span>
             </div>
-            <h2 id="action-item-drawer-title" className="text-lg font-semibold leading-snug text-theme-text-primary">
-              {item.title}
+            <h2 id="check-drawer-title" className="text-lg font-semibold leading-snug text-theme-text-primary">
+              {check.title}
             </h2>
             <div className="flex items-center gap-1.5 text-xs text-theme-text-secondary">
               <Layers className="h-3.5 w-3.5 text-theme-text-tertiary" />
@@ -82,8 +85,8 @@ export function ActionItemDrawer({ item, meta, resourceHref, clusterLabel, onClo
                 </>
               ) : null}
               <span className="tabular-nums">
-                {item.affectedResources} {item.affectedResources === 1 ? 'resource' : 'resources'}
-                {item.affectedFindings !== item.affectedResources && ` · ${item.affectedFindings} findings`}
+                {check.affectedResources} {check.affectedResources === 1 ? 'resource' : 'resources'}
+                {check.affectedFindings !== check.affectedResources && ` · ${check.affectedFindings} findings`}
               </span>
             </div>
           </div>
@@ -135,32 +138,41 @@ export function ActionItemDrawer({ item, meta, resourceHref, clusterLabel, onClo
             </div>
           </section>
 
-          <PriorityBreakdown item={item} />
+          <PriorityBreakdown check={check} />
 
           {/* Affected resources — exact identity + deep link per resource. */}
           <section className="flex flex-col gap-1.5">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
-              Affected resources <span className="tabular-nums">({item.affectedResources})</span>
+              Affected resources <span className="tabular-nums">({check.affectedResources})</span>
             </h3>
             <ul className="flex flex-col gap-px">
-              {item.findings.map((f, i) => (
+              {check.findings.map((f, i) => (
                 // Index-suffixed: a check can fire more than once on the same
                 // resource (per-container), so the resource ref isn't unique.
                 <ResourceRow
                   key={`${f.resource.group}/${f.resource.kind}/${f.resource.namespace}/${f.resource.name}#${i}`}
                   finding={f}
                   resourceHref={resourceHref}
+                  onResourceClick={onResourceClick}
                 />
               ))}
             </ul>
-            {resourceHref && (
+            {onResourceClick ? (
+              <button
+                type="button"
+                onClick={() => onResourceClick(rep.resource)}
+                className="mt-1 inline-flex w-fit items-center gap-1 text-xs font-medium text-[var(--color-radar-accent)] hover:underline"
+              >
+                Open representative resource <ArrowRight className="h-3 w-3" />
+              </button>
+            ) : resourceHref ? (
               <a
                 href={resourceHref(rep.resource)}
                 className="mt-1 inline-flex w-fit items-center gap-1 text-xs font-medium text-[var(--color-radar-accent)] hover:underline"
               >
                 Open representative resource <ArrowRight className="h-3 w-3" />
               </a>
-            )}
+            ) : null}
           </section>
         </div>
       </div>
@@ -171,9 +183,9 @@ export function ActionItemDrawer({ item, meta, resourceHref, clusterLabel, onClo
 
 // Visualized explainable priority: each weighted factor as a proportional bar,
 // summing to the score. Zero-weight factors render as quiet context chips.
-function PriorityBreakdown({ item }: { item: CheckActionItem }) {
-  const weighted = item.priorityFactors.filter((f) => f.weight > 0)
-  const context = item.priorityFactors.filter((f) => f.weight === 0)
+function PriorityBreakdown({ check }: { check: Check }) {
+  const weighted = check.priorityFactors.filter((f) => f.weight > 0)
+  const context = check.priorityFactors.filter((f) => f.weight === 0)
   if (weighted.length === 0 && context.length === 0) return null
   const max = Math.max(...weighted.map((f) => f.weight), 1)
   const total = weighted.reduce((n, f) => n + f.weight, 0)
@@ -220,26 +232,34 @@ function PriorityBreakdown({ item }: { item: CheckActionItem }) {
 function ResourceRow({
   finding,
   resourceHref,
+  onResourceClick,
 }: {
   finding: EffectiveCheckFinding
   resourceHref?: (ref: CheckResourceRef) => string
+  onResourceClick?: (ref: CheckResourceRef) => void
 }) {
   const r = finding.resource
+  const linkable = !!(onResourceClick || resourceHref)
   const body = (
     <>
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${SEVERITY_FILL_CLASS[finding.effectiveSeverity]}`} />
       <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-theme-text-tertiary">{r.kind}</span>
-      <span className={`truncate font-medium ${resourceHref ? 'text-[var(--color-radar-accent)]' : 'text-theme-text-primary'}`}>
+      <span className={`truncate font-medium ${linkable ? 'text-[var(--color-radar-accent)]' : 'text-theme-text-primary'}`}>
         {r.namespace ? `${r.namespace} / ` : ''}
         {r.name}
       </span>
-      {resourceHref && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover:opacity-100" />}
+      {linkable && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover:opacity-100" />}
     </>
   )
+  const cls = 'group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-theme-hover/60'
   return (
     <li>
-      {resourceHref ? (
-        <a href={resourceHref(r)} className="group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors hover:bg-theme-hover/60">
+      {onResourceClick ? (
+        <button type="button" onClick={() => onResourceClick(r)} className={cls}>
+          {body}
+        </button>
+      ) : resourceHref ? (
+        <a href={resourceHref(r)} className={cls}>
           {body}
         </a>
       ) : (

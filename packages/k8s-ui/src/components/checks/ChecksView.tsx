@@ -1,9 +1,9 @@
-import { useMemo, useState, type ReactNode } from 'react'
-import { ChevronRight, ExternalLink, Search, ShieldCheck, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { ChevronRight, ExternalLink, EyeOff, MoreHorizontal, Search, ShieldCheck, X } from 'lucide-react'
 import { ClusterName, EmptyState, FilterPill } from '../ui'
 import type { CheckMeta } from '../audit'
-import { ActionItemDrawer } from './ActionItemDrawer'
-import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type CheckActionItem, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
+import { CheckDrawer } from './CheckDrawer'
+import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type Check, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
 import {
   SEVERITY_BADGE_CLASS,
   SEVERITY_FILL_CLASS,
@@ -15,28 +15,39 @@ import {
 
 const CATEGORIES: readonly string[] = ['Security', 'Reliability', 'Efficiency']
 
-export interface ActionItemsViewProps {
-  /** Action items, typically flattened across the fleet by the host. */
-  items: CheckActionItem[]
-  /** Check metadata (id → meta) for the drawer's title/description/remediation. */
-  checks: Record<string, CheckMeta>
+export interface ChecksViewProps {
+  /** Failing checks, typically flattened across the fleet by the host. */
+  checks: Check[]
+  /** Check catalog (checkID → definition) for the drawer's title/description/
+   *  remediation and the compliance-framework filter. */
+  catalog: Record<string, CheckMeta>
   /** True when at least one source returned audit data — distinguishes "clean"
    *  from "nothing audited / everything errored". */
   anyData: boolean
   /** Resolve a deep-link href for a resource (host-specific routing). Omit to
    *  render non-link text. */
   resourceHref?: (ref: CheckResourceRef) => string
-  /** Display label for an item's source cluster. Omit (or return falsy) to hide
+  /** In-app resource navigation. When set, resource lines call this (client-
+   *  side, no reload) instead of following resourceHref — OSS opens its own
+   *  drawer this way. Takes precedence over resourceHref when both are given. */
+  onResourceClick?: (ref: CheckResourceRef) => void
+  /** Display label for a check's source cluster. Omit (or return falsy) to hide
    *  the cluster line — e.g. single-cluster OSS. */
-  clusterLabel?: (item: CheckActionItem) => string | undefined
+  clusterLabel?: (check: Check) => string | undefined
   /** Empty-state CTA shown when there's no data (host-specific: connect a
    *  cluster vs run an audit). */
   emptyAction?: ReactNode
+  /** Optional per-row "hide" actions. OSS wires these to local ~/.radar
+   *  settings; the Hub omits them (hiding is the governed Policy tab there).
+   *  When omitted, no row menu renders. */
+  onHideCheck?: (checkID: string, title: string) => void
+  onHideCategory?: (category: string) => void
 }
 
-export function ActionItemsView({ items, checks, anyData, resourceHref, clusterLabel, emptyAction }: ActionItemsViewProps) {
+export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceClick, clusterLabel, emptyAction, onHideCheck, onHideCategory }: ChecksViewProps) {
   const [severityFilter, setSeverityFilter] = useState<Set<CheckSeverity>>(new Set())
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set())
+  const [frameworkFilter, setFrameworkFilter] = useState<Set<string>>(new Set())
   const [search, setSearch] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [detailId, setDetailId] = useState<string | null>(null)
@@ -45,21 +56,33 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
     const totals: Record<CheckSeverity, number> = { critical: 0, high: 0, medium: 0, low: 0 }
     const clusters = new Set<string>()
     let totalFindings = 0
-    for (const it of items) {
-      totals[it.effectiveSeverity] += 1
-      totalFindings += it.affectedFindings
-      clusters.add(it.subject.cluster_id)
+    for (const c of checks) {
+      totals[c.effectiveSeverity] += 1
+      totalFindings += c.affectedFindings
+      clusters.add(c.subject.cluster_id)
     }
     return { totals, totalFindings, clusterCount: clusters.size }
-  }, [items])
+  }, [checks])
+
+  // Compliance frameworks present in the catalog (CIS, NSA/CISA, …). Empty when
+  // no loaded check carries a framework tag, in which case the filter hides.
+  const frameworks = useMemo(() => {
+    const set = new Set<string>()
+    for (const m of Object.values(catalog)) m.frameworks?.forEach((f) => set.add(f))
+    return Array.from(set).sort()
+  }, [catalog])
 
   const searchLower = search.toLowerCase()
   const filtered = useMemo(() => {
-    const out = items.filter((it) => {
-      if (severityFilter.size > 0 && !severityFilter.has(it.effectiveSeverity)) return false
-      if (categoryFilter.size > 0 && !categoryFilter.has(it.category)) return false
+    const out = checks.filter((c) => {
+      if (severityFilter.size > 0 && !severityFilter.has(c.effectiveSeverity)) return false
+      if (categoryFilter.size > 0 && !categoryFilter.has(c.category)) return false
+      if (frameworkFilter.size > 0) {
+        const fws = catalog[c.checkID]?.frameworks
+        if (!fws || !fws.some((f) => frameworkFilter.has(f))) return false
+      }
       if (searchLower) {
-        const hay = `${it.title} ${it.checkID} ${it.message} ${it.subject.namespace} ${it.subject.name}`.toLowerCase()
+        const hay = `${c.title} ${c.checkID} ${c.message} ${c.subject.namespace} ${c.subject.name}`.toLowerCase()
         if (!hay.includes(searchLower)) return false
       }
       return true
@@ -71,7 +94,7 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
       if (b.affectedResources !== a.affectedResources) return b.affectedResources - a.affectedResources
       return a.title.localeCompare(b.title)
     })
-  }, [items, severityFilter, categoryFilter, searchLower])
+  }, [checks, catalog, severityFilter, categoryFilter, frameworkFilter, searchLower])
 
   const toggle = <T,>(setter: React.Dispatch<React.SetStateAction<Set<T>>>, v: T) =>
     setter((prev) => {
@@ -81,14 +104,15 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
       return next
     })
 
-  const hasFilters = severityFilter.size > 0 || categoryFilter.size > 0 || search !== ''
+  const hasFilters = severityFilter.size > 0 || categoryFilter.size > 0 || frameworkFilter.size > 0 || search !== ''
   const clearAll = () => {
     setSeverityFilter(new Set())
     setCategoryFilter(new Set())
+    setFrameworkFilter(new Set())
     setSearch('')
   }
 
-  const detail = detailId ? filtered.find((it) => it.id === detailId) ?? items.find((it) => it.id === detailId) ?? null : null
+  const detail = detailId ? filtered.find((c) => c.id === detailId) ?? checks.find((c) => c.id === detailId) ?? null : null
 
   return (
     <div className="flex flex-col gap-4">
@@ -96,10 +120,10 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
       <div className="flex flex-col gap-3.5 rounded-2xl border border-theme-border bg-theme-surface p-4 shadow-theme-sm">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-semibold tabular-nums text-theme-text-primary">{items.length}</span>
+            <span className="text-2xl font-semibold tabular-nums text-theme-text-primary">{checks.length}</span>
             <span className="text-sm text-theme-text-secondary">
-              {items.length === 1 ? 'action item' : 'action items'}
-              {totalFindings > items.length && <span className="text-theme-text-tertiary"> · {totalFindings} findings</span>}
+              {checks.length === 1 ? 'check' : 'checks'}
+              {totalFindings > checks.length && <span className="text-theme-text-tertiary"> · {totalFindings} findings</span>}
               {clusterCount > 1 && <span className="text-theme-text-tertiary"> · {clusterCount} clusters</span>}
             </span>
           </div>
@@ -107,7 +131,7 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-theme-text-tertiary" />
             <input
               type="text"
-              placeholder="Search action items…"
+              placeholder="Search checks…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-64 rounded-lg border border-theme-border-light bg-theme-base py-1.5 pl-9 pr-8 text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-[var(--color-radar-accent)]"
@@ -135,6 +159,14 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
           {CATEGORIES.map((c) => (
             <FilterPill key={c} label={c} active={categoryFilter.has(c)} onClick={() => toggle(setCategoryFilter, c)} />
           ))}
+          {frameworks.length > 0 && (
+            <>
+              <span className="mx-1.5 h-5 w-px bg-theme-border" />
+              {frameworks.map((fw) => (
+                <FilterPill key={fw} label={fw} active={frameworkFilter.has(fw)} onClick={() => toggle(setFrameworkFilter, fw)} />
+              ))}
+            </>
+          )}
         </div>
       </div>
 
@@ -143,7 +175,7 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
           <EmptyState
             tone="filtered"
             variant="card"
-            headline="No action items match the current filters"
+            headline="No checks match the current filters"
             body="Clear a filter to see more of the queue."
             action={
               <button
@@ -168,22 +200,25 @@ export function ActionItemsView({ items, checks, anyData, resourceHref, clusterL
         )
       ) : (
         <ol className="flex flex-col gap-1.5">
-          {filtered.map((item) => (
-            <ActionItemRow
-              key={item.id}
-              item={item}
+          {filtered.map((check) => (
+            <CheckRow
+              key={check.id}
+              check={check}
               clusterLabel={clusterLabel}
-              expanded={expanded.has(item.id)}
-              onToggle={() => toggle(setExpanded, item.id)}
-              onOpen={() => setDetailId(item.id)}
+              expanded={expanded.has(check.id)}
+              onToggle={() => toggle(setExpanded, check.id)}
+              onOpen={() => setDetailId(check.id)}
               resourceHref={resourceHref}
+              onResourceClick={onResourceClick}
+              onHideCheck={onHideCheck}
+              onHideCategory={onHideCategory}
             />
           ))}
         </ol>
       )}
 
       {detail && (
-        <ActionItemDrawer item={detail} meta={checks[detail.checkID]} resourceHref={resourceHref} clusterLabel={clusterLabel} onClose={() => setDetailId(null)} />
+        <CheckDrawer check={detail} meta={catalog[detail.checkID]} resourceHref={resourceHref} onResourceClick={onResourceClick} clusterLabel={clusterLabel} onClose={() => setDetailId(null)} />
       )}
     </div>
   )
@@ -222,27 +257,37 @@ function SeverityChip({ severity, count, active, onClick }: { severity: CheckSev
   )
 }
 
-function ActionItemRow({
-  item,
+function CheckRow({
+  check,
   clusterLabel,
   expanded,
   onToggle,
   onOpen,
   resourceHref,
+  onResourceClick,
+  onHideCheck,
+  onHideCategory,
 }: {
-  item: CheckActionItem
-  clusterLabel?: (item: CheckActionItem) => string | undefined
+  check: Check
+  clusterLabel?: (check: Check) => string | undefined
   expanded: boolean
   onToggle: () => void
   onOpen: () => void
   resourceHref?: (ref: CheckResourceRef) => string
+  onResourceClick?: (ref: CheckResourceRef) => void
+  onHideCheck?: (checkID: string, title: string) => void
+  onHideCategory?: (category: string) => void
 }) {
   // Only the environment factor is genuinely additive on the row — severity is
   // the badge, category is the tag, blast_radius is the resource count.
-  const extraFactors = item.priorityFactors.filter(
+  const extraFactors = check.priorityFactors.filter(
     (f) => f.weight > 0 && f.key !== 'severity' && f.key !== 'category' && f.key !== 'blast_radius',
   )
-  const cluster = clusterLabel?.(item)
+  const cluster = clusterLabel?.(check)
+
+  const menuItems: { label: string; onClick: () => void }[] = []
+  if (onHideCheck) menuItems.push({ label: `Hide "${check.title}" check`, onClick: () => onHideCheck(check.checkID, check.title) })
+  if (onHideCategory) menuItems.push({ label: `Hide all ${check.category} checks`, onClick: () => onHideCategory(check.category) })
 
   return (
     <li className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
@@ -256,7 +301,7 @@ function ActionItemRow({
             onOpen()
           }
         }}
-        className={`group flex cursor-pointer items-center gap-3 border-l-2 py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 ${SEVERITY_RAIL_CLASS[item.effectiveSeverity]}`}
+        className={`group flex cursor-pointer items-center gap-3 border-l-2 py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 ${SEVERITY_RAIL_CLASS[check.effectiveSeverity]}`}
       >
         <button
           type="button"
@@ -273,8 +318,8 @@ function ActionItemRow({
 
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-theme-text-primary">{item.title}</span>
-            <span className={`badge-sm shrink-0 text-[10px] ${categoryBadgeClass(item.category)}`}>{item.category}</span>
+            <span className="truncate text-sm font-medium text-theme-text-primary">{check.title}</span>
+            <span className={`badge-sm shrink-0 text-[10px] ${categoryBadgeClass(check.category)}`}>{check.category}</span>
           </div>
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
             {cluster ? (
@@ -286,7 +331,7 @@ function ActionItemRow({
               </>
             ) : null}
             <span className="shrink-0 font-medium text-theme-text-secondary tabular-nums">
-              {item.affectedResources} {item.affectedResources === 1 ? 'resource' : 'resources'}
+              {check.affectedResources} {check.affectedResources === 1 ? 'resource' : 'resources'}
             </span>
             {extraFactors.map((f) => (
               <span key={f.key} className="hidden shrink-0 items-center gap-1 capitalize sm:inline-flex">
@@ -297,20 +342,21 @@ function ActionItemRow({
           </div>
         </div>
 
-        <span className={`badge-sm shrink-0 text-[10px] font-semibold ${SEVERITY_BADGE_CLASS[item.effectiveSeverity]}`}>{SEVERITY_LABEL[item.effectiveSeverity]}</span>
+        <span className={`badge-sm shrink-0 text-[10px] font-semibold ${SEVERITY_BADGE_CLASS[check.effectiveSeverity]}`}>{SEVERITY_LABEL[check.effectiveSeverity]}</span>
+        {menuItems.length > 0 && <RowMenu items={menuItems} />}
         <ExternalLink className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover:opacity-100" />
       </div>
 
       <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}>
-        {/* inert when collapsed: the rows are visually clipped (0fr + overflow)
-            but would otherwise stay keyboard-tabbable + screen-reader-reachable. */}
-        <div className="overflow-hidden" inert={!expanded || undefined}>
+        <div className="overflow-hidden">
           <ul className="flex flex-col gap-px border-t border-theme-border bg-theme-base/40 px-3 py-2 pl-12">
-            {item.findings.map((f, i) => (
-              // Index-suffixed: a check can fire more than once on the same
-              // resource (e.g. per-container), so the resource ref alone isn't
-              // a unique key within one action item's findings.
-              <FindingLine key={`${f.resource.group}/${f.resource.kind}/${f.resource.namespace}/${f.resource.name}#${i}`} finding={f} resourceHref={resourceHref} />
+            {check.findings.map((f, i) => (
+              <FindingLine
+                key={`${f.resource.group}/${f.resource.kind}/${f.resource.namespace}/${f.resource.name}#${i}`}
+                finding={f}
+                resourceHref={resourceHref}
+                onResourceClick={onResourceClick}
+              />
             ))}
           </ul>
         </div>
@@ -319,23 +365,86 @@ function ActionItemRow({
   )
 }
 
-function FindingLine({ finding, resourceHref }: { finding: EffectiveCheckFinding; resourceHref?: (ref: CheckResourceRef) => string }) {
+// Quiet per-row overflow menu for the OSS local-tuning actions (hide check /
+// category). Stops propagation so opening it never opens the drawer.
+function RowMenu({ items }: { items: { label: string; onClick: () => void }[] }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const h = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', h)
+    return () => document.removeEventListener('mousedown', h)
+  }, [open])
+  return (
+    <div ref={ref} className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        aria-label="More actions"
+        onClick={(e) => {
+          e.stopPropagation()
+          setOpen((o) => !o)
+        }}
+        className="rounded p-1 text-theme-text-tertiary opacity-0 transition-opacity hover:bg-theme-hover hover:text-theme-text-secondary group-hover:opacity-100"
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 min-w-48 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-xl">
+          {items.map((it, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                it.onClick()
+                setOpen(false)
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+            >
+              <EyeOff className="h-3.5 w-3.5 shrink-0" />
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FindingLine({
+  finding,
+  resourceHref,
+  onResourceClick,
+}: {
+  finding: EffectiveCheckFinding
+  resourceHref?: (ref: CheckResourceRef) => string
+  onResourceClick?: (ref: CheckResourceRef) => void
+}) {
   const r = finding.resource
+  const linkable = !!(onResourceClick || resourceHref)
   const body = (
     <>
       <span className="shrink-0 font-mono text-[11px] uppercase tracking-wide text-theme-text-tertiary">{r.kind}</span>
-      <span className={`truncate font-medium ${resourceHref ? 'text-[var(--color-radar-accent)]' : 'text-theme-text-primary'}`}>
+      <span className={`truncate font-medium ${linkable ? 'text-[var(--color-radar-accent)]' : 'text-theme-text-primary'}`}>
         {r.namespace ? `${r.namespace} / ` : ''}
         {r.name}
       </span>
-      {resourceHref && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/f:opacity-100" />}
+      {linkable && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/f:opacity-100" />}
       <span className="ml-1 hidden truncate text-xs text-theme-text-tertiary md:inline">{finding.message}</span>
     </>
   )
+  const cls = 'group/f flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-theme-hover/60'
   return (
     <li>
-      {resourceHref ? (
-        <a href={resourceHref(r)} className="group/f flex items-center gap-2 rounded-md px-2 py-1 text-sm transition-colors hover:bg-theme-hover/60">
+      {onResourceClick ? (
+        <button type="button" onClick={() => onResourceClick(r)} className={cls}>
+          {body}
+        </button>
+      ) : resourceHref ? (
+        <a href={resourceHref(r)} className={cls}>
           {body}
         </a>
       ) : (
