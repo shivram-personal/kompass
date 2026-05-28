@@ -46,7 +46,12 @@ export interface ChecksViewProps {
   /** Controlled cluster facet. When `onClusterFilterChange` is supplied the
    *  selection is owned by the host (e.g. synced to a `?clusters=` URL param);
    *  otherwise ChecksView keeps it in internal state. `clusterFilter` is the
-   *  current selection (cluster IDs); ignored unless controlled. */
+   *  current selection (cluster IDs); ignored unless controlled.
+   *
+   *  Controlled contract: apply the update *synchronously* (the new value is
+   *  read back via `clusterFilter` on the next render). Toggling computes from
+   *  the current `clusterFilter`, so a host that *defers* propagation (e.g.
+   *  `startTransition`) could let a rapid follow-up toggle read stale state. */
   clusterFilter?: string[]
   onClusterFilterChange?: (clusterIds: string[]) => void
   /** Resolve a cluster ID → display label for the selected-cluster chips.
