@@ -1753,6 +1753,15 @@ interface ResourcesViewProps {
    *  case. */
   onRowSelect?: (resource: any) => void
   /**
+   * When provided, the name cell renders as a real `<a href>` instead of
+   * relying on per-cell click handlers for navigation. Restores ⌘-click /
+   * middle-click / "Copy link" / hover URL preview / screen-reader link
+   * semantics. Hosts using full-page navigation should prefer this over
+   * `onRowSelect`; the anchor will own navigation and the rest of the row
+   * remains clickable for selection (drawer open).
+   */
+  rowHrefFor?: (resource: any) => string
+  /**
    * Overrides the default compare-mode submit (which navigates to
    * `/compare?kind=...&a=...&b=...`). Hosts use this to route to a
    * different URL — e.g. Radar Hub's `/fleet/compare` with cluster IDs.
@@ -1923,6 +1932,7 @@ export function ResourcesView({
   defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
   onRowSelect,
+  rowHrefFor,
   onCompareSubmit,
   resolveRowCluster,
   onClearNamespaces,
@@ -4252,6 +4262,7 @@ export function ResourcesView({
                     onMouseEnter={() => setHighlightedIndex(-1)}
                     compareMode={compareMode}
                     comparePickIndex={pickIdx}
+                    rowHref={rowHrefFor?.(resource)}
                   />
                 )
               }}
@@ -4297,6 +4308,10 @@ interface ResourceRowCellsProps {
   compareMode?: boolean
   /** -1 when not picked; 0 = pick A; 1 = pick B. */
   comparePickIndex?: number
+  /** When provided, the name cell renders as `<a href>` and the other
+   *  data cells drop their click handlers. The compare-mode chip column
+   *  is unaffected (still toggles picks). */
+  rowHref?: string
 }
 
 function rowHighlightClass(
@@ -4316,9 +4331,13 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1 }: ResourceRowCellsProps) {
+function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1, rowHref }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
+  // When the host supplies an anchor, drop per-cell onClick for the data
+  // columns: the anchor is the only navigation surface. The compare-mode
+  // chip column keeps its onClick so pick toggling still works.
+  const cellsAreClickable = !rowHref
   return (
     <>
       {compareMode && (
@@ -4349,15 +4368,24 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
       {columns.map((col) => (
         <td
           key={col.key}
-          onClick={onClick}
+          onClick={cellsAreClickable ? onClick : undefined}
           onMouseEnter={onMouseEnter}
           className={clsx(
-            'px-4 py-3 border-b-subtle cursor-pointer transition-colors',
+            'px-4 py-3 border-b-subtle transition-colors',
+            cellsAreClickable && 'cursor-pointer',
             col.key !== 'status' && 'overflow-hidden truncate',
             rowHighlight,
           )}
         >
-          <CellContent resource={resource} kind={kind} group={group} column={col.key} majorityNodeMinorVersion={majorityNodeMinorVersion} extraColumn={extraColumnsByKey?.get(col.key)} />
+          <CellContent
+            resource={resource}
+            kind={kind}
+            group={group}
+            column={col.key}
+            majorityNodeMinorVersion={majorityNodeMinorVersion}
+            extraColumn={extraColumnsByKey?.get(col.key)}
+            nameHref={col.key === 'name' ? rowHref : undefined}
+          />
         </td>
       ))}
       {hasSpacerColumn && <td className="border-b-subtle p-0" />}
@@ -4401,9 +4429,12 @@ interface CellContentProps {
    *  column key. Render via the extra's render() and short-circuit
    *  the built-in cell logic. */
   extraColumn?: ExtraColumn
+  /** When set on the name column, the resource name renders as `<a href>`
+   *  so ⌘-click / copy-link / hover-URL all work. */
+  nameHref?: string
 }
 
-function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn }: CellContentProps) {
+function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn, nameHref }: CellContentProps) {
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
@@ -4415,12 +4446,22 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   // Common columns
   if (column === 'name') {
     const isTerminating = !!meta.deletionTimestamp
+    const nameClass = clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
     return (
       <div className="flex items-center gap-1.5 min-w-0">
         <Tooltip content={meta.name}>
-          <span className={clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')}>
-            {meta.name}
-          </span>
+          {nameHref ? (
+            <a
+              href={nameHref}
+              className={clsx(nameClass, 'hover:underline focus-visible:underline focus-visible:outline-none rounded-sm')}
+            >
+              {meta.name}
+            </a>
+          ) : (
+            <span className={nameClass}>
+              {meta.name}
+            </span>
+          )}
         </Tooltip>
         <CopyNameButton name={meta.name} />
         {isTerminating && (

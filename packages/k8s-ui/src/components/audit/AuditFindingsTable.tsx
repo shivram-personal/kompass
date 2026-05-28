@@ -39,6 +39,12 @@ export interface AuditFindingsTableProps {
   findings?: AuditFinding[]
   checks?: Record<string, CheckMeta>
   onResourceClick?: (kind: string, namespace: string, name: string) => void
+  /** When provided, the resource name renders as a real `<a href>` instead
+   *  of a `<button onClick>`. Restores ⌘-click / middle-click / "Copy link"
+   *  / hover URL preview / link semantics for screen readers. Hosts can
+   *  pass both: the anchor wins navigation, the callback still fires for
+   *  analytics-style hooks. */
+  resourceHrefFor?: (resource: { kind: string; namespace: string; name: string }) => string
   onHideCheck?: (checkID: string, title: string) => void
   onHideCategory?: (category: string) => void
   onHideNamespace?: (namespace: string) => void
@@ -52,9 +58,13 @@ export interface AuditFindingsTableProps {
    *  Defaults to no-op; multi-cluster hosts pass a navigator that opens
    *  the cluster's per-cluster audit page. */
   onClusterClick?: (clusterId: string) => void
+  /** Anchor equivalent of `onClusterClick`. Same rationale as
+   *  `resourceHrefFor` — produces a real `<a href>` so the standard
+   *  browser link affordances work. */
+  clusterHrefFor?: (clusterId: string) => string
 }
 
-export function AuditFindingsTable({ groups, findings, checks, onResourceClick, onHideCheck, onHideCategory, onHideNamespace, multiCluster, onClusterClick }: AuditFindingsTableProps) {
+export function AuditFindingsTable({ groups, findings, checks, onResourceClick, resourceHrefFor, onHideCheck, onHideCategory, onHideNamespace, multiCluster, onClusterClick, clusterHrefFor }: AuditFindingsTableProps) {
   const [categoryFilter, setCategoryFilter] = useState<Set<string>>(new Set())
   const [severityFilter, setSeverityFilter] = useState<Set<string>>(new Set())
   const [frameworkFilter, setFrameworkFilter] = useState<Set<string>>(new Set())
@@ -370,7 +380,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
                   <div className="overflow-hidden">
                     <div className="pl-4">
                       {nsGroups.map(g => (
-                        <ResourceGroupRow key={`${g.kind}/${g.namespace}/${g.name}`} group={g} checks={checks} expanded={expanded} onToggle={toggle} onResourceClick={onResourceClick} onHideCheck={onHideCheck} onHideCategory={onHideCategory} />
+                        <ResourceGroupRow key={`${g.kind}/${g.namespace}/${g.name}`} group={g} checks={checks} expanded={expanded} onToggle={toggle} onResourceClick={onResourceClick} resourceHrefFor={resourceHrefFor} onHideCheck={onHideCheck} onHideCategory={onHideCategory} />
                       ))}
                     </div>
                   </div>
@@ -383,7 +393,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
         /* Flat grouped view */
         <div className="flex flex-col gap-0.5">
           {filteredGroups.map(g => (
-            <ResourceGroupRow key={`${g.kind}/${g.namespace}/${g.name}`} group={g} checks={checks} expanded={expanded} onToggle={toggle} onResourceClick={onResourceClick} onHideCheck={onHideCheck} onHideCategory={onHideCategory} onHideNamespace={onHideNamespace} showNamespace />
+            <ResourceGroupRow key={`${g.kind}/${g.namespace}/${g.name}`} group={g} checks={checks} expanded={expanded} onToggle={toggle} onResourceClick={onResourceClick} resourceHrefFor={resourceHrefFor} onHideCheck={onHideCheck} onHideCategory={onHideCategory} onHideNamespace={onHideNamespace} showNamespace />
           ))}
         </div>
       ) : (
@@ -394,8 +404,10 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
               key={`${f.cluster?.id ?? ''}-${f.checkID}-${i}`}
               finding={f}
               onResourceClick={onResourceClick}
+              resourceHrefFor={resourceHrefFor}
               showCluster={multiCluster}
               onClusterClick={onClusterClick}
+              clusterHrefFor={clusterHrefFor}
             />
           ))}
         </div>
@@ -443,12 +455,13 @@ function FindingDetail({ finding, meta, onHideCheck, onHideCategory }: {
   )
 }
 
-function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClick, onHideCheck, onHideCategory, onHideNamespace, showNamespace = false }: {
+function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClick, resourceHrefFor, onHideCheck, onHideCategory, onHideNamespace, showNamespace = false }: {
   group: ResourceGroup
   checks?: Record<string, CheckMeta>
   expanded: Set<string>
   onToggle: (key: string) => void
   onResourceClick?: (kind: string, namespace: string, name: string) => void
+  resourceHrefFor?: (resource: { kind: string; namespace: string; name: string }) => string
   onHideCheck?: (checkID: string, title: string) => void
   onHideCategory?: (category: string) => void
   onHideNamespace?: (namespace: string) => void
@@ -457,6 +470,8 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
   const key = `${g.kind}/${g.namespace}/${g.name}`
   const isExpanded = expanded.has(key)
   const hasDanger = g.danger > 0
+  const resourceLabel = `${showNamespace && g.namespace ? `${g.namespace} / ` : ''}${g.name}`
+  const resourceHref = resourceHrefFor?.({ kind: g.kind, namespace: g.namespace, name: g.name })
 
   return (
     <div>
@@ -478,18 +493,30 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
           <AlertTriangle className={clsx('w-4 h-4 shrink-0', SEVERITY_TEXT.warning)} />
         )}
         <span className="text-xs text-theme-text-tertiary shrink-0">{g.kind}</span>
-        {onResourceClick ? (
+        {resourceHref ? (
+          <a
+            href={resourceHref}
+            onClick={(e) => {
+              e.stopPropagation()
+              onResourceClick?.(g.kind, g.namespace, g.name)
+            }}
+            className="text-sm font-medium text-skyhook-500 hover:text-skyhook-400 hover:underline truncate max-w-[300px] inline-flex items-center gap-1 text-left focus-visible:ring-2 focus-visible:ring-skyhook-500/40 focus-visible:outline-none rounded-sm"
+          >
+            {resourceLabel}
+            <ExternalLink className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+          </a>
+        ) : onResourceClick ? (
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onResourceClick(g.kind, g.namespace, g.name) }}
             className="text-sm font-medium text-skyhook-500 hover:text-skyhook-400 hover:underline cursor-pointer truncate max-w-[300px] inline-flex items-center gap-1 text-left"
           >
-            {showNamespace && g.namespace ? `${g.namespace} / ` : ''}{g.name}
+            {resourceLabel}
             <ExternalLink className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
           </button>
         ) : (
           <span className="text-sm font-medium text-theme-text-primary truncate max-w-[300px]">
-            {showNamespace && g.namespace ? `${g.namespace} / ` : ''}{g.name}
+            {resourceLabel}
           </span>
         )}
         <span className="flex-1" />
@@ -517,9 +544,12 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
   )
 }
 
-function FlatFindingRow({ finding, onResourceClick, showCluster, onClusterClick }: { finding: AuditFinding; onResourceClick?: (kind: string, namespace: string, name: string) => void; showCluster?: boolean; onClusterClick?: (clusterId: string) => void }) {
+function FlatFindingRow({ finding, onResourceClick, resourceHrefFor, showCluster, onClusterClick, clusterHrefFor }: { finding: AuditFinding; onResourceClick?: (kind: string, namespace: string, name: string) => void; resourceHrefFor?: (resource: { kind: string; namespace: string; name: string }) => string; showCluster?: boolean; onClusterClick?: (clusterId: string) => void; clusterHrefFor?: (clusterId: string) => string }) {
   const isDanger = finding.severity === 'danger'
   const severityColor = isDanger ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning
+  const resourceLabel = `${finding.kind}/${finding.namespace ? `${finding.namespace}/` : ''}${finding.name}`
+  const resourceHref = resourceHrefFor?.({ kind: finding.kind, namespace: finding.namespace, name: finding.name })
+  const clusterHref = finding.cluster ? clusterHrefFor?.(finding.cluster.id) : undefined
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 rounded-lg hover:bg-theme-hover/50 transition-colors">
@@ -529,10 +559,15 @@ function FlatFindingRow({ finding, onResourceClick, showCluster, onClusterClick 
         <AlertTriangle className={clsx('w-4 h-4 shrink-0', severityColor)} />
       )}
       {showCluster && finding.cluster && (
-        // Cluster column for multi-cluster contexts. Renders before
-        // the kind/namespace/name path so cluster scope is established
-        // first in the read order.
-        onClusterClick ? (
+        clusterHref ? (
+          <a
+            href={clusterHref}
+            onClick={() => onClusterClick?.(finding.cluster!.id)}
+            className="text-xs text-[var(--color-radar-accent)] hover:underline shrink-0 max-w-[160px] truncate text-left focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 focus-visible:outline-none rounded-sm"
+          >
+            {finding.cluster.name}
+          </a>
+        ) : onClusterClick ? (
           <button
             onClick={() => onClusterClick(finding.cluster!.id)}
             className="text-xs text-[var(--color-radar-accent)] hover:underline shrink-0 max-w-[160px] truncate text-left"
@@ -545,16 +580,24 @@ function FlatFindingRow({ finding, onResourceClick, showCluster, onClusterClick 
           </span>
         )
       )}
-      {onResourceClick ? (
+      {resourceHref ? (
+        <a
+          href={resourceHref}
+          onClick={() => onResourceClick?.(finding.kind, finding.namespace, finding.name)}
+          className="text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary transition-colors shrink-0 max-w-[200px] truncate text-left focus-visible:ring-2 focus-visible:ring-theme-text-primary/30 focus-visible:outline-none rounded-sm"
+        >
+          {resourceLabel}
+        </a>
+      ) : onResourceClick ? (
         <button
           onClick={() => onResourceClick(finding.kind, finding.namespace, finding.name)}
           className="text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary transition-colors shrink-0 max-w-[200px] truncate text-left focus-visible:ring-1 focus-visible:ring-theme-text-primary/30 focus-visible:outline-none rounded"
         >
-          {finding.kind}/{finding.namespace ? `${finding.namespace}/` : ''}{finding.name}
+          {resourceLabel}
         </button>
       ) : (
         <span className="text-xs font-medium text-theme-text-secondary shrink-0 max-w-[200px] truncate">
-          {finding.kind}/{finding.namespace ? `${finding.namespace}/` : ''}{finding.name}
+          {resourceLabel}
         </span>
       )}
       <span className="text-xs text-theme-text-primary flex-1 min-w-0">{finding.message}</span>
