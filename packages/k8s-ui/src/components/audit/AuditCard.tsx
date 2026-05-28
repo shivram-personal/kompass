@@ -1,4 +1,3 @@
-import { type MouseEvent as ReactMouseEvent } from 'react'
 import { ClipboardCheck, ArrowRight, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../utils/badge-colors'
@@ -12,16 +11,7 @@ export interface AuditCardData {
 
 interface AuditCardProps {
   data: AuditCardData
-  /** Fires on every unmodified click. When the card is rendered as an
-   *  anchor (`navHref` set), the callback receives the MouseEvent so the
-   *  host can `preventDefault()` for SPA-local nav, or skip preventDefault
-   *  to let the anchor's full-page navigation run (required for
-   *  cross-router-boundary links). When rendered as a button, the event
-   *  arg is undefined. */
-  onNavigate: (event?: ReactMouseEvent) => void
-  /** When provided, the card renders as `<a href>` instead of `<button>`.
-   *  Restores ⌘-click / "Copy link" / hover URL preview. */
-  navHref?: string
+  onNavigate: () => void
 }
 
 type SeverityLevel = 'success' | 'warning' | 'error'
@@ -40,17 +30,20 @@ const ACCENT_BG: Record<SeverityLevel, string> = {
   error: 'bg-red-500/10',
 }
 
-export function AuditCard({ data, onNavigate, navHref }: AuditCardProps) {
+export function AuditCard({ data, onNavigate }: AuditCardProps) {
   const total = data.passing + data.warning + data.danger
   const issueCount = data.warning + data.danger
   const allPassing = issueCount === 0
   const level = getSeverityLevel(data)
   const accentColor = SEVERITY_TEXT[level]
   const accentBg = ACCENT_BG[level]
-  const cardClass = 'group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-text-primary/20'
 
-  const body = (
-    <div className="flex flex-col h-full w-full">
+  return (
+    <button
+      onClick={onNavigate}
+      className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up"
+    >
+      <div className="flex flex-col h-full w-full">
         <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
           <div className="flex items-center gap-2">
             <ClipboardCheck className={clsx('w-4 h-4', accentColor)} />
@@ -132,26 +125,6 @@ export function AuditCard({ data, onNavigate, navHref }: AuditCardProps) {
           </span>
         </div>
       </div>
-  )
-
-  if (navHref) {
-    return (
-      <a
-        href={navHref}
-        onClick={(e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-          onNavigate(e)
-        }}
-        className={clsx('block', cardClass)}
-      >
-        {body}
-      </a>
-    )
-  }
-
-  return (
-    <button onClick={() => onNavigate()} className={cardClass}>
-      {body}
     </button>
   )
 }
