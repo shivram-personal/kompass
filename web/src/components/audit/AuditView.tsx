@@ -102,7 +102,7 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
 
       <ChecksView
         checks={data.groupedChecks ?? []}
-        catalog={data.checks}
+        catalog={data.checks ?? {}}
         anyData
         onResourceClick={onResourceClick}
         onHideCheck={hideCheck}
