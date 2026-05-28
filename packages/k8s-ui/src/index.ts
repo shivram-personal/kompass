@@ -45,6 +45,11 @@ export * from './components/audit'
 // resolve.
 export * from './components/checks'
 
+// Live issues queue (IssuesView — the grouped operational-issue triage queue,
+// shared by OSS single-cluster and the hub fleet view; sibling to the Checks
+// queue)
+export * from './components/issues'
+
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
 export * from './components/cluster-switcher'
 
