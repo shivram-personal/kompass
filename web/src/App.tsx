@@ -769,18 +769,21 @@ function AppInner() {
   // lists) stay in lockstep with the picker. The dedicated URL-write effect
   // below propagates the mirrored state to `?namespaces=`.
   const setActiveNamespace = useSetActiveNamespace()
-  // Defer state-clear until the mutation lands. setNamespaces([]) immediately
-  // would refetch under the new empty key while the server still holds the
-  // previous per-user pref, caching that stale scope under the new key with
-  // no key change to trigger a later refresh. Touching the URL synchronously
-  // here would also trip the URL→state sync at L878 into firing the clear
-  // (and a duplicate mutation) ahead of onSettled, so the state→URL effect
-  // below propagates state=[] → URL after onSettled instead.
+  // Defer state-clear to onSuccess (NOT onSettled): flipping state before
+  // the server pref is actually cleared triggers a refetch under the new
+  // empty key while the server still holds the previous pick, caching that
+  // stale scope under the new key with no key change to trigger a later
+  // refresh. onSettled fires on errors too, which would produce the same
+  // stale cache for a failed clear; onSuccess keeps state aligned with the
+  // server. Touching the URL synchronously here would also trip the URL→
+  // state sync at L878 into firing the clear (and a duplicate mutation)
+  // ahead of onSuccess, so the state→URL effect below propagates state=[]
+  // → URL after onSuccess instead.
   const clearAllNamespaces = useCallback(() => {
     if (namespaces.length === 0) return
     setActiveNamespace.mutate(
       { namespaces: [] },
-      { onSettled: () => setNamespaces([]) },
+      { onSuccess: () => setNamespaces([]) },
     )
   }, [namespaces.length, setActiveNamespace])
   const initialBookmarkReconciledRef = useRef(false)
