@@ -79,11 +79,20 @@ const SourceRadarBuiltin = "radar_builtin"
 // CheckMeta is a check's static definition (catalog entry). pkg/audit aliases
 // this type so the audit engine's registry and this package share one shape.
 type CheckMeta struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Remediation string   `json:"remediation"`
-	Frameworks  []string `json:"frameworks,omitempty"`
+	ID          string      `json:"id"`
+	Title       string      `json:"title"`
+	Description string      `json:"description"`
+	Remediation string      `json:"remediation"`
+	Frameworks  []string    `json:"frameworks,omitempty"`
+	References  []Reference `json:"references,omitempty"`
+}
+
+// Reference is an authoritative link for a check (Kubernetes docs, CIS,
+// NSA/CISA, …), surfaced in the expanded card so users can go deeper than the
+// brief inline copy.
+type Reference struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
 }
 
 // ResourceRef is the canonical resource identity. group/namespace are emitted
