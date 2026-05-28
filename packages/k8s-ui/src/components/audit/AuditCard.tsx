@@ -1,3 +1,4 @@
+import { type MouseEvent as ReactMouseEvent } from 'react'
 import { ClipboardCheck, ArrowRight, Check } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../utils/badge-colors'
@@ -11,10 +12,15 @@ export interface AuditCardData {
 
 interface AuditCardProps {
   data: AuditCardData
-  onNavigate: () => void
+  /** Fires on every unmodified click. When the card is rendered as an
+   *  anchor (`navHref` set), the callback receives the MouseEvent so the
+   *  host can `preventDefault()` for SPA-local nav, or skip preventDefault
+   *  to let the anchor's full-page navigation run (required for
+   *  cross-router-boundary links). When rendered as a button, the event
+   *  arg is undefined. */
+  onNavigate: (event?: ReactMouseEvent) => void
   /** When provided, the card renders as `<a href>` instead of `<button>`.
-   *  Restores ⌘-click / "Copy link" / hover URL preview. `onNavigate` still
-   *  fires for analytics-style hooks. */
+   *  Restores ⌘-click / "Copy link" / hover URL preview. */
   navHref?: string
 }
 
@@ -133,9 +139,12 @@ export function AuditCard({ data, onNavigate, navHref }: AuditCardProps) {
       <a
         href={navHref}
         onClick={(e) => {
+          // Modifier clicks → browser default (new tab). Plain unmodified
+          // click → call the host with the event so it can preventDefault
+          // for SPA-local nav, or skip preventDefault to let the anchor's
+          // default reload run (required for cross-router-boundary links).
           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-          e.preventDefault()
-          onNavigate()
+          onNavigate(e)
         }}
         className={clsx('block', cardClass)}
       >
@@ -145,7 +154,7 @@ export function AuditCard({ data, onNavigate, navHref }: AuditCardProps) {
   }
 
   return (
-    <button onClick={onNavigate} className={cardClass}>
+    <button onClick={() => onNavigate()} className={cardClass}>
       {body}
     </button>
   )

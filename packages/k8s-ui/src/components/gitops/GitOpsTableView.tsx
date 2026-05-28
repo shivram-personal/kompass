@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import {
   AlertTriangle,
@@ -141,20 +141,24 @@ export interface GitOpsTableViewProps {
   counts: Record<string, number>
   // Caller refresh — typically invalidates its useQuery + refetches.
   onRefresh?: () => void
-  // Row click — caller routes to its own detail page.
-  onRowClick: (row: GitOpsRow) => void
+  // Row click — caller routes to its own detail page. When the host also
+  // passes `rowHrefFor`, the callback receives the MouseEvent so it can
+  // `preventDefault()` for SPA-local nav (e.g. react-router) or skip the
+  // preventDefault to let the anchor's default full-page navigation run
+  // (required for cross-router-boundary links).
+  onRowClick: (row: GitOpsRow, event?: ReactMouseEvent) => void
   /** When provided, the Application-name cell renders as a real `<a href>`
    *  and the `<tr>` drops its row-level click handler. Restores ⌘-click /
    *  middle-click / "Copy link" / hover URL preview / screen-reader link
-   *  semantics. `onRowClick` still fires (e.g. for analytics) but the
-   *  anchor owns navigation. */
+   *  semantics. `onRowClick` still fires on unmodified clicks (event arg
+   *  supplied) for analytics or to take over navigation. */
   rowHrefFor?: (row: GitOpsRow) => string
 
   // Called when the user clicks the destination cluster chip in the
   // Destination cell. Fleet-only; OSS leaves undefined. Caller routes to
   // the destination cluster's workloads view (filtered by the Argo
   // instance label) — the chip itself stops row-click propagation.
-  onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
+  onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp, event?: ReactMouseEvent) => void
   /** Anchor equivalent of `onDestinationClick`. Same rationale as
    *  `rowHrefFor` — real `<a href>` for the destination chip. */
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
@@ -1033,9 +1037,9 @@ function GitOpsTable({
   destinationHrefFor,
 }: {
   rows: GitOpsRow[]
-  onOpen: (row: GitOpsRow) => void
+  onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
   hrefFor?: (row: GitOpsRow) => string
-  onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
+  onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp, event?: ReactMouseEvent) => void
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
 }) {
   return (
@@ -1082,11 +1086,13 @@ function GitOpsTable({
                         onClick={(e) => {
                           // Modifier clicks → let the browser open a new
                           // tab via the anchor's default behavior. Plain
-                          // unmodified click → host gets to nav (typically
-                          // react-router navigate, which keeps it SPA-local).
+                          // unmodified click → call the host. The host
+                          // decides whether to preventDefault + react-router
+                          // navigate (SPA-local) or skip preventDefault and
+                          // let the anchor's full-page reload run (required
+                          // for cross-router-boundary links).
                           if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-                          e.preventDefault()
-                          onOpen(row)
+                          onOpen(row, e)
                         }}
                         className="block truncate font-medium text-theme-text-primary hover:underline focus-visible:underline focus-visible:outline-none rounded-sm"
                       >
@@ -1144,7 +1150,7 @@ function GitOpsTiles({
   hrefFor,
 }: {
   rows: GitOpsRow[]
-  onOpen: (row: GitOpsRow) => void
+  onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
   hrefFor?: (row: GitOpsRow) => string
 }) {
   return (
@@ -1162,7 +1168,7 @@ function GitOpsTile({
   href,
 }: {
   row: GitOpsRow
-  onOpen: (row: GitOpsRow) => void
+  onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
   href?: string
 }) {
   const source = compactRepoSource(row.repository || row.chart, row.path || row.chart)
@@ -1175,25 +1181,8 @@ function GitOpsTile({
     'group relative flex min-w-0 flex-col overflow-hidden rounded-md border border-theme-border bg-theme-surface text-left shadow-theme-sm transition-all hover:border-theme-text-tertiary/40 hover:shadow-theme-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-text-primary/20',
     row.terminating && 'opacity-80',
   )
-  const Wrapper = href
-    ? ({ children }: { children: ReactNode }) => (
-        <a
-          href={href}
-          onClick={(e) => {
-            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-            e.preventDefault()
-            onOpen(row)
-          }}
-          className={tileClass}
-        >
-          {children}
-        </a>
-      )
-    : ({ children }: { children: ReactNode }) => (
-        <button type="button" onClick={() => onOpen(row)} className={tileClass}>{children}</button>
-      )
-  return (
-    <Wrapper>
+  const body = (
+    <>
       <div className={clsx('h-1 w-full', statusStripe(row))} />
       <div className="flex flex-1 flex-col gap-3 px-4 pb-4 pt-3">
         <div className="line-clamp-2 break-all text-[15px] font-semibold leading-tight text-theme-text-primary">
@@ -1239,7 +1228,26 @@ function GitOpsTile({
           </div>
         )}
       </div>
-    </Wrapper>
+    </>
+  )
+  if (href) {
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+          onOpen(row, e)
+        }}
+        className={tileClass}
+      >
+        {body}
+      </a>
+    )
+  }
+  return (
+    <button type="button" onClick={() => onOpen(row)} className={tileClass}>
+      {body}
+    </button>
   )
 }
 
@@ -1318,7 +1326,7 @@ function DestinationCell({
   destinationHrefFor,
 }: {
   row: GitOpsRow
-  onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
+  onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp, event?: ReactMouseEvent) => void
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
 }) {
   const dest = row._destination
@@ -1353,9 +1361,10 @@ function DestinationCell({
           onClick={(e) => {
             e.stopPropagation()
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-            if (!onDestinationClick) return
-            e.preventDefault()
-            onDestinationClick(row, dest)
+            // No callback supplied → let the anchor's default reload run
+            // (cross-boundary nav). Callback present → host decides whether
+            // to preventDefault for SPA-local nav.
+            if (onDestinationClick) onDestinationClick(row, dest, e)
           }}
           className={chipClass + ' focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/40'}
           title={title}

@@ -4263,6 +4263,7 @@ export function ResourcesView({
                     compareMode={compareMode}
                     comparePickIndex={pickIdx}
                     rowHref={rowHrefFor?.(resource)}
+                    onNameClick={onRowSelect ? (r) => onRowSelect(r) : undefined}
                   />
                 )
               }}
@@ -4312,6 +4313,9 @@ interface ResourceRowCellsProps {
    *  data cells drop their click handlers. The compare-mode chip column
    *  is unaffected (still toggles picks). */
   rowHref?: string
+  /** Analytics-style callback on unmodified clicks of the name anchor.
+   *  See `CellContent.onNameClick`. */
+  onNameClick?: (resource: any, event: React.MouseEvent) => void
 }
 
 function rowHighlightClass(
@@ -4331,7 +4335,7 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1, rowHref }: ResourceRowCellsProps) {
+function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1, rowHref, onNameClick }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   // When the host supplies an anchor, drop per-cell onClick for the data
@@ -4385,6 +4389,7 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
             majorityNodeMinorVersion={majorityNodeMinorVersion}
             extraColumn={extraColumnsByKey?.get(col.key)}
             nameHref={col.key === 'name' ? rowHref : undefined}
+            onNameClick={col.key === 'name' ? onNameClick : undefined}
           />
         </td>
       ))}
@@ -4432,9 +4437,17 @@ interface CellContentProps {
   /** When set on the name column, the resource name renders as `<a href>`
    *  so ⌘-click / copy-link / hover-URL all work. */
   nameHref?: string
+  /** Fires on every unmodified plain click of the name anchor when
+   *  `nameHref` is set. Hosts that want analytics + the link affordance
+   *  pass it; modifier clicks (⌘/Ctrl/Shift/Alt/non-primary) skip this
+   *  and go straight to the browser's default new-tab handling.
+   *  Callbacks can `preventDefault()` for SPA-local navigation; skipping
+   *  preventDefault lets the anchor's full-page reload run (required for
+   *  cross-router-boundary links). */
+  onNameClick?: (resource: any, event: React.MouseEvent) => void
 }
 
-function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn, nameHref }: CellContentProps) {
+function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn, nameHref, onNameClick }: CellContentProps) {
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
@@ -4453,6 +4466,10 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
           {nameHref ? (
             <a
               href={nameHref}
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+                if (onNameClick) onNameClick(resource, e)
+              }}
               className={clsx(nameClass, 'hover:underline focus-visible:underline focus-visible:outline-none rounded-sm')}
             >
               {meta.name}

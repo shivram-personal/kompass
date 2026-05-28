@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, type Dispatch, type SetStateAction } from 'react'
+import { useState, useMemo, useRef, useEffect, type Dispatch, type MouseEvent as ReactMouseEvent, type SetStateAction } from 'react'
 import { ShieldAlert, AlertTriangle, ChevronRight, CheckCircle2, Search, ExternalLink, MoreHorizontal, EyeOff, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { AuditFinding } from './AuditAlerts'
@@ -38,7 +38,7 @@ export interface AuditFindingsTableProps {
   groups?: ResourceGroup[]
   findings?: AuditFinding[]
   checks?: Record<string, CheckMeta>
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: (kind: string, namespace: string, name: string, event?: ReactMouseEvent) => void
   /** When provided, the resource name renders as a real `<a href>` instead
    *  of a `<button onClick>`. Restores ⌘-click / middle-click / "Copy link"
    *  / hover URL preview / link semantics for screen readers. Hosts can
@@ -57,7 +57,7 @@ export interface AuditFindingsTableProps {
   /** Click-through for cluster-name links in the multi-cluster view.
    *  Defaults to no-op; multi-cluster hosts pass a navigator that opens
    *  the cluster's per-cluster audit page. */
-  onClusterClick?: (clusterId: string) => void
+  onClusterClick?: (clusterId: string, event?: ReactMouseEvent) => void
   /** Anchor equivalent of `onClusterClick`. Same rationale as
    *  `resourceHrefFor` — produces a real `<a href>` so the standard
    *  browser link affordances work. */
@@ -460,7 +460,7 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
   checks?: Record<string, CheckMeta>
   expanded: Set<string>
   onToggle: (key: string) => void
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: (kind: string, namespace: string, name: string, event?: ReactMouseEvent) => void
   resourceHrefFor?: (resource: { kind: string; namespace: string; name: string }) => string
   onHideCheck?: (checkID: string, title: string) => void
   onHideCategory?: (category: string) => void
@@ -499,9 +499,7 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
             onClick={(e) => {
               e.stopPropagation()
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-              if (!onResourceClick) return
-              e.preventDefault()
-              onResourceClick(g.kind, g.namespace, g.name)
+              if (onResourceClick) onResourceClick(g.kind, g.namespace, g.name, e)
             }}
             className="text-sm font-medium text-skyhook-500 hover:text-skyhook-400 hover:underline truncate max-w-[300px] inline-flex items-center gap-1 text-left focus-visible:ring-2 focus-visible:ring-skyhook-500/40 focus-visible:outline-none rounded-sm"
           >
@@ -547,7 +545,7 @@ function ResourceGroupRow({ group: g, checks, expanded, onToggle, onResourceClic
   )
 }
 
-function FlatFindingRow({ finding, onResourceClick, resourceHrefFor, showCluster, onClusterClick, clusterHrefFor }: { finding: AuditFinding; onResourceClick?: (kind: string, namespace: string, name: string) => void; resourceHrefFor?: (resource: { kind: string; namespace: string; name: string }) => string; showCluster?: boolean; onClusterClick?: (clusterId: string) => void; clusterHrefFor?: (clusterId: string) => string }) {
+function FlatFindingRow({ finding, onResourceClick, resourceHrefFor, showCluster, onClusterClick, clusterHrefFor }: { finding: AuditFinding; onResourceClick?: (kind: string, namespace: string, name: string, event?: ReactMouseEvent) => void; resourceHrefFor?: (resource: { kind: string; namespace: string; name: string }) => string; showCluster?: boolean; onClusterClick?: (clusterId: string, event?: ReactMouseEvent) => void; clusterHrefFor?: (clusterId: string) => string }) {
   const isDanger = finding.severity === 'danger'
   const severityColor = isDanger ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning
   const resourceLabel = `${finding.kind}/${finding.namespace ? `${finding.namespace}/` : ''}${finding.name}`
@@ -567,9 +565,7 @@ function FlatFindingRow({ finding, onResourceClick, resourceHrefFor, showCluster
             href={clusterHref}
             onClick={(e) => {
               if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-              if (!onClusterClick) return
-              e.preventDefault()
-              onClusterClick(finding.cluster!.id)
+              if (onClusterClick) onClusterClick(finding.cluster!.id, e)
             }}
             className="text-xs text-[var(--color-radar-accent)] hover:underline shrink-0 max-w-[160px] truncate text-left focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 focus-visible:outline-none rounded-sm"
           >
@@ -593,9 +589,7 @@ function FlatFindingRow({ finding, onResourceClick, resourceHrefFor, showCluster
           href={resourceHref}
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
-            if (!onResourceClick) return
-            e.preventDefault()
-            onResourceClick(finding.kind, finding.namespace, finding.name)
+            if (onResourceClick) onResourceClick(finding.kind, finding.namespace, finding.name, e)
           }}
           className="text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary transition-colors shrink-0 max-w-[200px] truncate text-left focus-visible:ring-2 focus-visible:ring-theme-text-primary/30 focus-visible:outline-none rounded-sm"
         >
