@@ -1,6 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { ChevronRight, CircleCheck, ExternalLink } from 'lucide-react';
+import { ChevronRight, CircleCheck, Clock, ExternalLink } from 'lucide-react';
 import { ClusterName, EmptyState } from '../ui';
+import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
 import {
   ISSUE_SEVERITY_BADGE_CLASS,
   ISSUE_SEVERITY_LABEL,
@@ -48,15 +49,24 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   const [openId, setOpenId] = useState<string | null>(null);
 
   const sorted = useMemo(() => {
-    // Worst-first: severity, then most-recent, then name. Mirrors the server's
-    // ordering so the queue is stable across refetches.
+    // Order by STABLE keys only so the queue doesn't reshuffle under the host's
+    // auto-refresh. severity → onset (first_seen is fixed for the life of an
+    // issue; last_seen bumps to compose-time every poll, so sorting by it makes
+    // same-severity rows jump on each refetch) → fully-deterministic identity
+    // tiebreak. last_seen is freshness signal, not sort order.
     return [...issues].sort((a, b) => {
       const r = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
       if (r !== 0) return r;
-      const la = a.last_seen ?? '';
-      const lb = b.last_seen ?? '';
-      if (la !== lb) return lb.localeCompare(la);
-      return a.name.localeCompare(b.name);
+      const fa = a.first_seen ?? '';
+      const fb = b.first_seen ?? '';
+      if (fa !== fb) return fb.localeCompare(fa);
+      const c = (a.cluster_name ?? '').localeCompare(b.cluster_name ?? '');
+      if (c !== 0) return c;
+      const ns = (a.namespace ?? '').localeCompare(b.namespace ?? '');
+      if (ns !== 0) return ns;
+      const nm = a.name.localeCompare(b.name);
+      if (nm !== 0) return nm;
+      return a.id.localeCompare(b.id);
     });
   }, [issues]);
 
@@ -77,7 +87,14 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   return (
     <ol className="flex flex-col gap-1.5">
       {sorted.map((issue) => {
-        const rowKey = `${issue.cluster_id ?? ''}:${issue.id}:${issue.category}`;
+        // Stable identity for the React key + open-accordion state, so a row
+        // survives auto-refresh in place. Falls back to subject identity when a
+        // source omits the deterministic id (e.g. a pre-classifier cluster) —
+        // otherwise those rows collide on a shared key and a mounted/expanded
+        // one can be dropped.
+        const rowKey = `${issue.cluster_id ?? ''}:${
+          issue.id || `${issue.group ?? ''}|${issue.kind}|${issue.namespace ?? ''}|${issue.name}|${issue.category}`
+        }`;
         return (
           <IssueRow
             key={rowKey}
@@ -134,9 +151,19 @@ function IssueRow({
         <ChevronRight className={`h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
 
         <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
-            <span className={`badge-sm shrink-0 text-[10px] ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
+          <div className="flex min-w-0 items-baseline gap-2">
+            <span className="shrink-0 text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
+            <span className={`badge-sm shrink-0 self-center text-[10px] ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
+            {/* The detector reason/message rides the title row so the most
+                useful triage signal is visible without expanding — it fills
+                the otherwise-empty band between the title and the severity
+                badge. Full text (plus crash context) stays in the body. */}
+            {issue.reason ? (
+              <span className="min-w-0 flex-1 truncate text-xs text-theme-text-tertiary">
+                <span className="font-medium text-theme-text-secondary">{issue.reason}</span>
+                {issue.message ? <span> — {issue.message}</span> : null}
+              </span>
+            ) : null}
           </div>
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
             <span className="shrink-0 font-mono uppercase tracking-wide">{issue.kind}</span>
@@ -160,6 +187,20 @@ function IssueRow({
             ) : null}
           </div>
         </div>
+
+        {/* Onset age (first_seen, fixed for the issue's life) is the chronic-vs-
+            acute signal — "broken 2m" reads very differently from "broken 5d".
+            Keyed on first_seen, not last_seen, so it doesn't churn on refresh. */}
+        {issue.first_seen ? (
+          <time
+            dateTime={issue.first_seen}
+            title={ageTitle(issue)}
+            className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
+          >
+            <Clock className="h-3 w-3" aria-hidden />
+            {formatCompactAge(issue.first_seen)}
+          </time>
+        ) : null}
 
         <span className={`badge-sm shrink-0 text-[10px] font-semibold ${ISSUE_SEVERITY_BADGE_CLASS[issue.severity]}`}>
           {ISSUE_SEVERITY_LABEL[issue.severity]}
@@ -201,8 +242,23 @@ function Diagnosis({ issue }: { issue: Issue }) {
         {issue.message ? <span className="text-theme-text-secondary"> — {issue.message}</span> : null}
       </p>
       {crash ? <p className="text-xs text-theme-text-tertiary tabular-nums">{crash}</p> : null}
+      {issue.first_seen ? (
+        <p className="text-xs text-theme-text-tertiary tabular-nums">
+          Started {formatRelativeAgeTime(issue.first_seen)}
+          {issue.last_seen ? ` · last seen ${formatRelativeAgeTime(issue.last_seen)}` : ''}
+        </p>
+      ) : null}
     </section>
   );
+}
+
+// Native-tooltip detail for the collapsed-row age chip: absolute onset + last-seen
+// freshness, the two facts the compact "2h" hides.
+function ageTitle(issue: Issue): string {
+  const parts: string[] = [];
+  if (issue.first_seen) parts.push(`Started ${new Date(issue.first_seen).toLocaleString()}`);
+  if (issue.last_seen) parts.push(`Last seen ${formatRelativeAgeTime(issue.last_seen)}`);
+  return parts.join('\n');
 }
 
 function AffectedResources({
