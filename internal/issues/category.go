@@ -85,7 +85,6 @@ const (
 	GroupScaling       Group = "scaling"
 	GroupSecurity      Group = "security"
 	GroupControlPlane  Group = "control_plane"
-	GroupApplication   Group = "application"
 )
 
 // categoryGroup is the fixed category→group rollup. Server-side source of

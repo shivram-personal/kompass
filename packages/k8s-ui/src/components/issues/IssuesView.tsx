@@ -230,7 +230,7 @@ function IssueRow({
 function Diagnosis({ issue }: { issue: Issue }) {
   const crash =
     issue.restart_count || issue.last_terminated_reason
-      ? [issue.restart_count ? `${issue.restart_count} restarts` : null, issue.last_terminated_reason ? `last exit: ${issue.last_terminated_reason}` : null]
+      ? [issue.restart_count ? `${issue.restart_count} restart${issue.restart_count === 1 ? '' : 's'}` : null, issue.last_terminated_reason ? `last exit: ${issue.last_terminated_reason}` : null]
           .filter(Boolean)
           .join(' · ')
       : null;
@@ -271,12 +271,17 @@ function AffectedResources({
   onResourceClick?: (ref: IssueResourceRef) => void;
 }) {
   const members = issue.members ?? [];
-  const total = issue.count ?? members.length + 1;
+  // count is the backend fan-out size (members, subject excluded — see
+  // grouping.go); fall back to the inline member count, not +1.
+  const total = issue.count ?? members.length;
   return (
     <section className="flex flex-col gap-1.5">
       {/* The subject (the grouped thing — e.g. the Deployment) is always the
-          first deep-link; members (the folded pods) follow. */}
-      <ResourceLine label="Subject" refForLink={subjectRef(issue)} resourceHref={resourceHref} onResourceClick={onResourceClick} />
+          first deep-link; members (the folded pods) follow. ResourceLine emits
+          an <li>, so it needs a list parent of its own. */}
+      <ul className="flex flex-col gap-px">
+        <ResourceLine label="Subject" refForLink={subjectRef(issue)} resourceHref={resourceHref} onResourceClick={onResourceClick} />
+      </ul>
       {members.length > 0 && (
         <>
           <h4 className="mt-1.5 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
