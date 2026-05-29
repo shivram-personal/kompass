@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react'
 import { useAudit, useAuditSettings, useUpdateAuditSettings } from '../../api/client'
 import type { SelectedResource } from '../../types'
-import { ChecksView, PaneLoader, type CheckResourceRef } from '@skyhook-io/k8s-ui'
-import { ArrowLeft, ClipboardCheck, Settings } from 'lucide-react'
+import { ChecksView, PaneLoader, UpdatedAtLabel, useRefreshAnimation, type CheckResourceRef } from '@skyhook-io/k8s-ui'
+import { ArrowLeft, ClipboardCheck, RefreshCw, Settings } from 'lucide-react'
+import { clsx } from 'clsx'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 
 interface AuditViewProps {
@@ -18,12 +19,15 @@ interface AuditViewProps {
 // ~/.radar settings are this cluster's "policy" and the row hide-menu writes to
 // them.
 export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditViewProps) {
-  const { data, isLoading, error } = useAudit(namespaces)
+  const { data, isLoading, error, isFetching, dataUpdatedAt, refetch } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
   const [showSettings, setShowSettings] = useState(false)
 
   const ignoredCount = auditSettings?.ignoredNamespaces?.length ?? 0
+
+  const [refresh, isAnimating] = useRefreshAnimation(() => refetch())
+  const spinning = isFetching || isAnimating
 
   // Inline hide actions — persist to local settings immediately.
   const hideCheck = useCallback((checkID: string) => {
@@ -87,6 +91,18 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5">
+            <UpdatedAtLabel dataUpdatedAt={dataUpdatedAt} />
+            <button
+              onClick={refresh}
+              disabled={spinning}
+              className="p-1.5 rounded-lg hover:bg-theme-hover text-theme-text-tertiary hover:text-theme-text-secondary transition-colors disabled:opacity-50"
+              title="Refresh now"
+              aria-label="Refresh now"
+            >
+              <RefreshCw className={clsx('w-3.5 h-3.5', spinning && 'animate-spin')} />
+            </button>
+          </div>
           {ignoredCount > 0 && (
             <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
           )}

@@ -127,6 +127,7 @@ import {
 } from './resource-utils'
 import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
+import { formatLastUpdatedBucket, msToNextBucket } from '../../utils/format'
 import { Tooltip } from '../ui/Tooltip'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
@@ -1860,27 +1861,6 @@ function getInitialFiltersFromURL() {
 
 // Sort state type
 type SortDirection = 'asc' | 'desc' | null
-
-// Coarse "just now / Xm / Xh / Xd" buckets — finer-grained updates
-// add motion in the periphery without aiding any user decision.
-function formatLastUpdatedBucket(elapsedMs: number): string {
-  const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000))
-  if (elapsedSec < 60) return 'just now'
-  const minutes = Math.floor(elapsedSec / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  return `${Math.floor(hours / 24)}d`
-}
-
-// ms until the displayed bucket would change.
-function msToNextBucket(elapsedMs: number): number {
-  const elapsed = Math.max(0, elapsedMs)
-  if (elapsed < 60_000) return 60_000 - elapsed
-  if (elapsed < 3_600_000) return 60_000 - (elapsed % 60_000)
-  if (elapsed < 86_400_000) return 3_600_000 - (elapsed % 3_600_000)
-  return 86_400_000 - (elapsed % 86_400_000)
-}
 
 // Isolated subtree so re-renders don't cascade into the parent's
 // virtualized table.

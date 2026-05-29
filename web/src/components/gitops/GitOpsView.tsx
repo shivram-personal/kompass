@@ -194,7 +194,8 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
   // inviting a duplicate request. Radar serves reads from an informer cache that
   // lags the write by the watch-propagation delay, so refetch once now (covers
   // an already-current cache) and once shortly after to catch the propagated
-  // update; refetch() forces a fetch regardless of staleTime.
+  // update; refetch() forces a fetch regardless of staleTime. The toolbar's
+  // manual refresh reuses refetchTable so rows + counts stay in sync.
   const refetchTable = () => {
     rowsQuery.refetch()
     countsQuery.refetch()
@@ -249,7 +250,9 @@ function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string
         loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading}
         error={(rowsQuery.error as Error | null) ?? null}
         counts={countsQuery.data?.counts ?? {}}
-        onRefresh={() => rowsQuery.refetch()}
+        dataUpdatedAt={rowsQuery.dataUpdatedAt}
+        isFetching={rowsQuery.isFetching || countsQuery.isFetching}
+        onRefresh={refetchTable}
         onRowClick={(row) => {
           const ns = row.namespace || '_'
           const params = new URLSearchParams()
