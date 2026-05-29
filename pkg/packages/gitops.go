@@ -228,10 +228,13 @@ func fluxConditionStatus(obj map[string]any) Health {
 	case "True":
 		return HealthHealthy
 	case "False":
-		// Whitelist transient reasons; everything else (including any
-		// unrecognized future reason) classifies as unhealthy. Errs
-		// loud — false-positive unhealthy is preferable to silently
-		// masking a hard failure we don't yet recognize.
+		// A False Ready is degraded when its reason is a known transient
+		// (mid-reconcile / pending / in-progress), else unhealthy. The transient
+		// set is the SHARED packages.IsTransientConditionReason — one source of
+		// truth, so this GitOps-health path and the Issues CRD noise-floor
+		// (internal/issues.detectGenericCRDIssues) can't drift. It deliberately
+		// spans the common in-progress vocabulary across Flux/Argo/Crossplane/
+		// cert-manager; any unrecognized reason still errs loud (→ unhealthy).
 		reason := stringAt(ready, "reason")
 		if isTransientFluxReason(reason) {
 			return HealthDegraded
@@ -242,12 +245,52 @@ func fluxConditionStatus(obj map[string]any) Health {
 }
 
 func isTransientFluxReason(r string) bool {
-	switch r {
-	case "Progressing", "DependencyNotReady", "ReconciliationInProgress",
-		"ChartNotReady", "ArtifactFailed":
-		return true
-	}
-	return false
+	return IsTransientConditionReason(r)
+}
+
+// transientConditionReasons is the canonical set of controller condition
+// reasons that mean "still reconciling / not done yet", NOT "failed". A False
+// Ready/Available condition carrying one of these is an in-progress object, not
+// a broken one — surfacing it as a warning is the CRD-condition noise floor
+// (Issues GA-blocker #5).
+//
+// Single source of truth shared by the GitOps health mapping here and the
+// generic CRD issue detector (internal/issues), so the two paths can't drift:
+// a reason added here suppresses noise in both. Curated across the controller
+// families radar integrates with:
+//
+//   - Flux:        Progressing, DependencyNotReady, ReconciliationInProgress,
+//                  ChartNotReady, ArtifactFailed
+//   - Argo:        Progressing, Reconciling
+//   - cert-manager: Issuing, Pending
+//   - Crossplane:  Reconciling, Creating
+//   - generic:     Pending, InProgress, Initializing, Waiting, Unknown
+var transientConditionReasons = map[string]bool{
+	// Flux
+	"Progressing":              true,
+	"DependencyNotReady":       true,
+	"ReconciliationInProgress": true,
+	"ChartNotReady":            true,
+	"ArtifactFailed":           true,
+	// Argo / Crossplane
+	"Reconciling": true,
+	"Creating":    true,
+	// cert-manager
+	"Issuing": true,
+	"Pending": true,
+	// generic in-progress vocabulary
+	"InProgress":   true,
+	"Initializing": true,
+	"Waiting":      true,
+	"Unknown":      true,
+}
+
+// IsTransientConditionReason reports whether a condition reason denotes an
+// in-progress / not-yet-settled state rather than a genuine failure. Used to
+// suppress warnings on mid-reconcile objects across both the GitOps health
+// mapping and the generic CRD issue detector.
+func IsTransientConditionReason(r string) bool {
+	return transientConditionReasons[r]
 }
 
 // Tiny typed lookup helpers — Go stdlib doesn't expose nice JSON

@@ -45,7 +45,14 @@ func TestClassify(t *testing.T) {
 		{"node mempressure", classifyInput{Source: SourceProblem, Kind: "Node", Reason: "MemoryPressure"}, CategoryNodeNotReady},
 		{"node cordoned is intentional", classifyInput{Source: SourceProblem, Kind: "Node", Reason: "Cordoned"}, CategoryUnknown},
 		{"pvc pending", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "Pending"}, CategoryPVCPending},
-		{"pvc lost is a gap", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "Lost"}, CategoryUnknown},
+		{"pvc lost is storage", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "Lost"}, CategoryPVCLost},
+
+		// problem / batch (Job/CronJob) — recovered from unknown (GA-blocker #3)
+		{"job failed condition", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "BackoffLimitExceeded"}, CategoryJobFailed},
+		{"job failed fallback", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "Failed"}, CategoryJobFailed},
+		{"job stuck active", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "Running for 3h with no completions"}, CategoryJobFailed},
+		{"cronjob stale", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale"}, CategoryCronJobFailed},
+		{"cronjob never scheduled", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "never-scheduled"}, CategoryCronJobFailed},
 
 		// missing_ref
 		{"missing configmap", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing ConfigMap"}, CategoryMissingConfigRef},
@@ -64,8 +71,7 @@ func TestClassify(t *testing.T) {
 		{"cert-manager not ready", classifyInput{Source: SourceCondition, Kind: "Certificate", APIGroup: "cert-manager.io", Reason: "Ready: DoesNotExist"}, CategoryCertificateNotReady},
 		{"generic operator condition", classifyInput{Source: SourceCondition, Kind: "Foo", APIGroup: "example.com", Reason: "Ready=False"}, CategoryOperatorConditionFail},
 
-		// gaps → unknown (CronJob/Job/CAPI)
-		{"cronjob is a gap", classifyInput{Source: SourceProblem, Kind: "CronJob", Reason: "stale"}, CategoryUnknown},
+		// remaining gaps → unknown (CAPI kinds)
 		{"capi machine is a gap", classifyInput{Source: SourceProblem, Kind: "Machine", APIGroup: "cluster.x-k8s.io", Reason: "Machine in Failed phase"}, CategoryUnknown},
 	}
 	for _, tc := range cases {

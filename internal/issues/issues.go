@@ -11,6 +11,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/packages"
 )
 
 // Provider abstracts the data sources Compose needs. Implementations
@@ -129,6 +130,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	out = applyFilters(out, f)
 	out = applyClusterScopedAccess(out, f)
 	out = dedupePodSchedulingOverProblem(out)
+	out = dedupeWorkloadDegradedOverChild(out)
 
 	// Optional CEL filter — evaluated last so it sees the normalized
 	// row shape. Eval errors count as non-match (matches "missing
@@ -245,6 +247,16 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 				if !ok {
 					continue
 				}
+				// Noise-floor suppression (GA-blocker #5): a False
+				// Ready/Available on an object that is suspended, still
+				// reconciling, or whose controller hasn't yet observed the
+				// current spec is NOT a failure — it's in-flight. Emitting a
+				// warning for it is the canonical alert-fatigue trap, since
+				// auto-refresh keeps it permanently lit. Skip those; keep
+				// genuinely-failed objects.
+				if isTransientCRDCondition(u, reason) {
+					continue
+				}
 				lastSeen := time.Now().Add(-since)
 				iss := Issue{
 					Severity:  SeverityWarning,
@@ -266,6 +278,37 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 		}
 	}
 	return out
+}
+
+// isTransientCRDCondition reports whether a False Ready/Available condition on
+// a CRD object should be suppressed as in-flight rather than emitted as a
+// failure. Three independent signals, any of which means "not a real problem":
+//
+//  1. The condition reason is an in-progress reason (Progressing / Reconciling
+//     / Pending / Issuing / DependencyNotReady / …) — shared with the GitOps
+//     health mapping via packages.IsTransientConditionReason so the two paths
+//     can't drift.
+//  2. spec.suspend == true — the object is intentionally paused (Flux
+//     Kustomization/HelmRelease, Argo with suspend, suspended CronJob-style
+//     CRDs); a paused object reporting not-Ready is expected.
+//  3. status.observedGeneration < metadata.generation — the controller has not
+//     yet reconciled the current spec, so the stale condition reflects the old
+//     generation, not the live state.
+func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
+	if packages.IsTransientConditionReason(reason) {
+		return true
+	}
+	if suspend, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && suspend {
+		return true
+	}
+	// observedGeneration lags generation → controller hasn't caught up yet.
+	gen := u.GetGeneration()
+	if gen > 0 {
+		if observed, ok, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration"); ok && observed > 0 && observed < gen {
+			return true
+		}
+	}
+	return false
 }
 
 func classifyDynamicScope(p Provider, gvr schema.GroupVersionResource, kind string) (bool, string, string) {
@@ -401,6 +444,98 @@ func dedupePodSchedulingOverProblem(in []Issue) []Issue {
 		out = append(out, i)
 	}
 	return out
+}
+
+// subjectRef returns the issue's grouping subject — the topmost owner when one
+// was resolved (member pods collapse under their workload), otherwise the
+// resource itself. Mirrors enrichIdentity so dedup keys on the same subject the
+// ID is built from.
+func subjectRef(i Issue) Ref {
+	if i.Owner.Kind != "" {
+		return i.Owner
+	}
+	return Ref{Group: i.Group, Kind: i.Kind, Namespace: i.Namespace, Name: i.Name}
+}
+
+// childCategories are the specific, root-cause symptoms that, when present for a
+// subject, make the parent workload-level rollup (workload_degraded /
+// rollout_stalled) redundant. A degraded Deployment with crashlooping pods is
+// ONE incident — the crashloop — not two; keeping both is the inverse of
+// "50 pods = 1 row".
+var childCategories = map[Category]bool{
+	CategoryCrashLoop:           true,
+	CategoryImagePullFailed:     true,
+	CategoryOOMKilled:           true,
+	CategoryContainerWaiting:    true,
+	CategoryInitContainerFailed: true,
+	CategoryLivenessProbeFail:   true,
+	CategoryReadinessFailed:     true,
+	CategoryUnschedulable:       true,
+	CategoryQuotaExceeded:       true,
+	CategoryMissingConfigRef:    true,
+	CategoryVolumeMountFailed:   true,
+	CategoryPVCPending:          true,
+}
+
+// parentRollupCategories are the workload-level summaries that should be
+// suppressed when a more-specific child symptom exists for the same subject.
+var parentRollupCategories = map[Category]bool{
+	CategoryWorkloadDegraded: true,
+	CategoryRolloutStalled:   true,
+}
+
+// dedupeWorkloadDegradedOverChild drops the parent workload rollup row
+// (workload_degraded / rollout_stalled) for a subject when a more-specific
+// child symptom (crashloop, image_pull_failed, …) of AT LEAST the parent's
+// severity was classified for the SAME subject. A degraded Deployment whose
+// pods are crashlooping is one incident, not two rows; the child names the
+// actual root cause, so it wins.
+//
+// The severity gate is load-bearing: a critical "0/N available" rollup whose
+// only child symptom is a warning (e.g. pods stuck Pending → container_waiting)
+// must NOT be suppressed, or dropping the parent would silently downgrade the
+// incident critical→warning. So the parent survives when it is strictly more
+// severe than every child for the subject, and (as before) when no specific
+// child symptom exists at all — a real degraded-without-visible-cause case is
+// never dropped.
+//
+// Keys on subjectRef (owner-collapsed identity) so a parent row emitted on the
+// Deployment matches child rows emitted on its member Pods, which carry the
+// Deployment as their owner. Mirrors dedupePodSchedulingOverProblem's
+// "richer row wins for the same subject" shape.
+func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
+	// Per subject, the worst severity among its specific child-symptom rows.
+	maxChildSev := map[string]int{}
+	for _, i := range in {
+		if childCategories[i.Category] {
+			k := subjectKeyOf(subjectRef(i))
+			if r := severityRank(i.Severity); r > maxChildSev[k] {
+				maxChildSev[k] = r
+			}
+		}
+	}
+	if len(maxChildSev) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, i := range in {
+		if parentRollupCategories[i.Category] {
+			// Suppress only when a child at least as severe exists — never
+			// downgrade a critical rollup to a warning child.
+			if r, ok := maxChildSev[subjectKeyOf(subjectRef(i))]; ok && r >= severityRank(i.Severity) {
+				continue
+			}
+		}
+		out = append(out, i)
+	}
+	return out
+}
+
+// subjectKeyOf is the canonical string key for a subject Ref — the same
+// group|kind|namespace|name key the ID hash and audit deep-links use, so dedup
+// can't drift from grouping.
+func subjectKeyOf(r Ref) string {
+	return resourceKey(r.Group, r.Kind, r.Namespace, r.Name)
 }
 
 func applyFilters(in []Issue, f Filters) []Issue {
