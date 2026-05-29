@@ -89,12 +89,14 @@ export interface Issue {
   /** Subject kind bucket (workload|service|pvc|ingress|node|unknown). */
   grouping_scope: string;
 
-  // Subject identity (the grouped thing).
+  // Subject identity (the grouped thing). group is omitted for the core API
+  // group, namespace for cluster-scoped subjects — both optional to match the
+  // wire (radar emits them omitempty).
   cluster_id?: string;
   cluster_name?: string;
-  group: string;
+  group?: string;
   kind: string;
-  namespace: string;
+  namespace?: string;
   name: string;
 
   reason: string;
@@ -118,9 +120,9 @@ export interface Issue {
 export function subjectRef(issue: Issue): IssueResourceRef {
   return {
     cluster_id: issue.cluster_id,
-    group: issue.group,
+    group: issue.group ?? '',
     kind: issue.kind,
-    namespace: issue.namespace,
+    namespace: issue.namespace ?? '',
     name: issue.name,
   };
 }
