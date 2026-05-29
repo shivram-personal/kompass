@@ -138,6 +138,98 @@ func TestClassifyPodHealth(t *testing.T) {
 	}
 }
 
+// TestClassifyPodHealth_StableCrashLoopAcrossPhases is the GA-blocker #1
+// monotonicity pin. A crashlooping container's instantaneous State flaps
+// Waiting → Running → Terminated → Waiting poll-to-poll, but its stable
+// history fields (RestartCount + LastTerminationState) don't. ClassifyPodHealth
+// and PodProblemReason must read the stable fields, so {severity, reason} stay
+// fixed across the oscillation — otherwise the category-hashed issue_id churns.
+func TestClassifyPodHealth_StableCrashLoopAcrossPhases(t *testing.T) {
+	now := time.Now()
+
+	// The same crashlooping pod, observed at three successive polls. Only the
+	// instantaneous container State differs; RestartCount + LastTerminationState
+	// (the stable crash history) are identical across all three.
+	crashHistory := corev1.ContainerState{
+		Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1},
+	}
+	mkPod := func(state corev1.ContainerState) *corev1.Pod {
+		return &corev1.Pod{
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					RestartCount:         7,
+					State:                state,
+					LastTerminationState: crashHistory,
+				}},
+			},
+		}
+	}
+
+	phases := []struct {
+		name  string
+		state corev1.ContainerState
+	}{
+		{"waiting backoff", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}},
+		{"running (just restarted)", corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now)}}},
+		{"waiting backoff again", corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}},
+	}
+
+	const wantHealth = "error"
+	const wantReason = "CrashLoopBackOff"
+	for _, ph := range phases {
+		t.Run(ph.name, func(t *testing.T) {
+			pod := mkPod(ph.state)
+			if got := ClassifyPodHealth(pod, now); got != wantHealth {
+				t.Errorf("ClassifyPodHealth() = %q, want stable %q (phase=%s)", got, wantHealth, ph.name)
+			}
+			if got := PodProblemReason(pod); got != wantReason {
+				t.Errorf("PodProblemReason() = %q, want stable %q (phase=%s)", got, wantReason, ph.name)
+			}
+		})
+	}
+}
+
+// TestStableCrashLoop_PreservesSpecificReasons confirms the crashloop
+// normalization does NOT clobber more-specific, stable signals. OOMKilled has
+// its own category; an active ImagePullBackOff is a distinct startup symptom.
+func TestStableCrashLoop_PreservesSpecificReasons(t *testing.T) {
+	now := time.Now()
+
+	// A container OOMKilled then backing off must NOT be folded to
+	// CrashLoopBackOff — it routes to the OOM category. (isStableCrashLoop
+	// excludes OOMKilled, so the override never fires and the OOM signal
+	// surfaces from the last-termination walk.)
+	oom := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodRunning,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			RestartCount:         4,
+			State:                corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "OOMKilled"}},
+		}},
+	}}
+	if got := PodProblemReason(oom); got != "OOMKilled" {
+		t.Errorf("OOMKilled reason = %q, want OOMKilled (must not fold to crashloop)", got)
+	}
+	if got := ClassifyPodHealth(oom, now); got != "error" {
+		t.Errorf("OOMKilled health = %q, want error", got)
+	}
+
+	// An active ImagePullBackOff with restart history keeps the image-pull
+	// reason — it's a more-specific, stable signal than the generic crashloop.
+	imgPull := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodRunning,
+		ContainerStatuses: []corev1.ContainerStatus{{
+			RestartCount:         2,
+			State:                corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ImagePullBackOff"}},
+			LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Error", ExitCode: 1}},
+		}},
+	}}
+	if got := PodProblemReason(imgPull); got != "ImagePullBackOff" {
+		t.Errorf("reason = %q, want ImagePullBackOff (specific reason must win)", got)
+	}
+}
+
 func TestClassifyNodeHealth(t *testing.T) {
 	tests := []struct {
 		name              string

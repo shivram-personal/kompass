@@ -10,6 +10,57 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+// crashLoopReason is the canonical reason a stable-crashloop pod emits,
+// independent of the kubelet's instantaneous container phase. Folding to one
+// reason here keeps issues/category.Classify returning `crashloop` across the
+// Waiting→Running→Waiting oscillation (and the issue_id stable, since category
+// is hashed into it).
+const crashLoopReason = "CrashLoopBackOff"
+
+// isStableCrashLoop reports whether a container has restarted at least once AND
+// its last termination recorded a crash-class outcome (CrashLoopBackOff / a
+// generic Error / a non-zero exit code). This is the MONOTONIC crashloop
+// signal: it reads only the stable history fields (RestartCount +
+// LastTerminationState), never the instantaneous State (Waiting/Running/
+// Terminated) the kubelet flips between polls. OOMKilled is intentionally
+// excluded — it has its own category/severity path upstream.
+func isStableCrashLoop(cs *corev1.ContainerStatus) bool {
+	if cs.RestartCount == 0 {
+		return false
+	}
+	t := cs.LastTerminationState.Terminated
+	if t == nil {
+		return false
+	}
+	switch t.Reason {
+	case "OOMKilled":
+		// Memory pressure is classified separately (CategoryOOMKilled); don't
+		// fold it into the generic crashloop bucket.
+		return false
+	case "CrashLoopBackOff", "Error":
+		return true
+	}
+	// A non-zero exit code with no special reason is still a crash — the app
+	// died and the kubelet is restarting it.
+	return t.ExitCode != 0
+}
+
+// podHasStableCrashLoop reports whether any main or init container is in a
+// stable crashloop (see isStableCrashLoop).
+func podHasStableCrashLoop(pod *corev1.Pod) bool {
+	for i := range pod.Status.ContainerStatuses {
+		if isStableCrashLoop(&pod.Status.ContainerStatuses[i]) {
+			return true
+		}
+	}
+	for i := range pod.Status.InitContainerStatuses {
+		if isStableCrashLoop(&pod.Status.InitContainerStatuses[i]) {
+			return true
+		}
+	}
+	return false
+}
+
 // ClassifyPodHealth determines if a pod is "healthy", "warning", or "error".
 // This is the canonical implementation used by both MCP and REST dashboards.
 func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
@@ -17,6 +68,17 @@ func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
 		return "healthy"
 	}
 	if pod.Status.Phase == corev1.PodFailed {
+		return "error"
+	}
+
+	// Stable crashloop: a container that has restarted with a recorded crash
+	// outcome is an error REGARDLESS of whether the kubelet currently reports
+	// it Waiting (backing off) or Running (just restarted, about to die
+	// again). Keying off the instantaneous phase here is what made severity
+	// flap critical↔warning poll-to-poll; the stable history fields don't
+	// oscillate, so neither does the verdict. Checked before the per-state
+	// scan below so a momentary "Running" can't downgrade it.
+	if podHasStableCrashLoop(pod) {
 		return "error"
 	}
 
@@ -94,6 +156,27 @@ func PodRestartContext(pod *corev1.Pod) (restartCount int32, lastTerminatedReaso
 // CrashLoopBackOff / ImagePullBackOff / etc. on the actual failing
 // init container.
 func PodProblemReason(pod *corev1.Pod) string {
+	reason := podProblemReasonRaw(pod)
+	// Stable-crashloop normalization (monotonicity, GA-blocker #1): a
+	// crashlooping container oscillates Waiting("CrashLoopBackOff") → Running
+	// (just restarted) → Terminated → Waiting between polls. On the "Running"
+	// tick the raw walk returns a bare phase ("Running") — which
+	// issues/category.classifyProblem maps to `unknown`, flipping the
+	// category (and the category-hashed issue_id) mid-cycle. When the stable
+	// history fields say this is a crashloop, emit the canonical reason so the
+	// row's category stays `crashloop` across the whole oscillation. We only
+	// override when the raw reason isn't already a more-specific, stable
+	// signal (ImagePullBackOff, OOMKilled, an init failure, …) — those win.
+	if podHasStableCrashLoop(pod) && isPhaseOrCrashReason(reason) {
+		return crashLoopReason
+	}
+	return reason
+}
+
+// podProblemReasonRaw is the original phase/state walk: init containers first
+// (they block the pod Pending before main ContainerStatuses populate), then
+// main containers, falling back to the bare phase string.
+func podProblemReasonRaw(pod *corev1.Pod) string {
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
 			return cs.State.Waiting.Reason
@@ -111,6 +194,22 @@ func PodProblemReason(pod *corev1.Pod) string {
 		}
 	}
 	return string(pod.Status.Phase)
+}
+
+// isPhaseOrCrashReason reports whether reason is one that a stable-crashloop
+// override may safely replace: a bare lifecycle phase / no-op waiting state
+// (the instantaneous values that flap), or an already-crash-class reason
+// (so the canonical string is used consistently). A distinct, more-specific
+// reason like ImagePullBackOff or OOMKilled is NOT in this set and is left
+// untouched.
+func isPhaseOrCrashReason(reason string) bool {
+	switch reason {
+	case "Running", "Pending", "Succeeded", "Failed", "Unknown", "",
+		"PodInitializing", "ContainerCreating",
+		"CrashLoopBackOff", "Error":
+		return true
+	}
+	return false
 }
 
 // NodeHealth describes the health of a single node.

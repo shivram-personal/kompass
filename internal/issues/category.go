@@ -35,6 +35,10 @@ const (
 	CategoryLivenessProbeFail Category = "liveness_probe_failed"
 	CategoryReadinessFailed   Category = "readiness_failed"
 	CategoryWorkloadDegraded  Category = "workload_degraded"
+	// batch workload failures (Job/CronJob) — runtime-stage failures of
+	// one-shot / scheduled workloads.
+	CategoryJobFailed     Category = "job_failed"
+	CategoryCronJobFailed Category = "cronjob_failed"
 
 	// configuration
 	CategoryMissingConfigRef Category = "missing_config_ref"
@@ -47,6 +51,7 @@ const (
 
 	// storage
 	CategoryPVCPending        Category = "pvc_pending"
+	CategoryPVCLost           Category = "pvc_lost"
 	CategoryVolumeMountFailed Category = "volume_mount_failed"
 
 	// scaling / rollout
@@ -98,12 +103,15 @@ var categoryGroup = map[Category]Group{
 	CategoryLivenessProbeFail:        GroupRuntime,
 	CategoryReadinessFailed:          GroupRuntime,
 	CategoryWorkloadDegraded:         GroupRuntime,
+	CategoryJobFailed:                GroupRuntime,
+	CategoryCronJobFailed:            GroupRuntime,
 	CategoryMissingConfigRef:         GroupConfiguration,
 	CategoryServiceNoEndpoints:       GroupNetworking,
 	CategoryIngressBackendMissing:    GroupNetworking,
 	CategoryDNSFailure:               GroupNetworking,
 	CategoryNetworkPolicyBlock:       GroupNetworking,
 	CategoryPVCPending:               GroupStorage,
+	CategoryPVCLost:                  GroupStorage,
 	CategoryVolumeMountFailed:        GroupStorage,
 	CategoryRolloutStalled:           GroupScaling,
 	CategoryHPALimitedOrFailed:       GroupScaling,
@@ -249,14 +257,34 @@ func classifyProblem(in classifyInput) Category {
 		return CategoryUnknown
 
 	case "PersistentVolumeClaim":
-		if in.Reason == "Pending" {
+		switch in.Reason {
+		case "Pending":
 			return CategoryPVCPending
+		case "Lost":
+			// bound volume gone — a storage failure, not unknown.
+			return CategoryPVCLost
 		}
-		// "Lost" (bound volume gone) has no dedicated category yet.
+		return CategoryUnknown
+
+	case "Job":
+		// DetectProblems only emits Job problems for genuine failures: a
+		// JobFailed condition (reason e.g. BackoffLimitExceeded /
+		// DeadlineExceeded, or the "Failed" fallback) or a stuck-active job
+		// ("Running for … with no completions"). All map to the batch
+		// workload-failure category rather than being discarded.
+		return CategoryJobFailed
+
+	case "CronJob":
+		// "stale" (no recent run) / "never-scheduled" — the CronJob is not
+		// producing the Jobs it's meant to.
+		switch in.Reason {
+		case "stale", "never-scheduled":
+			return CategoryCronJobFailed
+		}
 		return CategoryUnknown
 	}
 
-	// CronJob, Job, and the CAPI kinds (Cluster/Machine/MachineDeployment/…)
-	// have no category yet — see the taxonomy gaps noted in ISSUES_PLAN.
+	// The CAPI kinds (Cluster/Machine/MachineDeployment/…) have no category
+	// yet — see the taxonomy gaps noted in ISSUES_PLAN.
 	return CategoryUnknown
 }

@@ -173,6 +173,114 @@ func TestCompose_PodSchedulingWinsOverProblem(t *testing.T) {
 	}
 }
 
+func TestCompose_SuppressesWorkloadDegradedWhenChildSymptomExists(t *testing.T) {
+	// A degraded Deployment surfaces the parent workload_degraded row AND its
+	// crashlooping pods. GA-blocker #2: the parent rollup is redundant when a
+	// specific child symptom names the root cause on the same subject — keep
+	// the crashloop, drop the workload_degraded.
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			// Parent rollup on the Deployment itself.
+			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available"},
+			// Child symptom on a member pod, owned by the same Deployment.
+			{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+		},
+	}
+	out := Compose(p, Filters{})
+
+	var sawDegraded, sawCrashloop bool
+	for _, i := range out {
+		if i.Category == CategoryWorkloadDegraded {
+			sawDegraded = true
+		}
+		if i.Category == CategoryCrashLoop {
+			sawCrashloop = true
+		}
+	}
+	if sawDegraded {
+		t.Errorf("workload_degraded must be suppressed when a child symptom exists: %+v", out)
+	}
+	if !sawCrashloop {
+		t.Errorf("the specific child crashloop row must survive: %+v", out)
+	}
+}
+
+func TestCompose_KeepsCriticalParentWhenOnlyChildIsWarning(t *testing.T) {
+	// GA-blocker #2 must never DOWNGRADE severity. A critical "0/5 available"
+	// Deployment whose only child symptom is a warning (pods stuck waiting)
+	// must KEEP the critical parent — suppressing it would silently drop the
+	// incident from critical to warning. The severity gate in
+	// dedupeWorkloadDegradedOverChild only suppresses on an equal-or-worse child.
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "0/5 available"},
+			// Child classifies to container_waiting at WARNING severity.
+			{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "warning", Reason: "ContainerCreating", OwnerKind: "Deployment", OwnerName: "web"},
+		},
+	}
+	out := Compose(p, Filters{})
+
+	var sawDegraded, sawChild bool
+	var degradedSev Severity
+	for _, i := range out {
+		if i.Category == CategoryWorkloadDegraded {
+			sawDegraded = true
+			degradedSev = i.Severity
+		}
+		if i.Category == CategoryContainerWaiting {
+			sawChild = true
+		}
+	}
+	if !sawDegraded {
+		t.Errorf("critical workload_degraded must NOT be suppressed by a warning-only child (would downgrade the incident): %+v", out)
+	}
+	if degradedSev != SeverityCritical {
+		t.Errorf("parent severity must remain critical, got %q", degradedSev)
+	}
+	if !sawChild {
+		t.Errorf("the warning child row should also survive: %+v", out)
+	}
+}
+
+func TestCompose_KeepsWorkloadDegradedWhenNoChildSymptom(t *testing.T) {
+	// A degraded Deployment with no specific child symptom (e.g. pods not yet
+	// failing in a classifiable way) must KEEP its workload_degraded row — the
+	// dedup only suppresses the parent when a child names the cause.
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available"},
+			// An unrelated pod under a DIFFERENT owner — must not suppress web's row.
+			{Kind: "Pod", Namespace: "ns", Name: "api-xyz", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "api"},
+		},
+	}
+	out := Compose(p, Filters{})
+	var sawDegraded bool
+	for _, i := range out {
+		if i.Kind == "Deployment" && i.Name == "web" && i.Category == CategoryWorkloadDegraded {
+			sawDegraded = true
+		}
+	}
+	if !sawDegraded {
+		t.Errorf("workload_degraded must survive when no child symptom exists for its subject: %+v", out)
+	}
+}
+
+func TestCompose_SuppressesRolloutStalledWhenChildSymptomExists(t *testing.T) {
+	// rollout_stalled is also a parent rollup — same suppression rule.
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "Rollout stuck"},
+			{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+		},
+	}
+	out := Compose(p, Filters{})
+	for _, i := range out {
+		if i.Category == CategoryRolloutStalled {
+			t.Errorf("rollout_stalled must be suppressed when a child symptom exists: %+v", out)
+		}
+	}
+}
+
 func TestCompose_SchedulingComposedByDefault(t *testing.T) {
 	countSource := func(in []Issue, s Source) int {
 		n := 0
@@ -254,6 +362,101 @@ func TestCompose_GenericCRDConditionFallback(t *testing.T) {
 	}
 	if hit.Reason == "" || hit.Message != "drift detected" {
 		t.Fatalf("reason/message: %+v", hit)
+	}
+}
+
+func TestCompose_CRDConditionNoiseFloorSuppression(t *testing.T) {
+	// GA-blocker #5: the generic CRD detector must NOT warn on objects that
+	// are suspended, mid-reconcile, or whose controller hasn't observed the
+	// current spec — only on genuinely-failed ones. Each subtest stages one
+	// CRD object and asserts whether it surfaces.
+	gvr := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
+	mk := func(meta, spec, status map[string]any) *unstructured.Unstructured {
+		obj := map[string]any{
+			"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+			"kind":       "Kustomization",
+			"metadata":   meta,
+		}
+		if spec != nil {
+			obj["spec"] = spec
+		}
+		if status != nil {
+			obj["status"] = status
+		}
+		return &unstructured.Unstructured{Object: obj}
+	}
+	falseReady := func(reason string) map[string]any {
+		return map[string]any{"conditions": []any{
+			map[string]any{"type": "Ready", "status": "False", "reason": reason, "message": "m"},
+		}}
+	}
+
+	cases := []struct {
+		name    string
+		obj     *unstructured.Unstructured
+		wantHit bool
+	}{
+		{
+			name:    "mid-reconcile (transient reason) skipped",
+			obj:     mk(map[string]any{"name": "reconciling", "namespace": "flux"}, nil, falseReady("Progressing")),
+			wantHit: false,
+		},
+		{
+			name:    "dependency-not-ready skipped",
+			obj:     mk(map[string]any{"name": "dep", "namespace": "flux"}, nil, falseReady("DependencyNotReady")),
+			wantHit: false,
+		},
+		{
+			name:    "suspended object skipped",
+			obj:     mk(map[string]any{"name": "paused", "namespace": "flux"}, map[string]any{"suspend": true}, falseReady("SomeFailure")),
+			wantHit: false,
+		},
+		{
+			name: "observedGeneration lag skipped",
+			obj: mk(
+				map[string]any{"name": "lagging", "namespace": "flux", "generation": int64(5)},
+				nil,
+				map[string]any{
+					"observedGeneration": int64(3),
+					"conditions": []any{
+						map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed", "message": "m"},
+					},
+				},
+			),
+			wantHit: false,
+		},
+		{
+			name:    "genuinely failed kept",
+			obj:     mk(map[string]any{"name": "broken", "namespace": "flux"}, nil, falseReady("BuildFailed")),
+			wantHit: true,
+		},
+		{
+			name: "failed with current generation kept",
+			obj: mk(
+				map[string]any{"name": "broken2", "namespace": "flux", "generation": int64(5)},
+				map[string]any{"suspend": false},
+				map[string]any{
+					"observedGeneration": int64(5),
+					"conditions": []any{
+						map[string]any{"type": "Ready", "status": "False", "reason": "BuildFailed", "message": "m"},
+					},
+				},
+			),
+			wantHit: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &fakeProvider{
+				dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {tc.obj}},
+				kinds:   map[schema.GroupVersionResource]string{gvr: "Kustomization"},
+			}
+			out := Compose(p, Filters{})
+			got := len(out) > 0
+			if got != tc.wantHit {
+				t.Fatalf("hit=%v want %v: %+v", got, tc.wantHit, out)
+			}
+		})
 	}
 }
 
