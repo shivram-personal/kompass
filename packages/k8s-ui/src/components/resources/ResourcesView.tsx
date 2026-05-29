@@ -229,6 +229,13 @@ const TAILWIND_WIDTH_TO_PX: Record<string, number> = {
   'w-48': 192, 'w-56': 224, 'w-64': 256,
 }
 
+const COMPARE_COLUMN_WIDTH = 36
+const COMPARE_COLUMN_STYLE: React.CSSProperties = {
+  width: COMPARE_COLUMN_WIDTH,
+  minWidth: COMPARE_COLUMN_WIDTH,
+  maxWidth: COMPARE_COLUMN_WIDTH,
+}
+
 function getColumnMinWidth(col: Column): number {
   if (col.minWidth) return col.minWidth
   if (!col.width) return 200 // Name column (no width class) gets wider minimum
@@ -3367,6 +3374,14 @@ export function ResourcesView({
     return allColumns.filter(c => visibleColumns.has(c.key))
   }, [allColumns, visibleColumns])
 
+  // Fixed-width columns can consume the table's flexible space and collapse
+  // the required name column. Keep a real table minimum and let the container
+  // scroll horizontally when the viewport is too narrow.
+  const tableMinWidth = useMemo(() => {
+    const initialWidth = compareMode ? COMPARE_COLUMN_WIDTH : 0
+    return columns.reduce((sum, col) => sum + (columnWidths[col.key] || getColumnMinWidth(col)), initialWidth)
+  }, [columns, columnWidths, compareMode])
+
   // Stable virtuoso components — memoized to avoid remounting the table on every render
   const virtuosoComponents = useMemo(() => ({
     Table: React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(function VirtuosoTable(props, ref) {
@@ -3375,7 +3390,7 @@ export function ResourcesView({
           {...props}
           ref={ref}
           className="w-full"
-          style={{ ...props.style, tableLayout: 'fixed' }}
+          style={{ ...props.style, tableLayout: 'fixed', minWidth: tableMinWidth }}
         >
           <colgroup>
             {/*
@@ -3385,7 +3400,7 @@ export function ResourcesView({
               the missing entry by stealing width from a sized neighbour
               — typically blowing this narrow column out to ~200px.
             */}
-            {compareMode && <col style={{ width: 36 }} />}
+            {compareMode && <col style={{ width: COMPARE_COLUMN_WIDTH }} />}
             {columns.map(col => (
               <col
                 key={col.key}
@@ -3403,7 +3418,7 @@ export function ResourcesView({
       )
     }),
     TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasResizedColumns, compareMode])
+  }), [columns, columnWidths, hasResizedColumns, compareMode, tableMinWidth])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -3949,7 +3964,7 @@ export function ResourcesView({
 
         {/* Table */}
         <div
-          className="flex-1 overflow-y-auto overflow-x-hidden relative"
+          className="flex-1 overflow-auto relative"
           ref={tableContainerRef}
           onClick={(e) => {
             if (e.target === e.currentTarget && selectedResource) {
@@ -4062,7 +4077,7 @@ export function ResourcesView({
                       // Inline px width — under `table-layout:fixed`,
                       // `w-9` is a hint the browser absorbs into leftover
                       // row width on an icon-only column.
-                      style={{ width: 36, minWidth: 36, maxWidth: 36 }}
+                      style={COMPARE_COLUMN_STYLE}
                       className="px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
                       title="Compare mode"
                     >
@@ -4344,7 +4359,7 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
         <td
           onClick={onClick}
           onMouseEnter={onMouseEnter}
-          style={{ width: 36, minWidth: 36, maxWidth: 36 }}
+          style={COMPARE_COLUMN_STYLE}
           className={clsx('px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
         >
           {pickedSide ? (
