@@ -1,0 +1,245 @@
+package subject
+
+import (
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// --- test doubles (layering-clean: implement the injected interfaces) ---
+
+// fakeOwners is a multi-hop OwnerResolver: refKey(child) -> parent controller.
+type fakeOwners map[string]Ref
+
+func (f fakeOwners) ParentOf(child Ref) (Ref, bool) { p, ok := f[refKey(child)]; return p, ok }
+
+// fakeLookup is a single-hop OwnerLookup for the operator-root hook.
+type fakeLookup map[string]Ref
+
+func (f fakeLookup) ImmediateOwner(child Ref) (Ref, bool) { p, ok := f[refKey(child)]; return p, ok }
+
+func obj(ns, name string, labels, annos map[string]string, owners ...metav1.OwnerReference) metav1.Object {
+	return &metav1.ObjectMeta{Namespace: ns, Name: name, Labels: labels, Annotations: annos, OwnerReferences: owners}
+}
+
+func ctrlRef(kind, name, apiVersion string) metav1.OwnerReference {
+	c := true
+	return metav1.OwnerReference{Kind: kind, Name: name, APIVersion: apiVersion, Controller: &c}
+}
+
+// ============================ TIER 1: SUBJECT ============================
+
+func TestResolveSubject_PodToDeploymentOwnerCollapse(t *testing.T) {
+	pod := obj("ns", "web-abc12345", nil, nil, ctrlRef("ReplicaSet", "web-5d8f9c", "apps/v1"))
+	start := Ref{Kind: "Pod", Namespace: "ns", Name: "web-abc12345"}
+	got := ResolveSubject(start, pod, PodOwnerResolver{Pod: pod}, nil)
+	want := Subject{Ref: Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}, Scope: ScopeWorkload, Anchor: AnchorOwnerCollapsed}
+	if got != want {
+		t.Errorf("Pod->RS->Deployment: got %+v, want %+v", got, want)
+	}
+}
+
+func TestResolveSubject_MultiHopJobToCronJob(t *testing.T) {
+	// A topology-backed OwnerResolver supplies the deeper Pod->Job->CronJob chain.
+	podRef := Ref{Kind: "Pod", Namespace: "ns", Name: "backup-29384-xyz"}
+	jobRef := Ref{Group: "batch", Kind: "Job", Namespace: "ns", Name: "backup-29384"}
+	cronRef := Ref{Group: "batch", Kind: "CronJob", Namespace: "ns", Name: "backup"}
+	owners := fakeOwners{refKey(podRef): jobRef, refKey(jobRef): cronRef}
+	got := ResolveSubject(podRef, nil, owners, nil)
+	want := Subject{Ref: cronRef, Scope: ScopeWorkload, Anchor: AnchorOwnerCollapsed}
+	if got != want {
+		t.Errorf("Pod->Job->CronJob: got %+v, want %+v", got, want)
+	}
+}
+
+func TestResolveSubject_BarePod(t *testing.T) {
+	pod := obj("ns", "loner", nil, nil) // no owner refs
+	start := Ref{Kind: "Pod", Namespace: "ns", Name: "loner"}
+	got := ResolveSubject(start, pod, PodOwnerResolver{Pod: pod}, nil)
+	if got.Anchor != AnchorBare || got.Ref != start {
+		t.Errorf("bare pod: got %+v, want anchor=bare ref=%+v", got, start)
+	}
+}
+
+func TestResolveSubject_StaticPodOwnedByNode(t *testing.T) {
+	podRef := Ref{Kind: "Pod", Namespace: "kube-system", Name: "kube-apiserver-node1"}
+	owners := fakeOwners{refKey(podRef): {Kind: "Node", Name: "node1"}}
+	got := ResolveSubject(podRef, nil, owners, nil)
+	if got.Anchor != AnchorNode {
+		t.Errorf("static pod (owner=Node): anchor %q, want node", got.Anchor)
+	}
+	if got.Ref != podRef { // must NOT collapse "up into" the Node
+		t.Errorf("static pod must stay the pod, not become the Node: %+v", got.Ref)
+	}
+}
+
+func TestResolveSubject_NonPodSelf(t *testing.T) {
+	svc := Ref{Kind: "Service", Namespace: "ns", Name: "api"}
+	got := ResolveSubject(svc, nil, nil, nil) // owners=nil: resource is its own subject
+	want := Subject{Ref: svc, Scope: ScopeService, Anchor: AnchorSelf}
+	if got != want {
+		t.Errorf("non-pod self: got %+v, want %+v", got, want)
+	}
+}
+
+func TestResolveSubject_OperatorCRRootHop(t *testing.T) {
+	podRef := Ref{Kind: "Pod", Namespace: "ns", Name: "pg-1"}
+	stsRef := Ref{Group: "apps", Kind: "StatefulSet", Namespace: "ns", Name: "pg"}
+	cnpg := Ref{Group: "postgresql.cnpg.io", Kind: "Cluster", Namespace: "ns", Name: "pg"}
+	owners := fakeOwners{refKey(podRef): stsRef} // Pod->STS; STS has no further controller
+	ops := DefaultOperatorRoots{Owners: fakeLookup{refKey(stsRef): cnpg}}
+	got := ResolveSubject(podRef, nil, owners, ops)
+	if got.Anchor != AnchorOperatorCR || got.Ref != cnpg {
+		t.Errorf("operator-CR hop: got %+v, want ref=%+v anchor=operator_cr", got, cnpg)
+	}
+}
+
+func TestResolveSubject_UnknownOperatorDegradesToWorkload(t *testing.T) {
+	// A CR not on the allowlist must NOT hop — degrade to the workload (raw-always).
+	podRef := Ref{Kind: "Pod", Namespace: "ns", Name: "x-1"}
+	stsRef := Ref{Group: "apps", Kind: "StatefulSet", Namespace: "ns", Name: "x"}
+	unknownCR := Ref{Group: "unknown.example.io", Kind: "Widget", Namespace: "ns", Name: "x"}
+	owners := fakeOwners{refKey(podRef): stsRef}
+	ops := DefaultOperatorRoots{Owners: fakeLookup{refKey(stsRef): unknownCR}}
+	got := ResolveSubject(podRef, nil, owners, ops)
+	if got.Ref != stsRef || got.Anchor != AnchorOwnerCollapsed {
+		t.Errorf("unknown operator CR must degrade to the workload: got %+v", got)
+	}
+}
+
+func TestScopeForKind(t *testing.T) {
+	cases := map[string]Scope{
+		"Pod": ScopeWorkload, "Deployment": ScopeWorkload, "CronJob": ScopeWorkload,
+		"Service": ScopeService, "Ingress": ScopeIngress, "PersistentVolumeClaim": ScopePVC,
+		"Node": ScopeNode, "Frobnicator": ScopeUnknown,
+	}
+	for k, want := range cases {
+		if got := ScopeForKind(k); got != want {
+			t.Errorf("ScopeForKind(%q)=%q want %q", k, got, want)
+		}
+	}
+}
+
+func TestStripReplicaSetHash(t *testing.T) {
+	cases := map[string]string{"web-5d8f9c": "web", "my-app-7b9": "my-app", "noHyphen": "noHyphen", "-leading": "-leading"}
+	for in, want := range cases {
+		if got := StripReplicaSetHash(in); got != want {
+			t.Errorf("StripReplicaSetHash(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestIssueID_DeterministicAndCategoryKeyed(t *testing.T) {
+	a := IssueID(ScopeWorkload, "apps|Deployment|ns|web", "crashloop")
+	if a != IssueID(ScopeWorkload, "apps|Deployment|ns|web", "crashloop") {
+		t.Error("IssueID must be deterministic")
+	}
+	if len(a) != 16 {
+		t.Errorf("IssueID len=%d, want 16 hex chars (8 bytes)", len(a))
+	}
+	// Each component must change the id. category being part of the key is what
+	// the detector-monotonicity contract depends on (a flapping category churns
+	// the id), so it must hold; subject-key and scope must also be load-bearing.
+	if IssueID(ScopeWorkload, "apps|Deployment|ns|web", "image_pull_failed") == a {
+		t.Error("IssueID must change with category")
+	}
+	if IssueID(ScopeWorkload, "apps|Deployment|ns|other", "crashloop") == a {
+		t.Error("IssueID must change with the subject key")
+	}
+	if IssueID(ScopeService, "apps|Deployment|ns|web", "crashloop") == a {
+		t.Error("IssueID must change with scope")
+	}
+}
+
+// ============================ TIER 2: APP OVERLAY ============================
+
+func TestResolveOverlay_FluxHelmReleaseTier1(t *testing.T) {
+	ov := ResolveOverlay(obj("ns", "x", map[string]string{fluxHelmNameLabel: "podinfo", fluxHelmNSLabel: "flux-system"}, nil), false)
+	if ov == nil || ov.Winner.Tier != TierFluxHelmRelease {
+		t.Fatalf("flux HelmRelease: got %+v", ov)
+	}
+	if ov.Winner.Ref.Kind != "HelmRelease" || ov.Winner.Ref.Group != fluxHelmGroup {
+		t.Errorf("flux HR ref: %+v", ov.Winner.Ref)
+	}
+	if ov.Winner.Confidence != ConfidenceHigh {
+		t.Errorf("tier1 confidence=%q want high", ov.Winner.Confidence)
+	}
+}
+
+func TestResolveOverlay_NativeHelmSentinelGroupEmpty(t *testing.T) {
+	ov := ResolveOverlay(obj("ns", "x", nil, map[string]string{helmReleaseNameAnno: "redis", helmReleaseNSAnno: "ns"}), false)
+	if ov == nil || ov.Winner.Tier != TierHelmRelease {
+		t.Fatalf("native helm: got %+v", ov)
+	}
+	// The {Kind:HelmRelease, Group:""} sentinel must survive — the Source
+	// classifier keys "helm" off the empty group.
+	if ov.Winner.Ref.Kind != "HelmRelease" || ov.Winner.Ref.Group != "" {
+		t.Errorf("native-helm sentinel broken: %+v", ov.Winner.Ref)
+	}
+	if ov.Winner.Confidence != ConfidenceMedium {
+		t.Errorf("native helm (tier5) confidence=%q want medium", ov.Winner.Confidence)
+	}
+}
+
+func TestResolveOverlay_ArgoInstanceBeatsHelm(t *testing.T) {
+	// Fixed precedence: argo instance (tier 4) wins over native Helm (tier 5),
+	// and Helm is retained as a conflict runner-up.
+	ov := ResolveOverlay(obj("ns", "x",
+		map[string]string{argoInstanceLabel: "checkout"},
+		map[string]string{helmReleaseNameAnno: "checkout"}), false)
+	if ov == nil || ov.Winner.Tier != TierArgoInstance {
+		t.Fatalf("argo-instance must beat helm: got %+v", ov)
+	}
+	if len(ov.Conflicts) != 1 || ov.Conflicts[0].Tier != TierHelmRelease {
+		t.Errorf("helm must be retained as a conflict: %+v", ov.Conflicts)
+	}
+}
+
+func TestResolveOverlay_HelmBeatsLabelTiers(t *testing.T) {
+	// Helm release (tier 5) ranks above the app.kubernetes.io label tiers (6-7).
+	ov := ResolveOverlay(obj("ns", "x",
+		map[string]string{appNameLabel: "web", partOfLabel: "store"},
+		map[string]string{helmReleaseNameAnno: "web"}), false)
+	if ov == nil || ov.Winner.Tier != TierHelmRelease {
+		t.Fatalf("helm must beat labels: got %+v", ov)
+	}
+	if len(ov.Conflicts) != 2 { // part-of (6) + name (7) retained
+		t.Errorf("label tiers must be retained as conflicts: %+v", ov.Conflicts)
+	}
+}
+
+func TestResolveOverlay_RawWinsWhenNoSignal(t *testing.T) {
+	if ov := ResolveOverlay(obj("ns", "x", nil, nil), true); ov != nil {
+		t.Errorf("no signal must yield nil overlay (raw-always), got %+v", ov)
+	}
+}
+
+func TestResolveOverlay_BareAppIsOptIn(t *testing.T) {
+	o := obj("ns", "x", map[string]string{bareAppLabel: "legacy"}, nil)
+	if ov := ResolveOverlay(o, false); ov != nil {
+		t.Errorf("bare-app-only must be nil without allowBareApp (never silent): %+v", ov)
+	}
+	ov := ResolveOverlay(o, true)
+	if ov == nil || ov.Winner.Tier != TierBareApp || ov.Winner.Confidence != ConfidenceLow {
+		t.Errorf("bare-app with allowBareApp: got %+v", ov)
+	}
+}
+
+func TestParseArgoTrackingID(t *testing.T) {
+	cases := []struct {
+		in       string
+		ns, name string
+		ok       bool
+	}{
+		{"guestbook:apps/Deployment:default/guestbook", "", "guestbook", true},               // default
+		{"argocd_guestbook:apps/Deployment:default/guestbook", "argocd", "guestbook", true},   // namespaced
+		{"legacyname", "", "", false},                                                         // no colon
+		{"", "", "", false},
+	}
+	for _, c := range cases {
+		ns, name, ok := parseArgoTrackingID(c.in)
+		if ns != c.ns || name != c.name || ok != c.ok {
+			t.Errorf("parseArgoTrackingID(%q)=(%q,%q,%v) want (%q,%q,%v)", c.in, ns, name, ok, c.ns, c.name, c.ok)
+		}
+	}
+}
