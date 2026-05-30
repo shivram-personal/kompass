@@ -28,6 +28,17 @@ func TestClassify(t *testing.T) {
 		{"config error waiting", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "CreateContainerConfigError"}, CategoryContainerWaiting},
 		{"pending pod (non-scheduling)", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Pending"}, CategoryContainerWaiting},
 		{"errored pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Error"}, CategoryCrashLoop},
+		{"high restart thrash", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "HighRestartCount"}, CategoryHighRestart},
+
+		// problem / GitOps reconcilers (DetectGitOpsProblems → SourceProblem)
+		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, CategoryGitOpsSyncFailed},
+		{"argo app outofsync", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OutOfSync"}, CategoryGitOpsSyncFailed},
+		{"flux kustomization problem", classifyInput{Source: SourceProblem, Kind: "Kustomization", APIGroup: "kustomize.toolkit.fluxcd.io", Reason: "ReconciliationFailed"}, CategoryGitOpsSyncFailed},
+		{"flux helmrelease problem", classifyInput{Source: SourceProblem, Kind: "HelmRelease", APIGroup: "helm.toolkit.fluxcd.io", Reason: "InstallFailed"}, CategoryGitOpsSyncFailed},
+		{"non-argo Application kind is not gitops", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "other.example.com", Reason: "whatever"}, CategoryUnknown},
+
+		// argo Rollout is progressive delivery, NOT a sync failure
+		{"argo rollout condition is rollout_stalled", classifyInput{Source: SourceCondition, Kind: "Rollout", APIGroup: "argoproj.io", Reason: "Ready: ProgressDeadlineExceeded"}, CategoryRolloutStalled},
 
 		// problem / workloads
 		{"deploy degraded", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "3/5 available"}, CategoryWorkloadDegraded},

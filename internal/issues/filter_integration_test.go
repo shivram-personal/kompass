@@ -64,19 +64,22 @@ func TestCompose_WithCELFilter_SourceBinding(t *testing.T) {
 	// the ONLY way to slice issues by detector (documented migration path in
 	// the HTTP handler + MCP tool schema). Guard that the binding exists and
 	// slices correctly across two distinct sources.
-	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	// Non-curated CRD (KEDA ScaledObject) for the generic condition row, so it
+	// reaches SourceCondition (Argo/Flux now route through the GitOps detector
+	// under SourceProblem).
+	gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
 	app := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "argoproj.io/v1alpha1",
-		"kind":       "Application",
-		"metadata":   map[string]any{"name": "my-app", "namespace": "argocd"},
+		"apiVersion": "keda.sh/v1alpha1",
+		"kind":       "ScaledObject",
+		"metadata":   map[string]any{"name": "my-app", "namespace": "apps"},
 		"status": map[string]any{"conditions": []any{
-			map[string]any{"type": "Synced", "status": "False", "reason": "OutOfSync", "message": "drift"},
+			map[string]any{"type": "Ready", "status": "False", "reason": "ScalerFailed", "message": "drift"},
 		}},
 	}}
 	p := &fakeProvider{
 		problems: []k8s.Problem{{Kind: "Deployment", Namespace: "argocd", Name: "api", Severity: "critical", Reason: "down"}},
 		dynamic:  map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {app}},
-		kinds:    map[schema.GroupVersionResource]string{gvr: "Application"},
+		kinds:    map[schema.GroupVersionResource]string{gvr: "ScaledObject"},
 	}
 	f, err := filter.CompileIssueFilter(`source == "condition"`)
 	if err != nil {

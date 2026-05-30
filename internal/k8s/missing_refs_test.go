@@ -280,17 +280,86 @@ func TestDetectMissingRefs(t *testing.T) {
 		}
 	}
 
-	// TLS-secret-missing must be `warning`, not `critical` — Ingress
-	// controller falls back to default cert, degraded but not broken.
-	// All other missing-ref problems must stay `critical`.
+	// Severity is calibrated to impact, not blanket-critical. Refs that break a
+	// running thing now stay critical; latent/inert ones are de-escalated:
+	//   - Missing TLS Secret → warning (controller falls back to default cert)
+	//   - Missing headless Service on a single-replica STS → info (no peers, inert)
+	//   - Missing roleRef target → warning (dangling binding grants nothing)
 	for _, p := range problems {
-		if p.Reason == "Missing TLS Secret" {
-			if p.Severity != "warning" {
-				t.Errorf("TLS-secret-missing should be warning severity, got %q: %+v", p.Severity, p)
-			}
-		} else if p.Severity != "critical" {
-			t.Errorf("non-TLS missing-ref should be critical severity, got %q: %+v", p.Severity, p)
+		var wantSev string
+		switch p.Reason {
+		case "Missing TLS Secret":
+			wantSev = "warning"
+		case "Missing headless Service":
+			wantSev = "info" // sts-bad has nil replicas → treated as 1
+		case "Missing roleRef target":
+			wantSev = "warning"
+		default:
+			wantSev = "critical"
 		}
+		if p.Severity != wantSev {
+			t.Errorf("reason %q: severity = %q, want %q: %+v", p.Reason, p.Severity, wantSev, p)
+		}
+	}
+}
+
+func TestDanglingRoleBindingSeverity(t *testing.T) {
+	cases := []struct {
+		name, binding, roleRef, want string
+	}{
+		{"ordinary dangling binding is warning", "my-app-binding", "missing-role", "warning"},
+		{"GKE PSP residue by binding name is info", "gce:podsecuritypolicy:privileged", "gce:podsecuritypolicy:privileged", "info"},
+		{"GKE PSP residue by roleRef name is info", "some-binding", "gce:podsecuritypolicy:unprivileged", "info"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := danglingRoleBindingSeverity(c.binding, c.roleRef); got != c.want {
+				t.Errorf("danglingRoleBindingSeverity(%q,%q) = %q, want %q", c.binding, c.roleRef, got, c.want)
+			}
+		})
+	}
+}
+
+// TestStatefulSetHeadlessServiceSeverity pins the replica-aware calibration:
+// a missing headless Service is inert (info) for a single-replica StatefulSet
+// but a real peer-DNS degradation (warning) for a multi-replica one.
+func TestStatefulSetHeadlessServiceSeverity(t *testing.T) {
+	defer ResetTestState()
+	now := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	three := int32(3)
+	single := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sts-single", Namespace: "prod", CreationTimestamp: now},
+		Spec:       appsv1.StatefulSetSpec{ServiceName: "missing-headless"},
+	}
+	multi := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sts-multi", Namespace: "prod", CreationTimestamp: now},
+		Spec:       appsv1.StatefulSetSpec{ServiceName: "missing-headless", Replicas: &three},
+	}
+	client := fake.NewClientset(single, multi)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var got map[string]string
+	for time.Now().Before(deadline) {
+		got = map[string]string{}
+		for _, p := range DetectMissingRefs(cache, "") {
+			if p.Kind == "StatefulSet" && p.Reason == "Missing headless Service" {
+				got[p.Name] = p.Severity
+			}
+		}
+		if len(got) >= 2 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got["sts-single"] != "info" {
+		t.Errorf("single-replica STS severity = %q, want info", got["sts-single"])
+	}
+	if got["sts-multi"] != "warning" {
+		t.Errorf("multi-replica STS severity = %q, want warning", got["sts-multi"])
 	}
 }
 

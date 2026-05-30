@@ -15,19 +15,21 @@ import (
 // pre-stages what the corresponding method returns. Test cases assemble
 // one of these and pass it to Compose.
 type fakeProvider struct {
-	problems     []k8s.Problem
-	missingRefs  []k8s.Problem
-	scheduling   []k8s.Problem
-	capiProblems []k8s.Problem
-	dynamic      map[schema.GroupVersionResource][]*unstructured.Unstructured
-	kinds        map[schema.GroupVersionResource]string
-	namespaced   map[schema.GroupVersionResource]bool
+	problems       []k8s.Problem
+	missingRefs    []k8s.Problem
+	scheduling     []k8s.Problem
+	capiProblems   []k8s.Problem
+	gitopsProblems []k8s.Problem
+	dynamic        map[schema.GroupVersionResource][]*unstructured.Unstructured
+	kinds          map[schema.GroupVersionResource]string
+	namespaced     map[schema.GroupVersionResource]bool
 }
 
-func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
-func (f *fakeProvider) DetectMissingRefs(_ []string) []k8s.Problem  { return f.missingRefs }
-func (f *fakeProvider) DetectScheduling(_ []string) []k8s.Problem   { return f.scheduling }
-func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return f.capiProblems }
+func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem       { return f.problems }
+func (f *fakeProvider) DetectMissingRefs(_ []string) []k8s.Problem    { return f.missingRefs }
+func (f *fakeProvider) DetectScheduling(_ []string) []k8s.Problem     { return f.scheduling }
+func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Problem   { return f.capiProblems }
+func (f *fakeProvider) DetectGitOpsProblems(_ []string) []k8s.Problem { return f.gitopsProblems }
 func (f *fakeProvider) WatchedDynamic() []schema.GroupVersionResource {
 	out := make([]schema.GroupVersionResource, 0, len(f.dynamic))
 	for g := range f.dynamic {
@@ -325,17 +327,20 @@ func TestCompose_MissingRefsComposedByDefault(t *testing.T) {
 }
 
 func TestCompose_GenericCRDConditionFallback(t *testing.T) {
-	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	// KEDA ScaledObject — a CRD with NO curated detector, so it exercises the
+	// generic status.conditions fallback. (Argo/Flux are now handled by the
+	// dedicated GitOps detector and would not reach this path.)
+	gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
 	app := &unstructured.Unstructured{Object: map[string]any{
-		"apiVersion": "argoproj.io/v1alpha1",
-		"kind":       "Application",
-		"metadata":   map[string]any{"name": "my-app", "namespace": "argocd"},
+		"apiVersion": "keda.sh/v1alpha1",
+		"kind":       "ScaledObject",
+		"metadata":   map[string]any{"name": "my-app", "namespace": "apps"},
 		"status": map[string]any{
 			"conditions": []any{
 				map[string]any{
-					"type":               "Synced",
+					"type":               "Ready",
 					"status":             "False",
-					"reason":             "OutOfSync",
+					"reason":             "ScalerFailed",
 					"message":            "drift detected",
 					"lastTransitionTime": time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339),
 				},
@@ -344,7 +349,7 @@ func TestCompose_GenericCRDConditionFallback(t *testing.T) {
 	}}
 	p := &fakeProvider{
 		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {app}},
-		kinds:   map[schema.GroupVersionResource]string{gvr: "Application"},
+		kinds:   map[schema.GroupVersionResource]string{gvr: "ScaledObject"},
 	}
 	out := Compose(p, Filters{})
 	if len(out) != 1 {
@@ -354,7 +359,7 @@ func TestCompose_GenericCRDConditionFallback(t *testing.T) {
 	if hit.Source != SourceCondition {
 		t.Fatalf("source: %s", hit.Source)
 	}
-	if hit.Group != "argoproj.io" {
+	if hit.Group != "keda.sh" {
 		t.Fatalf("group not propagated: %+v", hit)
 	}
 	if hit.Severity != SeverityWarning {
@@ -370,11 +375,15 @@ func TestCompose_CRDConditionNoiseFloorSuppression(t *testing.T) {
 	// are suspended, mid-reconcile, or whose controller hasn't observed the
 	// current spec — only on genuinely-failed ones. Each subtest stages one
 	// CRD object and asserts whether it surfaces.
-	gvr := schema.GroupVersionResource{Group: "kustomize.toolkit.fluxcd.io", Version: "v1", Resource: "kustomizations"}
+	// KEDA ScaledObject stands in for a generic CRD here — the suspend /
+	// observedGeneration / transient-reason noise floor is shared logic that
+	// must apply to any non-curated CRD. (Flux is now handled by the dedicated
+	// GitOps detector, with its own narrower transient gating.)
+	gvr := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
 	mk := func(meta, spec, status map[string]any) *unstructured.Unstructured {
 		obj := map[string]any{
-			"apiVersion": "kustomize.toolkit.fluxcd.io/v1",
-			"kind":       "Kustomization",
+			"apiVersion": "keda.sh/v1alpha1",
+			"kind":       "ScaledObject",
 			"metadata":   meta,
 		}
 		if spec != nil {
@@ -449,7 +458,7 @@ func TestCompose_CRDConditionNoiseFloorSuppression(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &fakeProvider{
 				dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {tc.obj}},
-				kinds:   map[schema.GroupVersionResource]string{gvr: "Kustomization"},
+				kinds:   map[schema.GroupVersionResource]string{gvr: "ScaledObject"},
 			}
 			out := Compose(p, Filters{})
 			got := len(out) > 0
@@ -705,18 +714,20 @@ func (c *countingProvider) ListDynamic(gvr schema.GroupVersionResource, ns strin
 // non-matching GVRs skip the ListDynamic call entirely.
 func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 	podGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
-	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	// ScaledObject is non-curated, so it flows through the generic path being
+	// tested here (Argo Application is now owned by the GitOps detector).
+	soGVR := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
 	npGVR := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
 
 	p := &countingProvider{
 		fakeProvider: fakeProvider{
 			dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{
 				podGVR: {}, // empty — only counts the call.
-				appGVR: {{Object: map[string]any{
-					"metadata": map[string]any{"name": "a", "namespace": "argocd"},
+				soGVR: {{Object: map[string]any{
+					"metadata": map[string]any{"name": "a", "namespace": "apps"},
 					"status": map[string]any{
 						"conditions": []any{
-							map[string]any{"type": "Synced", "status": "False", "reason": "Drift"},
+							map[string]any{"type": "Ready", "status": "False", "reason": "ScalerFailed"},
 						},
 					},
 				}}},
@@ -724,17 +735,17 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 			},
 			kinds: map[schema.GroupVersionResource]string{
 				podGVR: "Pod",
-				appGVR: "Application",
+				soGVR:  "ScaledObject",
 				npGVR:  "NodePool",
 			},
 		},
 	}
 
-	// kindFilter restricts to Application — the other two GVRs must NOT
+	// kindFilter restricts to ScaledObject — the other two GVRs must NOT
 	// be listed. detectGenericCRDIssues lowercases the kind comparison
-	// (mirrors applyFilters), so the canonical "Application" matches the
-	// emitted Kind for the argoproj.io GVR.
-	_ = detectGenericCRDIssues(p, Filters{Kinds: []string{"Application"}})
+	// (mirrors applyFilters), so the canonical "ScaledObject" matches the
+	// emitted Kind for the keda.sh GVR.
+	_ = detectGenericCRDIssues(p, Filters{Kinds: []string{"ScaledObject"}})
 
 	if got := p.listCalls[podGVR]; got != 0 {
 		t.Errorf("Pod GVR ListDynamic calls = %d, want 0 (kind filter must skip non-matching GVRs)", got)
@@ -742,8 +753,8 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 	if got := p.listCalls[npGVR]; got != 0 {
 		t.Errorf("NodePool GVR ListDynamic calls = %d, want 0 (kind filter must skip non-matching GVRs)", got)
 	}
-	if got := p.listCalls[appGVR]; got == 0 {
-		t.Errorf("Application GVR ListDynamic calls = %d, want >= 1 (matching kind must still be scanned)", got)
+	if got := p.listCalls[soGVR]; got == 0 {
+		t.Errorf("ScaledObject GVR ListDynamic calls = %d, want >= 1 (matching kind must still be scanned)", got)
 	}
 
 	// Sanity: empty Kinds filter scans every GVR (no per-kind shortcut
@@ -751,7 +762,7 @@ func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
 	// rather than always-skip.
 	p.listCalls = nil
 	_ = detectGenericCRDIssues(p, Filters{})
-	for gvr, want := range map[schema.GroupVersionResource]bool{podGVR: true, appGVR: true, npGVR: true} {
+	for gvr, want := range map[schema.GroupVersionResource]bool{podGVR: true, soGVR: true, npGVR: true} {
 		if got := p.listCalls[gvr] > 0; got != want {
 			t.Errorf("no kind filter: GVR %s called=%v, want %v", gvr.Resource, got, want)
 		}

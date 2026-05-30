@@ -17,6 +17,18 @@ import (
 // is hashed into it).
 const crashLoopReason = "CrashLoopBackOff"
 
+// highRestartReason is the canonical reason for a container that is actively
+// thrashing — a high cumulative restart count while still unhealthy and
+// churning — but is NOT a classic CrashLoopBackOff (its restarts come from
+// e.g. failing readiness probes with clean exits, so isStableCrashLoop's
+// crash-class guard doesn't fire). Naming it keeps the row out of the
+// `unknown` catch-all (see PodProblemReason / category.Classify).
+const highRestartReason = "HighRestartCount"
+
+// highRestartThreshold is the cumulative per-container RestartCount above which
+// a still-unhealthy container is treated as actively thrashing.
+const highRestartThreshold = 3
+
 // isStableCrashLoop reports whether a container is in an ACTIVE crashloop: it
 // has restarted with a crash-class last termination (CrashLoopBackOff / generic
 // Error / non-zero exit), AND it has not since recovered. It reads the stable
@@ -69,6 +81,48 @@ func podHasStableCrashLoop(pod *corev1.Pod, now time.Time) bool {
 	}
 	for i := range pod.Status.InitContainerStatuses {
 		if isStableCrashLoop(&pod.Status.InitContainerStatuses[i], now) {
+			return true
+		}
+	}
+	return false
+}
+
+// restartedRecently reports whether a container's most recent termination
+// finished within the given window — i.e. it is still actively churning, not a
+// container that crashed long ago and has since gone quiet (the laptop-sleep /
+// node-reboot artifact where RestartCount is high but every termination is days
+// old).
+func restartedRecently(cs *corev1.ContainerStatus, now time.Time, within time.Duration) bool {
+	if t := cs.LastTerminationState.Terminated; t != nil && !t.FinishedAt.IsZero() {
+		return now.Sub(t.FinishedAt.Time) <= within
+	}
+	return false
+}
+
+// isActivelyThrashing reports whether a container has a high cumulative restart
+// count AND is currently unhealthy AND is still churning. The Ready gate is what
+// clears the recovered-after-crash false positive — a pod that restarted many
+// times at startup but is now Ready and stable (its RestartCount never resets)
+// no longer trips this. The Waiting/recency gate clears the slept-then-woken
+// node whose restarts are days old. The 5m window matches isStableCrashLoop's
+// horizon so the two guards don't drift.
+func isActivelyThrashing(cs *corev1.ContainerStatus, now time.Time) bool {
+	if cs.RestartCount <= highRestartThreshold || cs.Ready {
+		return false
+	}
+	if cs.State.Waiting != nil {
+		return true
+	}
+	return restartedRecently(cs, now, 5*time.Minute)
+}
+
+// podActiveThrashContainer reports whether any main container is actively
+// thrashing (see isActivelyThrashing). Init containers are excluded — a failing
+// init container surfaces through podProblemReasonRaw's init walk with a
+// specific reason already.
+func podActiveThrashContainer(pod *corev1.Pod, now time.Time) bool {
+	for i := range pod.Status.ContainerStatuses {
+		if isActivelyThrashing(&pod.Status.ContainerStatuses[i], now) {
 			return true
 		}
 	}
@@ -129,11 +183,14 @@ func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
 		return "healthy"
 	}
 
-	// Warning: pods with high restart counts
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.RestartCount > 3 {
-			return "warning"
-		}
+	// Warning: a container actively thrashing — high cumulative restarts AND
+	// currently not ready AND still churning. A plain RestartCount>N check
+	// also fires on a pod that crashed at startup and has since been Ready
+	// for hours (RestartCount never resets), and on nodes whose restarts are
+	// stale laptop-sleep / reboot artifacts — both are healthy now. The
+	// thrash gate (not-ready + recent/Waiting) excludes those.
+	if podActiveThrashContainer(pod, now) {
+		return "warning"
 	}
 
 	return "healthy"
@@ -185,8 +242,18 @@ func PodProblemReason(pod *corev1.Pod) string {
 	// classified as problems (recovered pods are filtered upstream by
 	// ClassifyPodHealth), so the recovery guard inside podHasStableCrashLoop
 	// never fires on this path — it's just reusing the same active-crashloop test.
-	if podHasStableCrashLoop(pod, time.Now()) && isPhaseOrCrashReason(reason) {
+	now := time.Now()
+	if podHasStableCrashLoop(pod, now) && isPhaseOrCrashReason(reason) {
 		return crashLoopReason
+	}
+	// Actively-thrashing-but-not-a-classic-backoff: a container churning on
+	// failed readiness probes with clean (exit 0) terminations isn't a stable
+	// crashloop, so the raw walk returns a bare phase ("Running") that would
+	// classify as `unknown`. Name it HighRestartCount so the row lands in a
+	// runtime category instead of the catch-all. Only override a bare phase —
+	// a specific reason (ImagePullBackOff, an init failure, a real crash) wins.
+	if podActiveThrashContainer(pod, now) && isPhaseOnlyReason(reason) {
+		return highRestartReason
 	}
 	return reason
 }
@@ -225,6 +292,21 @@ func isPhaseOrCrashReason(reason string) bool {
 	case "Running", "Pending", "Succeeded", "Failed", "Unknown", "",
 		"PodInitializing", "ContainerCreating",
 		"CrashLoopBackOff", "Error":
+		return true
+	}
+	return false
+}
+
+// isPhaseOnlyReason is the narrower set the HighRestartCount override may
+// replace: bare lifecycle phases / no-op waiting states only. It deliberately
+// excludes the crash-class reasons (CrashLoopBackOff/Error) and terminal phases
+// (Succeeded/Failed) that isPhaseOrCrashReason allows, so a thrash override can
+// never clobber a real crash or terminal signal — the stable-crashloop check
+// above already owns those.
+func isPhaseOnlyReason(reason string) bool {
+	switch reason {
+	case "Running", "Pending", "Unknown", "",
+		"PodInitializing", "ContainerCreating":
 		return true
 	}
 	return false
@@ -461,6 +543,51 @@ type CronJobProblem struct {
 	Reason    string
 }
 
+// estimateCronMinInterval returns a coarse lower bound on the time between runs
+// of a standard 5-field cron schedule (minute hour dom month dow), plus the
+// common @-macros. It is deliberately approximate — its only job is to keep
+// DetectCronJobProblems from flagging a rare-cadence job (weekly / monthly /
+// quarterly) as "stale" against a flat daily threshold. ok=false for schedules
+// it can't parse; the caller then falls back to the flat threshold.
+func estimateCronMinInterval(schedule string) (time.Duration, bool) {
+	const day = 24 * time.Hour
+	s := strings.TrimSpace(schedule)
+	switch s {
+	case "@yearly", "@annually":
+		return 365 * day, true
+	case "@monthly":
+		return 28 * day, true
+	case "@weekly":
+		return 7 * day, true
+	case "@daily", "@midnight":
+		return day, true
+	case "@hourly":
+		return time.Hour, true
+	}
+	fields := strings.Fields(s)
+	if len(fields) != 5 {
+		return 0, false
+	}
+	hour, dom, month, dow := fields[1], fields[2], fields[3], fields[4]
+	switch {
+	case month != "*":
+		// Constrained to certain months → at most monthly, often far less.
+		return 28 * day, true
+	case dom != "*":
+		// Specific day(s)-of-month → monthly cadence.
+		return 28 * day, true
+	case dow != "*":
+		// Specific day(s)-of-week → weekly is the conservative lower bound.
+		return 7 * day, true
+	case hour != "*" && !strings.HasPrefix(hour, "*/"):
+		// Specific hour(s) each day → daily.
+		return day, true
+	default:
+		// Intra-day cadence (every minute / */n minutes or hours).
+		return time.Hour, true
+	}
+}
+
 // DetectCronJobProblems finds non-suspended CronJobs that haven't run recently.
 func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 	var problems []CronJobProblem
@@ -469,9 +596,18 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 			continue
 		}
+		// Staleness is relative to the schedule's cadence, not a flat day: a
+		// quarterly job that ran on schedule 29 days ago is healthy, not stale.
+		// Floor at 24h so frequent jobs keep the original sensitivity.
+		threshold := 24 * time.Hour
+		if interval, ok := estimateCronMinInterval(cj.Spec.Schedule); ok {
+			if grace := interval + interval/2; grace > threshold {
+				threshold = grace
+			}
+		}
 		if cj.Status.LastScheduleTime != nil {
 			sinceLast := now.Sub(cj.Status.LastScheduleTime.Time)
-			if sinceLast > 24*time.Hour {
+			if sinceLast > threshold {
 				problems = append(problems, CronJobProblem{
 					Name:      cj.Name,
 					Namespace: cj.Namespace,
@@ -479,7 +615,7 @@ func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
 					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
 				})
 			}
-		} else if now.Sub(cj.CreationTimestamp.Time) > 24*time.Hour {
+		} else if now.Sub(cj.CreationTimestamp.Time) > threshold {
 			problems = append(problems, CronJobProblem{
 				Name:      cj.Name,
 				Namespace: cj.Namespace,
