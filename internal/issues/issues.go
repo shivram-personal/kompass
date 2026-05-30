@@ -10,8 +10,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
 // Provider abstracts the data sources Compose needs. Implementations
@@ -414,12 +414,12 @@ func condTypeReason(condType, reason string) string {
 // group-aware consumer (computeIssueSummaryForResource) would silently
 // drop those rows when looking up by canonical group like "apps".
 // Centralised here so the (Kind→Group) map lives in one place across
-// packages (pkg/audit owns the table; this is a pass-through).
+// packages (pkg/resourceid owns the table; this is a pass-through).
 func resolveGroup(group, kind string) string {
 	if group != "" {
 		return group
 	}
-	return bp.GroupForBuiltinKind(kind)
+	return resourceid.GroupForBuiltinKind(kind)
 }
 
 func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {

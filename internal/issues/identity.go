@@ -1,7 +1,7 @@
 package issues
 
 import (
-	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
 
@@ -20,9 +20,9 @@ const (
 )
 
 // resourceKey is the canonical group|kind|namespace|name key, shared with
-// pkg/audit so issue grouping and audit deep-links never drift apart.
+// pkg/resourceid so issue grouping and audit deep-links never drift apart.
 func resourceKey(group, kind, namespace, name string) string {
-	return bp.ResourceKey(group, kind, namespace, name)
+	return resourceid.ResourceKey(group, kind, namespace, name)
 }
 
 // enrichIdentity derives the grouping subject, scope, and deterministic ID for a

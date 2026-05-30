@@ -9,7 +9,7 @@
 //	Tier-2 AppOverlay (declared-key 8-tier precedence, provenance/confidence/conflicts)
 //
 // PLACEMENT NOTE: pkg/subject imports only the canonical-key helper from
-// pkg/audit (ResourceKey). It does NOT import internal/* or pkg/topology (the
+// pkg/resourceid (ResourceKey). It does NOT import internal/* or pkg/topology (the
 // plan's layering rule). The Tier-1 owner walk is parameterized over an
 // OwnerResolver interface that pkg/topology satisfies via walkTopmostOwner (it
 // injects topo/dp/idx); a pure single-pod walk is built in. Tier-2 takes only a
@@ -21,7 +21,7 @@ import (
 	"encoding/hex"
 	"strings"
 
-	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/resourceid"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -74,11 +74,11 @@ type Subject struct {
 }
 
 // Key is the canonical group|kind|namespace|name string for s.Ref — a thin
-// pass-through to pkg/audit.ResourceKey (NOT reinvented). This is the
+// pass-through to pkg/resourceid.ResourceKey (NOT reinvented). This is the
 // groupingKey fed to StableID; sharing it keeps issue grouping and audit
 // deep-links from drifting.
 func (s Subject) Key() string {
-	return bp.ResourceKey(s.Ref.Group, s.Ref.Kind, s.Ref.Namespace, s.Ref.Name)
+	return resourceid.ResourceKey(s.Ref.Group, s.Ref.Kind, s.Ref.Namespace, s.Ref.Name)
 }
 
 // ScopeForKind maps a Kind to its Scope, defaulting to unknown (NOT an error)
@@ -185,7 +185,7 @@ func ResolveSubject(start Ref, owners OwnerResolver, ops OperatorRootHook) Subje
 }
 
 func refKey(r Ref) string {
-	return bp.ResourceKey(r.Group, r.Kind, r.Namespace, r.Name)
+	return resourceid.ResourceKey(r.Group, r.Kind, r.Namespace, r.Name)
 }
 
 // PodOwnerResolver is the built-in single-pod OwnerResolver: walks
