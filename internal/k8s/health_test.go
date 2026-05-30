@@ -115,16 +115,54 @@ func TestClassifyPodHealth(t *testing.T) {
 			want: "healthy",
 		},
 		{
-			name: "high restart count",
+			name: "recovered: high restart count but now ready and stable is healthy",
 			pod: &corev1.Pod{
 				Status: corev1.PodStatus{
 					Phase: corev1.PodRunning,
 					ContainerStatuses: []corev1.ContainerStatus{
-						{Ready: true, RestartCount: 10},
+						{Ready: true, RestartCount: 10, State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-2 * time.Hour))}}},
+					},
+				},
+			},
+			want: "healthy",
+		},
+		{
+			name: "actively thrashing: high restarts, not ready, churning now is warning",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Ready:        false,
+							RestartCount: 1659,
+							State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-30 * time.Minute))}},
+							LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+								Reason: "Completed", ExitCode: 0, FinishedAt: metav1.NewTime(now.Add(-30 * time.Second)),
+							}},
+						},
 					},
 				},
 			},
 			want: "warning",
+		},
+		{
+			name: "stale restarts: not ready but last restart was days ago is healthy",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					ContainerStatuses: []corev1.ContainerStatus{
+						{
+							Ready:        false,
+							RestartCount: 200,
+							State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-72 * time.Hour))}},
+							LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+								Reason: "Completed", ExitCode: 0, FinishedAt: metav1.NewTime(now.Add(-72 * time.Hour)),
+							}},
+						},
+					},
+				},
+			},
+			want: "healthy",
 		},
 	}
 

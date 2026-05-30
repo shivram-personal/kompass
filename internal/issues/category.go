@@ -35,6 +35,11 @@ const (
 	CategoryLivenessProbeFail Category = "liveness_probe_failed"
 	CategoryReadinessFailed   Category = "readiness_failed"
 	CategoryWorkloadDegraded  Category = "workload_degraded"
+	// CategoryHighRestart is a container with a high cumulative restart count
+	// that is still unhealthy and churning, but isn't a classic
+	// CrashLoopBackOff (e.g. readiness-probe churn with clean exits). Sits
+	// alongside CategoryCrashLoop rather than replacing it.
+	CategoryHighRestart Category = "high_restart"
 	// batch workload failures (Job/CronJob) — runtime-stage failures of
 	// one-shot / scheduled workloads.
 	CategoryJobFailed     Category = "job_failed"
@@ -102,6 +107,7 @@ var categoryGroup = map[Category]Group{
 	CategoryLivenessProbeFail:        GroupRuntime,
 	CategoryReadinessFailed:          GroupRuntime,
 	CategoryWorkloadDegraded:         GroupRuntime,
+	CategoryHighRestart:              GroupRuntime,
 	CategoryJobFailed:                GroupRuntime,
 	CategoryCronJobFailed:            GroupRuntime,
 	CategoryMissingConfigRef:         GroupConfiguration,
@@ -194,6 +200,12 @@ func Classify(in classifyInput) Category {
 		case strings.Contains(g, "cert-manager.io"):
 			return CategoryCertificateNotReady
 		case strings.Contains(g, "argoproj.io") || strings.Contains(g, "fluxcd"):
+			// Argo Rollout is a progressive-delivery workload, not a sync
+			// operation — a stalled Rollout is rollout_stalled, not a GitOps
+			// sync failure. Everything else in these groups is reconciler sync.
+			if in.Kind == "Rollout" {
+				return CategoryRolloutStalled
+			}
 			return CategoryGitOpsSyncFailed
 		default:
 			return CategoryOperatorConditionFail
@@ -220,6 +232,8 @@ func classifyProblem(in classifyInput) Category {
 			return CategoryImagePullFailed
 		case "CrashLoopBackOff":
 			return CategoryCrashLoop
+		case "HighRestartCount":
+			return CategoryHighRestart
 		case "CreateContainerConfigError", "Pending", "ContainerCreating":
 			return CategoryContainerWaiting
 		case "Error", "Failed":
@@ -279,6 +293,22 @@ func classifyProblem(in classifyInput) Category {
 		switch in.Reason {
 		case "stale", "never-scheduled":
 			return CategoryCronJobFailed
+		}
+		return CategoryUnknown
+
+	case "Application":
+		// ArgoCD Application health/sync failure from DetectGitOpsProblems.
+		// Gate on group so a same-named CRD from another controller can't be
+		// force-fit into the GitOps bucket.
+		if strings.Contains(strings.ToLower(in.APIGroup), "argoproj.io") {
+			return CategoryGitOpsSyncFailed
+		}
+		return CategoryUnknown
+
+	case "Kustomization", "HelmRelease":
+		// Flux reconciler failure from DetectGitOpsProblems.
+		if strings.Contains(strings.ToLower(in.APIGroup), "fluxcd") {
+			return CategoryGitOpsSyncFailed
 		}
 		return CategoryUnknown
 	}

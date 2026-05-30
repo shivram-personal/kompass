@@ -20,6 +20,11 @@ import (
 type Provider interface {
 	DetectProblems(namespaces []string) []k8s.Problem
 	DetectCAPIProblems(namespaces []string) []k8s.Problem
+	// DetectGitOpsProblems returns failing ArgoCD Applications and Flux
+	// Kustomizations/HelmReleases — the reconciler-health failure class the
+	// generic CRD-condition fallback structurally can't read (Argo encodes
+	// health/sync outside status.conditions). Surfaced under SourceProblem.
+	DetectGitOpsProblems(namespaces []string) []k8s.Problem
 	// DetectMissingRefs returns dangling-reference problems (Pod→missing
 	// PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, etc.)
 	// plus webhook-config refs. Surfaced under SourceMissingRef so agents
@@ -101,6 +106,9 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		out = append(out, fromProblem(p, now, SourceProblem))
 	}
 	for _, p := range p.DetectCAPIProblems(f.Namespaces) {
+		out = append(out, fromProblem(p, now, SourceProblem))
+	}
+	for _, p := range p.DetectGitOpsProblems(f.Namespaces) {
 		out = append(out, fromProblem(p, now, SourceProblem))
 	}
 
@@ -211,11 +219,11 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 	}
 	var out []Issue
 	for _, gvr := range gvrs {
-		if isCuratedCRDGroup(gvr.Group) {
-			continue
-		}
 		kind := p.KindForGVR(gvr)
 		if kind == "" {
+			continue
+		}
+		if isCuratedCRDKind(gvr.Group, kind) {
 			continue
 		}
 		// applyFilters runs after Compose returns — but on hot paths that
@@ -331,6 +339,27 @@ func isCuratedCRDGroup(group string) bool {
 		"infrastructure.cluster.x-k8s.io",
 		"bootstrap.cluster.x-k8s.io":
 		return true
+	}
+	return false
+}
+
+// isCuratedCRDKind reports whether a curated detector already owns this
+// (group, kind), so the generic CRD fallback must skip it to avoid a
+// double-report. CAPI groups are curated wholesale; the GitOps groups are
+// curated only for the specific kinds DetectGitOpsProblems handles —
+// sibling kinds (e.g. argoproj.io Rollout, fluxcd GitRepository) still flow
+// through the generic path, which is their only coverage.
+func isCuratedCRDKind(group, kind string) bool {
+	if isCuratedCRDGroup(group) {
+		return true
+	}
+	switch group {
+	case "argoproj.io":
+		return kind == "Application"
+	case "kustomize.toolkit.fluxcd.io":
+		return kind == "Kustomization"
+	case "helm.toolkit.fluxcd.io":
+		return kind == "HelmRelease"
 	}
 	return false
 }
@@ -464,6 +493,7 @@ func subjectRef(i Issue) Ref {
 // "50 pods = 1 row".
 var childCategories = map[Category]bool{
 	CategoryCrashLoop:           true,
+	CategoryHighRestart:         true,
 	CategoryImagePullFailed:     true,
 	CategoryOOMKilled:           true,
 	CategoryContainerWaiting:    true,

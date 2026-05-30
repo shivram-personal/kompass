@@ -244,13 +244,23 @@ func DetectProblems(cache *ResourceCache, namespace string) []Problem {
 				// its workload to apply). The "0/N selected but 0 ready"
 				// case below stays critical — that's a real routing break
 				// because the workload is up but unhealthy.
+				reason := "Selector matches no pods"
+				message := selectorMessage(svc.Spec.Selector)
+				// Distinguish the deliberate scale-to-0 case (managed-prometheus
+				// components disabled, antrea on Autopilot, dormant staging) from
+				// a genuinely orphaned selector. Both stay warning, but an honest
+				// reason keeps the row from reading as a routing fault.
+				if scaledToZeroBackingWorkload(cache, svc) {
+					reason = "Backing workload scaled to 0"
+					message = "selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas"
+				}
 				problems = append(problems, Problem{
 					Kind:            "Service",
 					Namespace:       svc.Namespace,
 					Name:            svc.Name,
 					Severity:        "warning",
-					Reason:          "Selector matches no pods",
-					Message:         selectorMessage(svc.Spec.Selector),
+					Reason:          reason,
+					Message:         message,
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
@@ -495,6 +505,36 @@ func podsMatchingService(svc *corev1.Service, pods []*corev1.Pod) []*corev1.Pod 
 		}
 	}
 	return out
+}
+
+// scaledToZeroBackingWorkload reports whether the Service's selector matches a
+// Deployment or StatefulSet that is intentionally scaled to 0 replicas. Such a
+// Service has no endpoints by design (a disabled managed component, a dormant
+// environment), which is a different — benign — state than a selector that
+// matches nothing in the cluster. Only called on the rare zero-endpoint branch,
+// so the per-Service workload scan is not a hot path.
+func scaledToZeroBackingWorkload(cache *ResourceCache, svc *corev1.Service) bool {
+	if cache == nil || len(svc.Spec.Selector) == 0 {
+		return false
+	}
+	sel := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
+	if dl := cache.Deployments(); dl != nil {
+		deps, _ := dl.Deployments(svc.Namespace).List(labels.Everything())
+		for _, d := range deps {
+			if d.Spec.Replicas != nil && *d.Spec.Replicas == 0 && sel.Matches(labels.Set(d.Spec.Template.Labels)) {
+				return true
+			}
+		}
+	}
+	if sl := cache.StatefulSets(); sl != nil {
+		stss, _ := sl.StatefulSets(svc.Namespace).List(labels.Everything())
+		for _, s := range stss {
+			if s.Spec.Replicas != nil && *s.Spec.Replicas == 0 && sel.Matches(labels.Set(s.Spec.Template.Labels)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isPodReadyForProblem(pod *corev1.Pod) bool {
@@ -834,4 +874,220 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 	}
 
 	return problems
+}
+
+const (
+	argoGroup   = "argoproj.io"
+	fluxKustGrp = "kustomize.toolkit.fluxcd.io"
+	fluxHelmGrp = "helm.toolkit.fluxcd.io"
+)
+
+// DetectGitOpsProblems surfaces failing GitOps reconcilers — ArgoCD Applications
+// and Flux Kustomizations/HelmReleases — that the generic CRD-condition fallback
+// structurally misses. Argo encodes health and sync in dedicated status
+// sub-objects (status.health.status, status.sync.status) rather than as
+// status.conditions[type=Ready] entries, so FindFalseCondition never sees a
+// Degraded/Missing/OutOfSync app; and Argo "ComparisonError" lives only in
+// status.conditions[].type (no status=False). This detector reads each
+// controller's real shape. Wired like DetectCAPIProblems; detectGenericCRDIssues
+// skips exactly the kinds handled here (isCuratedCRDKind) so there is no
+// double-report, while leaving sibling kinds (e.g. Argo Rollout) to the generic
+// path.
+func DetectGitOpsProblems(dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Problem {
+	if dynamicCache == nil || discovery == nil {
+		return nil
+	}
+	now := time.Now()
+	list := func(kind, group string) []*unstructured.Unstructured {
+		gvr, ok := discovery.GetGVRWithGroup(kind, group)
+		if !ok {
+			return nil // controller not installed — expected
+		}
+		items, err := dynamicCache.List(gvr, namespace)
+		if err != nil {
+			log.Printf("[gitops-problems] Failed to list %s.%s: %v", kind, group, err)
+			return nil
+		}
+		return items
+	}
+
+	var problems []Problem
+	problems = append(problems, detectArgoAppProblems(list("Application", argoGroup), now)...)
+	problems = append(problems, detectFluxProblems(list("Kustomization", fluxKustGrp), "Kustomization", fluxKustGrp, now)...)
+	problems = append(problems, detectFluxProblems(list("HelmRelease", fluxHelmGrp), "HelmRelease", fluxHelmGrp, now)...)
+	return problems
+}
+
+func gitopsProblem(kind, group, ns, name, severity, reason, message string, age time.Duration) Problem {
+	return Problem{
+		Kind:            kind,
+		Group:           group,
+		Namespace:       ns,
+		Name:            name,
+		Severity:        severity,
+		Reason:          reason,
+		Message:         message,
+		Age:             FormatAge(age),
+		AgeSeconds:      int64(age.Seconds()),
+		Duration:        FormatAge(age),
+		DurationSeconds: int64(age.Seconds()),
+	}
+}
+
+// detectArgoAppProblems reads ArgoCD Application health/sync. Precision gates,
+// all load-bearing (a manual or suspended app legitimately sits OutOfSync/Missing
+// and must NOT flag): skip Suspended/Progressing health and an in-flight sync
+// (operationState.phase=Running); flag Degraded regardless of policy (live
+// resources are unhealthy); flag Missing/OutOfSync only for auto-synced apps; and
+// always flag a ComparisonError/InvalidSpecError condition (the sync=Unknown
+// app-path-not-found case the generic path also can't see). One row per app,
+// most-specific cause first.
+func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []Problem {
+	var out []Problem
+	for _, app := range apps {
+		ns, name := app.GetNamespace(), app.GetName()
+		age := now.Sub(app.GetCreationTimestamp().Time)
+		health, _, _ := unstructured.NestedString(app.Object, "status", "health", "status")
+		sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
+		phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+
+		if strings.EqualFold(health, "Suspended") || strings.EqualFold(health, "Progressing") || strings.EqualFold(phase, "Running") {
+			continue
+		}
+
+		if ct, msg, ok := argoErrorCondition(app); ok {
+			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "high", ct, msg, age))
+			continue
+		}
+		if strings.EqualFold(health, "Degraded") {
+			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "critical",
+				"HealthDegraded", "Application health is Degraded (managed resources are unhealthy)", age))
+			continue
+		}
+		automated := argoIsAutomated(app)
+		if strings.EqualFold(health, "Missing") && automated {
+			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "high",
+				"HealthMissing", "auto-synced Application's managed resources are missing from the cluster", age))
+			continue
+		}
+		if strings.EqualFold(sync, "OutOfSync") && automated {
+			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "high",
+				"OutOfSync", "auto-synced Application has drifted from the desired manifests", age))
+		}
+	}
+	return out
+}
+
+// argoIsAutomated reports whether spec.syncPolicy.automated is present — i.e. the
+// app is expected to self-heal, so OutOfSync/Missing is a real failure rather
+// than an operator who simply hasn't synced a manual app yet.
+func argoIsAutomated(app *unstructured.Unstructured) bool {
+	_, found, _ := unstructured.NestedMap(app.Object, "spec", "syncPolicy", "automated")
+	return found
+}
+
+// argoErrorCondition returns the first status.conditions entry whose type names
+// an error (ComparisonError / InvalidSpecError / SyncError). Argo writes these
+// as {type, message} without a status field, so FindFalseCondition can't match
+// them.
+func argoErrorCondition(app *unstructured.Unstructured) (condType, message string, found bool) {
+	conds, ok, _ := unstructured.NestedSlice(app.Object, "status", "conditions")
+	if !ok {
+		return "", "", false
+	}
+	for _, c := range conds {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		ct, _ := cm["type"].(string)
+		if strings.Contains(ct, "Error") {
+			msg, _ := cm["message"].(string)
+			return ct, msg, true
+		}
+	}
+	return "", "", false
+}
+
+// detectFluxProblems flags Flux Kustomizations/HelmReleases whose Ready condition
+// is False for a genuine (non-in-progress) reason. Unlike the shared
+// packages.IsTransientConditionReason set used for health display, this uses a
+// NARROW in-progress set so genuinely-stuck states it treats as transient
+// (ArtifactFailed, ChartNotReady) DO surface as issues. Skips suspended objects
+// and stale-generation conditions (controller hasn't observed the current spec).
+func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, now time.Time) []Problem {
+	var out []Problem
+	for _, obj := range items {
+		if suspend, ok, _ := unstructured.NestedBool(obj.Object, "spec", "suspend"); ok && suspend {
+			continue
+		}
+		reason, msg, since, ok := readyFalseCondition(obj, now)
+		if !ok || isGitOpsInProgressReason(reason) {
+			continue
+		}
+		// status.conditions stale relative to spec → mid-reconcile, not failed.
+		if gen := obj.GetGeneration(); gen > 0 {
+			if observed, ok, _ := unstructured.NestedInt64(obj.Object, "status", "observedGeneration"); ok && observed > 0 && observed < gen {
+				continue
+			}
+		}
+		age := now.Sub(obj.GetCreationTimestamp().Time)
+		d := since
+		if d == 0 {
+			d = age
+		}
+		displayReason := reason
+		if displayReason == "" {
+			displayReason = "Ready=False"
+		}
+		p := gitopsProblem(kind, group, obj.GetNamespace(), obj.GetName(), "high", displayReason, msg, age)
+		p.DurationSeconds = int64(d.Seconds())
+		p.Duration = FormatAge(d)
+		out = append(out, p)
+	}
+	return out
+}
+
+// readyFalseCondition returns the reason/message/age of a status.conditions entry
+// of type Ready with status False.
+func readyFalseCondition(obj *unstructured.Unstructured, now time.Time) (reason, message string, since time.Duration, found bool) {
+	conds, ok, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	if !ok {
+		return "", "", 0, false
+	}
+	for _, c := range conds {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := cm["type"].(string); t != "Ready" {
+			continue
+		}
+		if s, _ := cm["status"].(string); s != "False" {
+			return "", "", 0, false
+		}
+		r, _ := cm["reason"].(string)
+		m, _ := cm["message"].(string)
+		var dur time.Duration
+		if ts, _ := cm["lastTransitionTime"].(string); ts != "" {
+			if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
+				dur = now.Sub(parsed)
+			}
+		}
+		return r, m, dur, true
+	}
+	return "", "", 0, false
+}
+
+// isGitOpsInProgressReason is the NARROW set of Flux/Argo condition reasons that
+// mean "still reconciling", deliberately smaller than the health-display
+// transient set: it omits ArtifactFailed/ChartNotReady so those stuck states
+// surface as issues here while staying soft in the health view.
+func isGitOpsInProgressReason(r string) bool {
+	switch r {
+	case "Progressing", "Reconciling", "ReconciliationInProgress",
+		"DependencyNotReady", "Pending", "InProgress", "Initializing":
+		return true
+	}
+	return false
 }

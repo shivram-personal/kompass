@@ -71,6 +71,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   liveness_probe_failed: 'Liveness probe failing',
   readiness_failed: 'Readiness failing',
   workload_degraded: 'Workload degraded',
+  high_restart: 'High restart count',
   missing_config_ref: 'Missing reference',
   service_no_endpoints: 'No endpoints',
   ingress_backend_missing: 'Ingress backend missing',

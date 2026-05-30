@@ -94,6 +94,20 @@ func (p *CacheProvider) DetectCAPIProblems(namespaces []string) []k8s.Problem {
 	return flattenNamespacedProblems(perNs)
 }
 
+func (p *CacheProvider) DetectGitOpsProblems(namespaces []string) []k8s.Problem {
+	if p.dynamic == nil || p.discovery == nil {
+		return nil
+	}
+	if len(namespaces) == 0 {
+		return k8s.DetectGitOpsProblems(p.dynamic, p.discovery, "")
+	}
+	perNs := make([][]k8s.Problem, 0, len(namespaces))
+	for _, ns := range namespaces {
+		perNs = append(perNs, k8s.DetectGitOpsProblems(p.dynamic, p.discovery, ns))
+	}
+	return flattenNamespacedProblems(perNs)
+}
+
 // flattenNamespacedProblems concatenates per-namespace problem lists
 // while dropping cluster-scoped entries (those with empty Namespace).
 //
