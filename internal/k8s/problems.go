@@ -652,45 +652,8 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		return resources
 	}
 
-	// Helper: find a False condition and return its reason + message.
-	// Checks v1beta2 conditions first (status.v1beta2.conditions), then v1beta1 (status.conditions).
-	findFalseCondition := func(obj *unstructured.Unstructured, condTypes ...string) (condType, reason, message string, since time.Duration, found bool) {
-		condSlices := [][]any{}
-		if v1b2, ok, _ := unstructured.NestedSlice(obj.Object, "status", "v1beta2", "conditions"); ok {
-			condSlices = append(condSlices, v1b2)
-		}
-		if v1b1, ok, _ := unstructured.NestedSlice(obj.Object, "status", "conditions"); ok {
-			condSlices = append(condSlices, v1b1)
-		}
-		for _, conditions := range condSlices {
-			for _, c := range conditions {
-				cond, ok := c.(map[string]any)
-				if !ok {
-					continue
-				}
-				ct, _ := cond["type"].(string)
-				status, _ := cond["status"].(string)
-				if status != "False" {
-					continue
-				}
-				// Check if this condition type is in our watch list
-				for _, wanted := range condTypes {
-					if ct == wanted {
-						r, _ := cond["reason"].(string)
-						m, _ := cond["message"].(string)
-						var dur time.Duration
-						if ts, _ := cond["lastTransitionTime"].(string); ts != "" {
-							if t, err := time.Parse(time.RFC3339, ts); err == nil {
-								dur = now.Sub(t)
-							}
-						}
-						return ct, r, m, dur, true
-					}
-				}
-			}
-		}
-		return "", "", "", 0, false
-	}
+	// Shared condition reader: conditions.FindFalseCondition (one source of truth
+	// across the CAPI/GitOps detectors + the issues generic fallback).
 
 	const capiGroup = "cluster.x-k8s.io"
 	const capiCPGroup = "controlplane.cluster.x-k8s.io"
@@ -714,7 +677,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		}
 
 		// Condition-based: InfrastructureReady, ControlPlaneReady, Ready, TopologyReconciled
-		if ct, reason, msg, dur, ok := findFalseCondition(cl,
+		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(cl,
 			"Ready", "InfrastructureReady", "ControlPlaneReady", "TopologyReconciled",
 		); ok {
 			severity := "high"
@@ -748,7 +711,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		// Phase-based: Failed
 		if strings.EqualFold(phase, "failed") {
 			// Include the condition message for richer context
-			_, _, msg, _, _ := findFalseCondition(m, "Ready", "InfrastructureReady", "BootstrapReady")
+			_, _, msg, _, _ := conditions.FindFalseCondition(m, "Ready", "InfrastructureReady", "BootstrapReady")
 			problems = append(problems, Detection{
 				Kind: "Machine", Namespace: m.GetNamespace(), Name: m.GetName(), Group: capiGroup,
 				Severity: "critical", Reason: "Machine in Failed phase", Message: msg,
@@ -760,7 +723,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 
 		// Phase-based: stuck Provisioning > 10m
 		if strings.EqualFold(phase, "provisioning") && ageDur > 10*time.Minute {
-			_, reason, msg, _, _ := findFalseCondition(m, "InfrastructureReady", "BootstrapReady")
+			_, reason, msg, _, _ := conditions.FindFalseCondition(m, "InfrastructureReady", "BootstrapReady")
 			displayReason := fmt.Sprintf("Stuck provisioning for %s", FormatAge(ageDur))
 			if reason != "" {
 				displayReason += " (" + reason + ")"
@@ -776,7 +739,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 
 		// Condition-based: BootstrapReady=False, NodeHealthy=False, InfrastructureReady=False
 		// (catches problems that phase alone misses, e.g. Running phase but NodeHealthy=False)
-		if ct, reason, msg, dur, ok := findFalseCondition(m,
+		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(m,
 			"BootstrapReady", "NodeHealthy", "InfrastructureReady",
 		); ok {
 			severity := "high"
@@ -809,7 +772,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		if desired > 0 && ready < desired {
 			ageDur := now.Sub(md.GetCreationTimestamp().Time)
 			if ageDur > 5*time.Minute {
-				_, reason, msg, _, _ := findFalseCondition(md, "Ready", "Available")
+				_, reason, msg, _, _ := conditions.FindFalseCondition(md, "Ready", "Available")
 				displayReason := fmt.Sprintf("%d/%d machines ready", ready, desired)
 				if reason != "" {
 					displayReason += " (" + reason + ")"
@@ -832,7 +795,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		desired, _, _ := unstructured.NestedInt64(kcp.Object, "spec", "replicas")
 		ready, _, _ := unstructured.NestedInt64(kcp.Object, "status", "readyReplicas")
 
-		if ct, reason, msg, dur, ok := findFalseCondition(kcp,
+		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(kcp,
 			"Ready", "Available", "CertificatesAvailable", "MachinesReady",
 		); ok {
 			severity := "critical"
@@ -1033,7 +996,7 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 		if suspend, ok, _ := unstructured.NestedBool(obj.Object, "spec", "suspend"); ok && suspend {
 			continue
 		}
-		reason, msg, since, ok := readyFalseCondition(obj, now)
+		_, reason, msg, since, ok := conditions.FindFalseCondition(obj, "Ready")
 		if !ok || conditions.IsInProgressForIssues(reason) {
 			continue
 		}
@@ -1058,35 +1021,4 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 		out = append(out, p)
 	}
 	return out
-}
-
-// readyFalseCondition returns the reason/message/age of a status.conditions entry
-// of type Ready with status False.
-func readyFalseCondition(obj *unstructured.Unstructured, now time.Time) (reason, message string, since time.Duration, found bool) {
-	conds, ok, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
-	if !ok {
-		return "", "", 0, false
-	}
-	for _, c := range conds {
-		cm, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		if t, _ := cm["type"].(string); t != "Ready" {
-			continue
-		}
-		if s, _ := cm["status"].(string); s != "False" {
-			return "", "", 0, false
-		}
-		r, _ := cm["reason"].(string)
-		m, _ := cm["message"].(string)
-		var dur time.Duration
-		if ts, _ := cm["lastTransitionTime"].(string); ts != "" {
-			if parsed, err := time.Parse(time.RFC3339, ts); err == nil {
-				dur = now.Sub(parsed)
-			}
-		}
-		return r, m, dur, true
-	}
-	return "", "", 0, false
 }

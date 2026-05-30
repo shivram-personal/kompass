@@ -268,7 +268,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			items = its
 		}
 		for _, u := range items {
-			condType, reason, msg, since, ok := FindFalseCondition(u)
+			condType, reason, msg, since, ok := conditions.FindFalseCondition(u)
 			if !ok {
 				continue
 			}
