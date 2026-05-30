@@ -251,8 +251,7 @@ func isTransientFluxReason(r string) bool {
 // transientConditionReasons is the canonical set of controller condition
 // reasons that mean "still reconciling / not done yet", NOT "failed". A False
 // Ready/Available condition carrying one of these is an in-progress object, not
-// a broken one — surfacing it as a warning is the CRD-condition noise floor
-// (Issues GA-blocker #5).
+// a broken one — surfacing it as a warning is the CRD-condition noise floor.
 //
 // Single source of truth shared by the GitOps health mapping here and the
 // generic CRD issue detector (internal/issues), so the two paths can't drift:

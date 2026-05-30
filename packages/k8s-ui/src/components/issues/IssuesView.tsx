@@ -11,7 +11,7 @@ import {
   groupLabel,
 } from './severity';
 import {
-  ISSUE_SEVERITY_RANK,
+  compareIssues,
   memberRef,
   subjectRef,
   type Issue,
@@ -48,27 +48,9 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const sorted = useMemo(() => {
-    // Order by STABLE keys only so the queue doesn't reshuffle under the host's
-    // auto-refresh. severity → onset (first_seen is fixed for the life of an
-    // issue; last_seen bumps to compose-time every poll, so sorting by it makes
-    // same-severity rows jump on each refetch) → fully-deterministic identity
-    // tiebreak. last_seen is freshness signal, not sort order.
-    return [...issues].sort((a, b) => {
-      const r = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
-      if (r !== 0) return r;
-      const fa = a.first_seen ?? '';
-      const fb = b.first_seen ?? '';
-      if (fa !== fb) return fb.localeCompare(fa);
-      const c = (a.cluster_name ?? '').localeCompare(b.cluster_name ?? '');
-      if (c !== 0) return c;
-      const ns = (a.namespace ?? '').localeCompare(b.namespace ?? '');
-      if (ns !== 0) return ns;
-      const nm = a.name.localeCompare(b.name);
-      if (nm !== 0) return nm;
-      return a.id.localeCompare(b.id);
-    });
-  }, [issues]);
+  // Stable order keyed on severity → onset → identity (see compareIssues), so
+  // the queue doesn't reshuffle under the host's auto-refresh.
+  const sorted = useMemo(() => [...issues].sort(compareIssues), [issues]);
 
   if (sorted.length === 0) {
     return anyData ? (

@@ -9,9 +9,9 @@ type operatorCRKind struct {
 	Kind  string
 }
 
-// defaultOperatorCRKinds is the curated V1 allowlist (per the plan's open
-// question — start curated, expand later). An operator CR not on this list
-// degrades to the generated workload (raw-always), never hidden.
+// defaultOperatorCRKinds is the curated V1 allowlist — start curated, expand
+// later. An operator CR not on this list degrades to the generated workload
+// (raw-always), never hidden.
 var defaultOperatorCRKinds = map[operatorCRKind]bool{
 	{Group: "postgresql.cnpg.io", Kind: "Cluster"}: true, // CloudNativePG
 	{Group: "kafka.strimzi.io", Kind: "Kafka"}:     true, // Strimzi
@@ -19,11 +19,11 @@ var defaultOperatorCRKinds = map[operatorCRKind]bool{
 	// because their group/kind are unbounded (one CRD per composition).
 }
 
-// crossplaneXRGroupSuffixes are group suffixes that mark a Crossplane composite
-// resource. XR groups are author-defined (e.g. "platform.acme.io"), so an
-// exact-match allowlist can't enumerate them; the curated heuristic recognizes
-// the canonical Crossplane example groups plus the apiextensions group XRDs
-// register under. Kept narrow on purpose — a false positive over-collapses.
+// crossplaneXRGroups is an exact-match allowlist of API groups whose resources
+// are Crossplane composite resources (XRs). Author-defined XR groups (e.g.
+// "platform.acme.io") are unbounded and can't be enumerated, so this matches
+// the apiextensions.crossplane.io group that composed-resource ownerRefs are
+// typed with. Kept narrow on purpose — a false positive over-collapses.
 var crossplaneXRGroups = map[string]bool{
 	"apiextensions.crossplane.io": true,
 }

@@ -47,7 +47,7 @@ func TestClassify(t *testing.T) {
 		{"pvc pending", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "Pending"}, CategoryPVCPending},
 		{"pvc lost is storage", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "Lost"}, CategoryPVCLost},
 
-		// problem / batch (Job/CronJob) — recovered from unknown (GA-blocker #3)
+		// problem / batch (Job/CronJob)
 		{"job failed condition", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "BackoffLimitExceeded"}, CategoryJobFailed},
 		{"job failed fallback", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "Failed"}, CategoryJobFailed},
 		{"job stuck active", classifyInput{Source: SourceProblem, Kind: "Job", Reason: "Running for 3h with no completions"}, CategoryJobFailed},
@@ -78,6 +78,14 @@ func TestClassify(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Classify(tc.in); got != tc.want {
 				t.Errorf("Classify(%+v) = %q, want %q", tc.in, got, tc.want)
+			}
+			// Every category Classify emits must have a group rollup — a category
+			// wired into Classify but missing from categoryGroup rolls up to
+			// GroupUnknown silently. Asserted here, at the (mandatory) Classify
+			// case, because TestGroupOf's map-iteration can't see a category
+			// that's absent from the map.
+			if tc.want != CategoryUnknown && GroupOf(tc.want) == GroupUnknown {
+				t.Errorf("category %q has no categoryGroup rollup (→ GroupUnknown)", tc.want)
 			}
 		})
 	}

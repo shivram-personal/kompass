@@ -26,14 +26,20 @@ const crashLoopReason = "CrashLoopBackOff"
 // container that crashed once and is now running healthily: RestartCount and
 // LastTerminationState persist for the life of the container, so without the
 // recovery guard below a pod that restarted once at startup would read as a
-// crashloop forever. A container Running continuously past the kubelet's max
-// CrashLoopBackOff backoff (5m) has outlived the loop — it recovered. OOMKilled
-// is intentionally excluded — it has its own category/severity path upstream.
+// crashloop forever. Two recovery signals clear it: a container Running
+// continuously past the kubelet's max CrashLoopBackOff backoff (5m) has outlived
+// the loop, and a container whose CURRENT state is a clean exit (Terminated,
+// exit 0) has succeeded — the common init-container-retries-then-completes case,
+// whose failed prior attempt lingers in LastTerminationState. OOMKilled is
+// intentionally excluded — it has its own category/severity path upstream.
 func isStableCrashLoop(cs *corev1.ContainerStatus, now time.Time) bool {
 	if cs.RestartCount == 0 {
 		return false
 	}
 	if r := cs.State.Running; r != nil && !r.StartedAt.IsZero() && now.Sub(r.StartedAt.Time) > 5*time.Minute {
+		return false
+	}
+	if term := cs.State.Terminated; term != nil && term.ExitCode == 0 {
 		return false
 	}
 	t := cs.LastTerminationState.Terminated
@@ -165,7 +171,7 @@ func PodRestartContext(pod *corev1.Pod) (restartCount int32, lastTerminatedReaso
 // init container.
 func PodProblemReason(pod *corev1.Pod) string {
 	reason := podProblemReasonRaw(pod)
-	// Stable-crashloop normalization (monotonicity, GA-blocker #1): a
+	// Stable-crashloop normalization: a
 	// crashlooping container oscillates Waiting("CrashLoopBackOff") → Running
 	// (just restarted) → Terminated → Waiting between polls. On the "Running"
 	// tick the raw walk returns a bare phase ("Running") — which

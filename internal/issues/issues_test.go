@@ -175,7 +175,7 @@ func TestCompose_PodSchedulingWinsOverProblem(t *testing.T) {
 
 func TestCompose_SuppressesWorkloadDegradedWhenChildSymptomExists(t *testing.T) {
 	// A degraded Deployment surfaces the parent workload_degraded row AND its
-	// crashlooping pods. GA-blocker #2: the parent rollup is redundant when a
+	// crashlooping pods. The parent rollup is redundant when a
 	// specific child symptom names the root cause on the same subject — keep
 	// the crashloop, drop the workload_degraded.
 	p := &fakeProvider{
@@ -206,7 +206,7 @@ func TestCompose_SuppressesWorkloadDegradedWhenChildSymptomExists(t *testing.T) 
 }
 
 func TestCompose_KeepsCriticalParentWhenOnlyChildIsWarning(t *testing.T) {
-	// GA-blocker #2 must never DOWNGRADE severity. A critical "0/5 available"
+	// Suppression must never DOWNGRADE severity. A critical "0/5 available"
 	// Deployment whose only child symptom is a warning (pods stuck waiting)
 	// must KEEP the critical parent — suppressing it would silently drop the
 	// incident from critical to warning. The severity gate in
@@ -366,7 +366,7 @@ func TestCompose_GenericCRDConditionFallback(t *testing.T) {
 }
 
 func TestCompose_CRDConditionNoiseFloorSuppression(t *testing.T) {
-	// GA-blocker #5: the generic CRD detector must NOT warn on objects that
+	// The generic CRD detector must NOT warn on objects that
 	// are suspended, mid-reconcile, or whose controller hasn't observed the
 	// current spec — only on genuinely-failed ones. Each subtest stages one
 	// CRD object and asserts whether it surfaces.

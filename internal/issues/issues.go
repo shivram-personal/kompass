@@ -247,7 +247,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 				if !ok {
 					continue
 				}
-				// Noise-floor suppression (GA-blocker #5): a False
+				// Noise-floor suppression: a False
 				// Ready/Available on an object that is suspended, still
 				// reconciling, or whose controller hasn't yet observed the
 				// current spec is NOT a failure — it's in-flight. Emitting a

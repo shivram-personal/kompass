@@ -132,3 +132,26 @@ export function subjectRef(issue: Issue): IssueResourceRef {
 export function memberRef(issue: Issue, member: IssueResourceRef): IssueResourceRef {
   return { ...member, cluster_id: issue.cluster_id };
 }
+
+/**
+ * compareIssues is the queue's stable sort order (extracted from IssuesView so
+ * it can be unit-tested). Severity first (critical before warning), then ONSET
+ * — first_seen DESC, deliberately NOT last_seen: last_seen bumps to compose-time
+ * on every poll, so sorting by it would reshuffle same-severity rows on each
+ * refetch. The remaining keys (cluster → namespace → name → id) are a fully
+ * deterministic tiebreak so the order never churns under auto-refresh.
+ */
+export function compareIssues(a: Issue, b: Issue): number {
+  const r = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
+  if (r !== 0) return r;
+  const fa = a.first_seen ?? '';
+  const fb = b.first_seen ?? '';
+  if (fa !== fb) return fb.localeCompare(fa);
+  const c = (a.cluster_name ?? '').localeCompare(b.cluster_name ?? '');
+  if (c !== 0) return c;
+  const ns = (a.namespace ?? '').localeCompare(b.namespace ?? '');
+  if (ns !== 0) return ns;
+  const nm = a.name.localeCompare(b.name);
+  if (nm !== 0) return nm;
+  return a.id.localeCompare(b.id);
+}

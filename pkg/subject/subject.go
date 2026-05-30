@@ -28,8 +28,8 @@ import (
 // ============================= TIER 1: SUBJECT =============================
 
 // Scope is the coarse bucket of a Subject — the UI section AND a hash input to
-// the issue/check ID. Verbatim from internal/issues/identity.go:Scope (moved
-// here so issues + topology share one enum). `unknown` is first-class.
+// the issue/check ID. Shared by issues + topology so they key on one enum.
+// `unknown` is first-class.
 type Scope string
 
 const (
@@ -42,8 +42,8 @@ const (
 )
 
 // Ref is the canonical {group,kind,namespace,name} identity. Field-identical to
-// issues.Ref and topology.ResourceRef so both call sites convert with a struct
-// copy. Group empty => core group.
+// issues.Ref (a plain struct copy converts); topology.ResourceRef orders its
+// fields differently and needs field-by-field conversion. Group empty => core group.
 type Ref struct {
 	Group     string `json:"group,omitempty"`
 	Kind      string `json:"kind"`
@@ -52,8 +52,8 @@ type Ref struct {
 }
 
 // Anchor names the explicit Tier-1 terminal bucket a Subject resolved into. It
-// makes the two edges the plan demands first-class instead of hiding them under
-// "Pod", and records the operator-CR hop.
+// makes the bare-pod and static/mirror-pod terminals first-class instead of
+// hiding them under "Pod", and records the operator-CR hop.
 type Anchor string
 
 const (
@@ -81,9 +81,8 @@ func (s Subject) Key() string {
 	return bp.ResourceKey(s.Ref.Group, s.Ref.Kind, s.Ref.Namespace, s.Ref.Name)
 }
 
-// ScopeForKind maps a Kind to its Scope. Verbatim move of
-// internal/issues/identity.go:scopeForKind — same kind set, same unknown-default
-// (NOT an error). Exported so checks can reuse it.
+// ScopeForKind maps a Kind to its Scope, defaulting to unknown (NOT an error)
+// for unrecognized kinds. Exported so checks can reuse it.
 func ScopeForKind(kind string) Scope {
 	switch kind {
 	case "Pod", "Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob":
@@ -249,19 +248,12 @@ func StripReplicaSetHash(name string) string {
 
 // ============================ DETERMINISTIC IDs ============================
 
-// IssueID is the EXACT move of internal/issues/identity.go:issueID — sha256 of
-// scope + "\x00" + groupingKey + "\x00" + category, truncated [:8], hex.
-// PRESERVED BYTE-FOR-BYTE (any change re-keys every issue). category passed as
+// IssueID is sha256 of scope + "\x00" + groupingKey + "\x00" + category,
+// truncated [:8], hex. The exact byte layout is load-bearing: any change
+// re-keys every existing issue, so it must not be altered. category passed as
 // string.
 func IssueID(scope Scope, groupingKey, category string) string {
 	sum := sha256.Sum256([]byte(string(scope) + "\x00" + groupingKey + "\x00" + category))
-	return hex.EncodeToString(sum[:8])
-}
-
-// CheckID is the parallel derivation the plan specs (hash(scope,subject_key,
-// checkID)); identical body, different discriminator.
-func CheckID(scope Scope, groupingKey, checkID string) string {
-	sum := sha256.Sum256([]byte(string(scope) + "\x00" + groupingKey + "\x00" + checkID))
 	return hex.EncodeToString(sum[:8])
 }
 

@@ -138,8 +138,8 @@ func TestClassifyPodHealth(t *testing.T) {
 	}
 }
 
-// TestClassifyPodHealth_StableCrashLoopAcrossPhases is the GA-blocker #1
-// monotonicity pin. A crashlooping container's instantaneous State flaps
+// TestClassifyPodHealth_StableCrashLoopAcrossPhases is the crashloop-monotonicity
+// pin. A crashlooping container's instantaneous State flaps
 // Waiting → Running → Terminated → Waiting poll-to-poll, but its stable
 // history fields (RestartCount + LastTerminationState) don't. ClassifyPodHealth
 // and PodProblemReason must read the stable fields, so {severity, reason} stay
@@ -260,6 +260,27 @@ func TestClassifyPodHealth_RecoveredAfterCrashIsHealthy(t *testing.T) {
 	looping.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.NewTime(now.Add(-30 * time.Second))
 	if got := ClassifyPodHealth(looping, now); got != "error" {
 		t.Errorf("just-restarted crashloop (Running 30s) = %q, want error", got)
+	}
+
+	// An init container that failed once then completed (current state
+	// Terminated exit 0) keeps RestartCount>0 + a crash LastTerminationState for
+	// the pod's life. With a healthy Running main container the pod is healthy —
+	// the clean-completion recovery guard must not let the stale init history
+	// paint it red (the common init-waits-on-dependency-then-succeeds case).
+	completedInit := &corev1.Pod{Status: corev1.PodStatus{
+		Phase: corev1.PodRunning,
+		InitContainerStatuses: []corev1.ContainerStatus{{
+			RestartCount:         1,
+			State:                corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "Completed", ExitCode: 0}},
+			LastTerminationState: crash,
+		}},
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Ready: true,
+			State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-10 * time.Minute))}},
+		}},
+	}}
+	if got := ClassifyPodHealth(completedInit, now); got != "healthy" {
+		t.Errorf("retried-then-completed init + healthy main = %q, want healthy", got)
 	}
 }
 

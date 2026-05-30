@@ -284,6 +284,6 @@ func classifyProblem(in classifyInput) Category {
 	}
 
 	// The CAPI kinds (Cluster/Machine/MachineDeployment/…) have no category
-	// yet — see the taxonomy gaps noted in ISSUES_PLAN.
+	// yet, so they fall through to unknown rather than being force-fit.
 	return CategoryUnknown
 }

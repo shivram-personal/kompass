@@ -9,8 +9,8 @@ import (
 
 // ============================= TIER 2: APP OVERLAY =============================
 
-// GitOps / Helm signal keys. Tiers 1-5 are the consolidation of
-// pkg/topology/managedby.go; the spellings are sourced verbatim from there.
+// GitOps / Helm signal keys. Tiers 1-5 consolidate the signal keys that
+// pkg/topology/managedby.go reads.
 const (
 	argoTrackingIDAnnotation = "argocd.argoproj.io/tracking-id"
 	argoInstanceLabel        = "argocd.argoproj.io/instance"
@@ -26,9 +26,9 @@ const (
 	bareAppLabel = "app"
 )
 
-// API groups for the synthesized manager refs (tiers 1-5). Preserved verbatim
-// from managedby.go — the {HelmRelease,Group:""} native-Helm sentinel that
-// resourcecontext/summary.go:sourceForOwner keys "helm" off MUST NOT change.
+// API groups for the synthesized manager refs (tiers 1-5). The
+// {HelmRelease,Group:""} native-Helm sentinel that summary.go:sourceForOwner
+// keys "helm" off MUST NOT change.
 const (
 	argoApplicationGroup = "argoproj.io"
 	fluxKustomizeGroup   = "kustomize.toolkit.fluxcd.io"
@@ -37,9 +37,9 @@ const (
 
 // Tier is the 8-tier precedence rank of the winning app signal. Tiers 1-5 are
 // the CONSOLIDATED managedby.go precedence, in its native order (argo-instance
-// #4, Helm-release #5 — matching managedby.go AND the master plan's tier table).
-// The locked rule is "Helm ranks above the app.kubernetes.io label tiers (6-8)",
-// NOT above Argo. Tiers 6-8 are NET-NEW.
+// #4, Helm-release #5 — matching managedby.go). The locked rule is "Helm ranks
+// above the app.kubernetes.io label tiers (6-8)", NOT above Argo. Tiers 6-8 are
+// NET-NEW.
 type Tier int
 
 const (
@@ -199,7 +199,7 @@ func ResolveOverlay(obj metav1.Object, allowBareApp bool) *AppOverlay {
 //	"<appNamespace>_<appName>:<group>/<kind>:<resourceNs>/<resourceName>" (namespaced)
 //
 // Returns (namespace, name, ok). The legacy single-name form yields an empty
-// namespace. Moved verbatim from managedby.go:133.
+// namespace.
 func parseArgoTrackingID(value string) (namespace, name string, ok bool) {
 	firstColon := strings.Index(value, ":")
 	if firstColon < 0 {

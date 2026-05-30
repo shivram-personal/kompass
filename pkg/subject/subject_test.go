@@ -243,3 +243,55 @@ func TestParseArgoTrackingID(t *testing.T) {
 		}
 	}
 }
+
+// TestConfidenceForTier pins every tier→confidence band, including the boundary
+// tiers (Argo-instance #4 / Helm #5 = high/medium edge, name #7 / bare-app #8 =
+// medium/low edge) that the overlay spot-checks don't cover — an off-by-one in
+// the range checks would silently mislabel trust.
+func TestConfidenceForTier(t *testing.T) {
+	cases := []struct {
+		tier Tier
+		want Confidence
+	}{
+		{TierFluxHelmRelease, ConfidenceHigh},
+		{TierFluxKustomize, ConfidenceHigh},
+		{TierArgoTrackingID, ConfidenceHigh},
+		{TierArgoInstance, ConfidenceHigh},
+		{TierHelmRelease, ConfidenceMedium},
+		{TierPartOf, ConfidenceMedium},
+		{TierAppName, ConfidenceMedium},
+		{TierBareApp, ConfidenceLow},
+	}
+	for _, c := range cases {
+		if got := confidenceForTier(c.tier); got != c.want {
+			t.Errorf("confidenceForTier(tier %d) = %q, want %q", c.tier, got, c.want)
+		}
+	}
+}
+
+// TestResolveSubject_CycleTerminates exercises the visited-set guard: a corrupted
+// ownership cycle (a→b→a) must terminate with a stable subject, not hang.
+func TestResolveSubject_CycleTerminates(t *testing.T) {
+	a := Ref{Kind: "Foo", Namespace: "ns", Name: "a"}
+	b := Ref{Kind: "Bar", Namespace: "ns", Name: "b"}
+	owners := fakeOwners{refKey(a): b, refKey(b): a}
+	if got := ResolveSubject(a, nil, owners, nil); got.Ref.Name == "" {
+		t.Errorf("cycle walk produced empty subject: %+v", got)
+	}
+}
+
+// TestResolveSubject_DepthCapStops exercises maxOwnerWalkDepth: a chain longer
+// than the cap must stop without hanging or panicking.
+func TestResolveSubject_DepthCapStops(t *testing.T) {
+	owners := fakeOwners{}
+	var refs []Ref
+	for i := 0; i < 18; i++ { // > maxOwnerWalkDepth (16)
+		refs = append(refs, Ref{Kind: "K", Namespace: "ns", Name: "n" + string(rune('a'+i))})
+	}
+	for i := 0; i < len(refs)-1; i++ {
+		owners[refKey(refs[i])] = refs[i+1]
+	}
+	if got := ResolveSubject(refs[0], nil, owners, nil); got.Ref.Name == "" {
+		t.Errorf("over-cap walk produced empty subject: %+v", got)
+	}
+}
