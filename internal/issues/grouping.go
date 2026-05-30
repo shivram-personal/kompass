@@ -74,7 +74,6 @@ func foldGroup(members []Issue) Issue {
 		LastTerminatedReason: rep.LastTerminatedReason,
 		FirstSeen:            rep.FirstSeen,
 		LastSeen:             rep.LastSeen,
-		Count:                len(members),
 	}
 
 	var refs []Ref
@@ -91,6 +90,11 @@ func foldGroup(members []Issue) Issue {
 		}
 	}
 	sortRefs(refs)
+	// Count is the affected-resource fan-out — the non-subject members under
+	// this subject (the subject is shown separately as the header, not under
+	// "Affected resources"). Matches the UI/TS contract; captured before the
+	// inline-member truncation below so "Showing X of N" stays honest.
+	g.Count = len(refs)
 	g.Affected = affectedOf(refs)
 	if len(refs) > maxInlineMembers {
 		g.MembersTruncated = true

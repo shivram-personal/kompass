@@ -6,9 +6,12 @@ package issues
 // `last_seen > timestamp("2025-01-01T00:00:00Z").getSeconds()` —
 // CEL's int domain is the lowest-friction lingua franca.
 func issueToActivation(i Issue) map[string]any {
-	var lastSeen int64
+	var lastSeen, firstSeen int64
 	if !i.LastSeen.IsZero() {
 		lastSeen = i.LastSeen.Unix()
+	}
+	if !i.FirstSeen.IsZero() {
+		firstSeen = i.FirstSeen.Unix()
 	}
 	return map[string]any{
 		"severity":       string(i.Severity),
@@ -20,12 +23,19 @@ func issueToActivation(i Issue) map[string]any {
 		// `ns` rather than `namespace` — `namespace` is a CEL reserved
 		// identifier and bare references fail at parse time. See
 		// internal/filter.envIssue for the rationale.
-		"ns":        i.Namespace,
-		"name":      i.Name,
-		"reason":    i.Reason,
-		"message":   i.Message,
-		"count":     int64(i.Count),
-		"cluster":   i.Cluster,
-		"last_seen": lastSeen,
+		"ns":      i.Namespace,
+		"name":    i.Name,
+		"reason":  i.Reason,
+		"message": i.Message,
+		"count":   int64(i.Count),
+		"cluster": i.Cluster,
+		// first_seen is the onset (the axis the queue sorts on); last_seen
+		// churns to compose-time every poll, so `last_seen > X` ("older
+		// than…") is near-useless. Both are int unix seconds.
+		"first_seen":             firstSeen,
+		"last_seen":              lastSeen,
+		"grouping_scope":         string(i.GroupingScope),
+		"restart_count":          int64(i.RestartCount),
+		"last_terminated_reason": i.LastTerminatedReason,
 	}
 }

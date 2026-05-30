@@ -72,9 +72,10 @@ func TestGroupIssues_StandalonePodIsOwnSubject(t *testing.T) {
 	if g.Kind != "Pod" || g.Name != "solo" {
 		t.Errorf("subject = %s/%s, want Pod/solo", g.Kind, g.Name)
 	}
-	// No fan-out: the subject is the only resource.
-	if g.Count != 1 || len(g.Members) != 0 || g.Affected.Pods != 0 {
-		t.Errorf("single-resource issue: count=%d members=%d affected.pods=%d, want 1/0/0", g.Count, len(g.Members), g.Affected.Pods)
+	// No fan-out: the subject is the only resource, so the affected-resource
+	// count (non-subject members) is 0.
+	if g.Count != 0 || len(g.Members) != 0 || g.Affected.Pods != 0 {
+		t.Errorf("single-resource issue: count=%d members=%d affected.pods=%d, want 0/0/0", g.Count, len(g.Members), g.Affected.Pods)
 	}
 }
 

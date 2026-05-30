@@ -110,7 +110,11 @@ type Issue struct {
 	FirstSeen     time.Time `json:"first_seen,omitzero"`
 	LastSeen      time.Time `json:"last_seen,omitzero"`
 	Count         int       `json:"count,omitempty"`
-	Owner         Ref       `json:"owner,omitzero"`
+	// Owner is flat-only: it's present on ?view=flat / pre-fold MCP rows so a
+	// consumer can see the resolved top-owner. Grouped rows hoist the owner
+	// into the subject (Kind/Group/Namespace/Name) and leave Owner zero, so
+	// the TS Issue type (which only consumes grouped output) doesn't model it.
+	Owner Ref `json:"owner,omitzero"`
 	// RestartCount + LastTerminatedReason carry Pod crash-debugging
 	// context from k8s.Problem through to issues consumers (MCP `issues`
 	// tool + /api/issues + hub fleet_issues). Populated only for Pod

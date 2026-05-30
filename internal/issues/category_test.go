@@ -85,8 +85,15 @@ func TestClassify(t *testing.T) {
 		{"flux source repo is not sync", classifyInput{Source: SourceCondition, Kind: "GitRepository", APIGroup: "source.toolkit.fluxcd.io", Reason: "Ready: GitOperationFailed"}, CategoryOperatorConditionFail},
 		{"argo non-app CRD is not sync", classifyInput{Source: SourceCondition, Kind: "AppProject", APIGroup: "argoproj.io", Reason: "Ready=False"}, CategoryOperatorConditionFail},
 
-		// remaining gaps → unknown (CAPI kinds)
-		{"capi machine is a gap", classifyInput{Source: SourceProblem, Kind: "Machine", APIGroup: "cluster.x-k8s.io", Reason: "Machine in Failed phase"}, CategoryUnknown},
+		// CAPI: control-plane vs machine layer, gated on the CAPI group.
+		{"capi cluster failed", classifyInput{Source: SourceProblem, Kind: "Cluster", APIGroup: "cluster.x-k8s.io", Reason: "Cluster in Failed phase"}, CategoryControlPlaneNotReady},
+		{"capi control plane not ready", classifyInput{Source: SourceProblem, Kind: "KubeadmControlPlane", APIGroup: "controlplane.cluster.x-k8s.io", Reason: "Ready=False"}, CategoryControlPlaneNotReady},
+		{"capi machine failed", classifyInput{Source: SourceProblem, Kind: "Machine", APIGroup: "cluster.x-k8s.io", Reason: "Machine in Failed phase"}, CategoryMachineNotReady},
+		{"capi machinedeployment", classifyInput{Source: SourceProblem, Kind: "MachineDeployment", APIGroup: "cluster.x-k8s.io", Reason: "Ready=False"}, CategoryMachineNotReady},
+		{"non-capi Cluster kind is not control plane", classifyInput{Source: SourceProblem, Kind: "Cluster", APIGroup: "postgresql.cnpg.io", Reason: "whatever"}, CategoryUnknown},
+		// new pod waiting reasons (bad image tag / container create)
+		{"invalid image name", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "InvalidImageName"}, CategoryImagePullFailed},
+		{"run container error", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "RunContainerError"}, CategoryContainerWaiting},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

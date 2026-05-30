@@ -151,11 +151,8 @@ func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
 	}
 
 	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.State.Waiting != nil {
-			reason := cs.State.Waiting.Reason
-			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" || reason == "CreateContainerConfigError" {
-				return "error"
-			}
+		if cs.State.Waiting != nil && isFatalWaitingReason(cs.State.Waiting.Reason) {
+			return "error"
 		}
 		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
 			return "error"
@@ -167,11 +164,8 @@ func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
 
 	// Init container errors
 	for _, cs := range pod.Status.InitContainerStatuses {
-		if cs.State.Waiting != nil {
-			reason := cs.State.Waiting.Reason
-			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" {
-				return "error"
-			}
+		if cs.State.Waiting != nil && isFatalWaitingReason(cs.State.Waiting.Reason) {
+			return "error"
 		}
 	}
 
@@ -261,6 +255,23 @@ func PodProblemReason(pod *corev1.Pod) string {
 // podProblemReasonRaw is the original phase/state walk: init containers first
 // (they block the pod Pending before main ContainerStatuses populate), then
 // main containers, falling back to the bare phase string.
+// isFatalWaitingReason reports whether a container's Waiting reason is a hard
+// failure that won't self-resolve on its own — as opposed to the transient
+// PodInitializing/ContainerCreating states. InvalidImageName is permanent (a
+// malformed image reference never becomes valid); the *ContainerError family
+// means the container couldn't be created or started (bad command, missing
+// device, runtime rejection). These were silently healthy before, so a typo'd
+// image tag produced no issue row at all.
+func isFatalWaitingReason(reason string) bool {
+	switch reason {
+	case "CrashLoopBackOff", "ImagePullBackOff", "ErrImagePull", "InvalidImageName",
+		"ImageInspectError", "CreateContainerConfigError", "CreateContainerError",
+		"RunContainerError":
+		return true
+	}
+	return false
+}
+
 func podProblemReasonRaw(pod *corev1.Pod) string {
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {

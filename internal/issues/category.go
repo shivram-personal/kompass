@@ -72,6 +72,8 @@ const (
 	CategoryOperatorConditionFail Category = "operator_condition_failed"
 	CategoryGitOpsSyncFailed      Category = "gitops_sync_failed"
 	CategoryWebhookBackendDown    Category = "webhook_backend_down"
+	CategoryControlPlaneNotReady  Category = "control_plane_not_ready"
+	CategoryMachineNotReady       Category = "machine_not_ready"
 )
 
 // CategoryGroup is the coarse rollup over categories — the ~10 buckets used for
@@ -127,6 +129,8 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryOperatorConditionFail:    GroupControlPlane,
 	CategoryGitOpsSyncFailed:         GroupControlPlane,
 	CategoryWebhookBackendDown:       GroupControlPlane,
+	CategoryControlPlaneNotReady:     GroupControlPlane,
+	CategoryMachineNotReady:          GroupControlPlane,
 }
 
 // GroupOf returns the rollup group for a category. Unknown/unmapped → unknown.
@@ -240,13 +244,13 @@ func classifyProblem(in classifyInput) Category {
 			return CategoryOOMKilled
 		}
 		switch in.Reason {
-		case "ImagePullBackOff", "ErrImagePull":
+		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ImageInspectError":
 			return CategoryImagePullFailed
 		case "CrashLoopBackOff":
 			return CategoryCrashLoop
 		case "HighRestartCount":
 			return CategoryHighRestart
-		case "CreateContainerConfigError", "Pending", "ContainerCreating":
+		case "CreateContainerConfigError", "CreateContainerError", "RunContainerError", "Pending", "ContainerCreating":
 			return CategoryContainerWaiting
 		case "Error", "Failed":
 			// a terminated/failed pod that isn't image-pull/OOM/scheduling —
@@ -323,9 +327,24 @@ func classifyProblem(in classifyInput) Category {
 			return CategoryGitOpsSyncFailed
 		}
 		return CategoryUnknown
+
+	case "Cluster", "KubeadmControlPlane":
+		// Cluster API control plane (cluster.x-k8s.io / controlplane.
+		// cluster.x-k8s.io). Gate on the group so a same-named CRD from
+		// another controller can't be force-fit.
+		if strings.Contains(strings.ToLower(in.APIGroup), "cluster.x-k8s.io") {
+			return CategoryControlPlaneNotReady
+		}
+		return CategoryUnknown
+
+	case "Machine", "MachineDeployment", "MachineHealthCheck":
+		// Cluster API machine layer — node-backing infra, distinct from the
+		// control plane it forms.
+		if strings.Contains(strings.ToLower(in.APIGroup), "cluster.x-k8s.io") {
+			return CategoryMachineNotReady
+		}
+		return CategoryUnknown
 	}
 
-	// The CAPI kinds (Cluster/Machine/MachineDeployment/…) have no category
-	// yet, so they fall through to unknown rather than being force-fit.
 	return CategoryUnknown
 }

@@ -106,10 +106,17 @@ var envIssue = mustNewEnv(
 	cel.Variable("message", cel.StringType),
 	cel.Variable("count", cel.IntType),
 	cel.Variable("cluster", cel.StringType),
-	// last_seen is provided as an int unix-second timestamp so the
-	// agent can write `last_seen > timestamp("2025-01-01T00:00:00Z")`
-	// or compare against a "now - 1h" delta passed by the caller.
+	// first_seen/last_seen are int unix-second timestamps so the agent can
+	// write `first_seen > timestamp("2025-01-01T00:00:00Z")` or compare
+	// against a "now - 1h" delta. Prefer first_seen for "issues older
+	// than…": last_seen churns to compose-time on every poll.
+	cel.Variable("first_seen", cel.IntType),
 	cel.Variable("last_seen", cel.IntType),
+	// grouping_scope (node|workload|…) slices node-level vs workload issues;
+	// restart_count + last_terminated_reason are the chronic-vs-acute fields.
+	cel.Variable("grouping_scope", cel.StringType),
+	cel.Variable("restart_count", cel.IntType),
+	cel.Variable("last_terminated_reason", cel.StringType),
 )
 
 func mustNewEnv(opts ...cel.EnvOption) *cel.Env {

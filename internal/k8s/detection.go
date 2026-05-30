@@ -145,7 +145,15 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			ssets, _ = ssLister.List(labels.Everything())
 		}
 		for _, ss := range ssets {
-			if ss.Status.ReadyReplicas < ss.Status.Replicas {
+			// status.replicas counts pods the controller has created so far; a
+			// partitioned/ordered rollout wedged on an early ordinal (bad image)
+			// can have ReadyReplicas == Replicas while spec.replicas is never
+			// reached. Compare against the desired count so that stall surfaces.
+			desired := ss.Status.Replicas
+			if ss.Spec.Replicas != nil && *ss.Spec.Replicas > desired {
+				desired = *ss.Spec.Replicas
+			}
+			if ss.Status.ReadyReplicas < desired {
 				ageDur := now.Sub(ss.CreationTimestamp.Time)
 				problems = append(problems, Detection{
 					Kind:            "StatefulSet",
@@ -153,7 +161,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Name:            ss.Name,
 					Group:           "apps",
 					Severity:        "critical",
-					Reason:          fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
+					Reason:          fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, desired),
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
@@ -172,7 +180,15 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			dsets, _ = dsLister.List(labels.Everything())
 		}
 		for _, ds := range dsets {
-			if ds.Status.NumberUnavailable > 0 {
+			// numberUnavailable counts pods that exist-but-aren't-ready; a DS
+			// that can't even schedule on tainted/full nodes bumps
+			// desiredNumberScheduled vs numberAvailable WITHOUT populating
+			// numberUnavailable, so available-vs-desired is the robust signal.
+			unavailable := ds.Status.NumberUnavailable
+			if gap := ds.Status.DesiredNumberScheduled - ds.Status.NumberAvailable; gap > unavailable {
+				unavailable = gap
+			}
+			if unavailable > 0 {
 				ageDur := now.Sub(ds.CreationTimestamp.Time)
 				problems = append(problems, Detection{
 					Kind:            "DaemonSet",
@@ -180,7 +196,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Name:            ds.Name,
 					Group:           "apps",
 					Severity:        "critical",
-					Reason:          fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
+					Reason:          fmt.Sprintf("%d unavailable", unavailable),
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
@@ -288,6 +304,25 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				}
 			}
 			if ready == 0 {
+				// Mid scale-to-zero (1→0) the terminating old pod still matches
+				// the selector (selected>0) but isn't ready — that's the
+				// deliberate scale-down, not a routing break. Same benign case
+				// as the zero-selected branch above, just caught a poll earlier.
+				if scaledToZeroBackingWorkload(cache, svc) {
+					problems = append(problems, Detection{
+						Kind:            "Service",
+						Namespace:       svc.Namespace,
+						Name:            svc.Name,
+						Severity:        "warning",
+						Reason:          "Backing workload scaled to 0",
+						Message:         "selector matches a Deployment/StatefulSet that is intentionally scaled to 0 replicas",
+						Age:             FormatAge(ageDur),
+						AgeSeconds:      int64(ageDur.Seconds()),
+						Duration:        FormatAge(ageDur),
+						DurationSeconds: int64(ageDur.Seconds()),
+					})
+					continue
+				}
 				problems = append(problems, Detection{
 					Kind:            "Service",
 					Namespace:       svc.Namespace,
