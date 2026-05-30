@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/conditions"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
@@ -1033,7 +1034,7 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 			continue
 		}
 		reason, msg, since, ok := readyFalseCondition(obj, now)
-		if !ok || isGitOpsInProgressReason(reason) {
+		if !ok || conditions.IsInProgressForIssues(reason) {
 			continue
 		}
 		// status.conditions stale relative to spec → mid-reconcile, not failed.
@@ -1088,17 +1089,4 @@ func readyFalseCondition(obj *unstructured.Unstructured, now time.Time) (reason,
 		return r, m, dur, true
 	}
 	return "", "", 0, false
-}
-
-// isGitOpsInProgressReason is the NARROW set of Flux/Argo condition reasons that
-// mean "still reconciling", deliberately smaller than the health-display
-// transient set: it omits ArtifactFailed/ChartNotReady so those stuck states
-// surface as issues here while staying soft in the health view.
-func isGitOpsInProgressReason(r string) bool {
-	switch r {
-	case "Progressing", "Reconciling", "ReconciliationInProgress",
-		"DependencyNotReady", "Pending", "InProgress", "Initializing":
-		return true
-	}
-	return false
 }

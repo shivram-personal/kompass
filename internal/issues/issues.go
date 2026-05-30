@@ -10,7 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/conditions"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -303,28 +303,16 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 	return out
 }
 
-// genuineFailureReason holds reasons that appear in the shared health-display
-// transient set (where they soften a badge to "degraded", still visible) but are
-// actually STUCK FAILURES the Issues queue must never suppress — surfacing as
-// nothing is worse than a wrong badge color. A Flux source reporting
-// ArtifactFailed can't produce an artifact; ChartNotReady can't resolve a chart.
-// These are persistent faults, not in-flight states.
-var genuineFailureReason = map[string]bool{
-	"ArtifactFailed": true,
-	"ChartNotReady":  true,
-}
-
 // isTransientCRDCondition reports whether a False Ready/Available condition on
 // a CRD object should be suppressed as in-flight rather than emitted as a
 // failure. Three independent signals, any of which means "not a real problem":
 //
-//  1. The condition reason is an in-progress reason (Progressing / Reconciling
-//     / Pending / Issuing / DependencyNotReady / …) per the shared
-//     packages.IsTransientConditionReason set — EXCEPT the genuine-failure
-//     reasons (ArtifactFailed / ChartNotReady): the health badge may soften
-//     those to "degraded" (still visible), but the Issues queue must surface
-//     them, not drop them. This is the one place the Issues noise-floor
-//     deliberately diverges from the health-display set.
+//  1. The condition reason is in-progress per conditions.IsInProgressForIssues
+//     — the shared transient set MINUS the genuine-failure reasons
+//     (ArtifactFailed / ChartNotReady): the health badge may soften those to
+//     "degraded" (still visible), but the Issues queue must surface them, not
+//     drop them. This is the one place the Issues noise-floor deliberately
+//     diverges from the health-display transient set.
 //  2. spec.suspend == true — the object is intentionally paused (Flux
 //     Kustomization/HelmRelease, Argo with suspend, suspended CronJob-style
 //     CRDs); a paused object reporting not-Ready is expected.
@@ -332,7 +320,7 @@ var genuineFailureReason = map[string]bool{
 //     yet reconciled the current spec, so the stale condition reflects the old
 //     generation, not the live state.
 func isTransientCRDCondition(u *unstructured.Unstructured, reason string) bool {
-	if !genuineFailureReason[reason] && packages.IsTransientConditionReason(reason) {
+	if conditions.IsInProgressForIssues(reason) {
 		return true
 	}
 	if suspend, ok, _ := unstructured.NestedBool(u.Object, "spec", "suspend"); ok && suspend {

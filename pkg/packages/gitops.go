@@ -3,6 +3,8 @@ package packages
 import (
 	"fmt"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/conditions"
 )
 
 // Parsers for GitOps controller resources. Take generic JSON-decoded
@@ -248,53 +250,11 @@ func isTransientFluxReason(r string) bool {
 	return IsTransientConditionReason(r)
 }
 
-// transientConditionReasons is the canonical set of controller condition
-// reasons that mean "still reconciling / not done yet", NOT "failed". A False
-// Ready/Available condition carrying one of these is an in-progress object, not
-// a broken one — surfacing it as a warning is the CRD-condition noise floor.
-//
-// Single source of truth shared by the GitOps health mapping here and the
-// generic CRD issue detector (internal/issues), so the two paths can't drift:
-// a reason added here suppresses noise in both. Curated across the controller
-// families radar integrates with:
-//
-//   - Flux:        Progressing, DependencyNotReady, ReconciliationInProgress,
-//                  ChartNotReady, ArtifactFailed
-//   - Argo:        Progressing, Reconciling
-//   - cert-manager: Issuing, Pending
-//   - Crossplane:  Reconciling, Creating
-//   - generic:     Pending, InProgress, Initializing, Waiting (NOT Unknown —
-//                  ambiguous, not in-progress; it stays loud/unhealthy)
-var transientConditionReasons = map[string]bool{
-	// Flux
-	"Progressing":              true,
-	"DependencyNotReady":       true,
-	"ReconciliationInProgress": true,
-	"ChartNotReady":            true,
-	"ArtifactFailed":           true,
-	// Argo / Crossplane
-	"Reconciling": true,
-	"Creating":    true,
-	// cert-manager
-	"Issuing": true,
-	"Pending": true,
-	// generic in-progress vocabulary
-	"InProgress":   true,
-	"Initializing": true,
-	"Waiting":      true,
-	// "Unknown" is deliberately NOT here: it means "the controller hasn't
-	// reported a verdict", which is ambiguous, not in-progress. Treating it as
-	// transient would silently downgrade a genuinely-stuck object to a warning;
-	// the surrounding logic errs loud on reasons it doesn't recognize, so an
-	// Unknown False-condition stays unhealthy.
-}
-
-// IsTransientConditionReason reports whether a condition reason denotes an
-// in-progress / not-yet-settled state rather than a genuine failure. Used to
-// suppress warnings on mid-reconcile objects across both the GitOps health
-// mapping and the generic CRD issue detector.
+// IsTransientConditionReason re-exports the neutral condition-state predicate
+// from pkg/conditions (the canonical home of the transient vocabulary) so the
+// GitOps health mapping here keeps a local entry point.
 func IsTransientConditionReason(r string) bool {
-	return transientConditionReasons[r]
+	return conditions.IsTransientConditionReason(r)
 }
 
 // Tiny typed lookup helpers — Go stdlib doesn't expose nice JSON
