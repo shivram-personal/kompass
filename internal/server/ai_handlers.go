@@ -506,43 +506,21 @@ func computeIssueSummaryForResource(cache *k8s.ResourceCache, group, kind, names
 	if provider == nil {
 		return nil
 	}
-	filters := issues.Filters{
-		Kinds: []string{kind},
-		// NoLimit (not MaxLimit): the post-compose filter narrows to a
-		// single {group, kind, ns, name}, so a hard cap before that
-		// filter can silently zero the per-resource summary on clusters
-		// where the kind has many same-namespace siblings whose issues
-		// outrank the target on (severity, last_seen). Mirrors the MCP
-		// sibling in internal/mcp/resource_context.go and the
-		// summarycontext.BuildIssueIndex rationale.
-		Limit: issues.NoLimit,
-	}
+	var namespaces []string
 	if namespace != "" {
-		filters.Namespaces = []string{namespace}
+		namespaces = []string{namespace}
 	}
-	rows, _ := issues.ComposeWithStats(provider, filters)
-
-	matched := make([]issues.Issue, 0, len(rows))
-	bySource := make(map[string]int)
-	for _, row := range rows {
-		if row.Name != name {
-			continue
-		}
-		if namespace != "" && row.Namespace != namespace {
-			continue
-		}
-		// Group-aware match: Issue.Group is populated for problem,
-		// condition, and event sources, so a Knative
-		// serving.knative.dev/Service lookup won't pull in the core
-		// Service's issues (or vice versa).
-		if row.Group != group {
-			continue
-		}
-		matched = append(matched, row)
-		bySource[string(row.Source)]++
-	}
+	// Owner-aware + uncapped (issues.RelatedIssues): get_resource on a workload
+	// surfaces the grouped issues its pods are evidence for, and on a pod beyond
+	// the inline-Members cap too. The old flat-by-exact-resource match missed
+	// both (a Deployment matched no Kind=Pod evidence rows → empty summary).
+	matched := issues.RelatedIssues(provider, namespaces, group, kind, namespace, name)
 	if len(matched) == 0 {
 		return nil
+	}
+	bySource := make(map[string]int, len(matched))
+	for _, row := range matched {
+		bySource[string(row.Source)]++
 	}
 	// Sort by (severity desc, Reason asc) so TopReason is deterministic
 	// across runs even when multiple rows tie on severity. Mirrors the

@@ -179,3 +179,24 @@ func TestRelatedIssues_SubjectAndMember(t *testing.T) {
 		t.Errorf("RelatedIssues(unrelated) = %d, want 0", len(got))
 	}
 }
+
+// TestRelatedIssues_UncappedMembers pins that a resource resolves its issue even
+// when it's member #11+ of a large grouped fan-out — RelatedIssues matches flat
+// evidence (uncapped), not the inline Members slice (capped at maxInlineMembers).
+func TestRelatedIssues_UncappedMembers(t *testing.T) {
+	var probs []k8s.Detection
+	for i := 0; i < 12; i++ { // > maxInlineMembers (10)
+		probs = append(probs, k8s.Detection{
+			Kind: "Pod", Namespace: "prod", Name: fmt.Sprintf("web-abc-%d", i),
+			Reason: "CrashLoopBackOff", Severity: "critical",
+			OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web",
+		})
+	}
+	p := &fakeProvider{problems: probs}
+	if got := RelatedIssues(p, nil, "", "Pod", "prod", "web-abc-11"); len(got) != 1 {
+		t.Errorf("pod beyond the inline-Members cap = %d related issues, want 1 (uncapped lookup)", len(got))
+	}
+	if got := RelatedIssues(p, nil, "apps", "Deployment", "prod", "web"); len(got) != 1 {
+		t.Errorf("owning Deployment = %d related issues, want 1", len(got))
+	}
+}

@@ -10,21 +10,29 @@ import (
 // Radar already classified here." Kind is matched case-insensitively (callers
 // may pass the K8s Kind or a normalized form); an empty group matches any.
 func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name string) []Issue {
-	grouped := Compose(p, Filters{Namespaces: namespaces, Limit: NoLimit, Grouped: true})
+	// Compose FLAT (uncapped) then group: matching against the flat evidence —
+	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
+	// what makes member #11..#N in a large fan-out resolve correctly.
+	flat := Compose(p, Filters{Namespaces: namespaces, Limit: NoLimit})
+	grouped := GroupIssues(flat)
 	match := func(g, k, ns, n string) bool {
 		return strings.EqualFold(k, kind) && ns == namespace && n == name && (group == "" || g == group)
 	}
+	matched := make(map[string]bool) // grouped issue IDs the resource touches
+	for _, g := range grouped {       // as the grouped SUBJECT (owner-collapsed)
+		if match(g.Group, g.Kind, g.Namespace, g.Name) {
+			matched[g.ID] = true
+		}
+	}
+	for _, f := range flat { // as ANY evidence row (uncapped)
+		if match(f.Group, f.Kind, f.Namespace, f.Name) {
+			matched[f.ID] = true
+		}
+	}
 	var out []Issue
 	for _, g := range grouped {
-		if match(g.Group, g.Kind, g.Namespace, g.Name) {
+		if matched[g.ID] {
 			out = append(out, g)
-			continue
-		}
-		for _, m := range g.Members {
-			if match(m.Group, m.Kind, m.Namespace, m.Name) {
-				out = append(out, g)
-				break
-			}
 		}
 	}
 	return out

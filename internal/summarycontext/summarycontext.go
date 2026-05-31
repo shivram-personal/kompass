@@ -190,22 +190,33 @@ func BuildIssueIndex(p issues.Provider, namespaces []string) IssueIndex {
 	filters := issues.Filters{
 		Namespaces: namespaces,
 		Limit:      issues.NoLimit,
-		Grouped:    true,
 	}
-	grouped := issues.Compose(p, filters)
-	idx := make(IssueIndex, len(grouped))
-	for _, g := range grouped {
-		// Count the GROUPED issue against its subject (the row's kind/name — the
-		// workload a fan-out folds under) AND each affected member resource, so
-		// get_resource on either the workload or an affected pod surfaces the
-		// same issue. The old flat index keyed only the evidence resource, so a
-		// Deployment with crashlooping pods read issueCount=0 even though the
-		// `issues` tool showed it as a Deployment-grouped crashloop — the
-		// drill-down contradicted the entry point.
-		idx[issueIndexKey(g.Group, g.Kind, g.Namespace, g.Name)]++
-		for _, m := range g.Members {
-			idx[issueIndexKey(m.Group, m.Kind, m.Namespace, m.Name)]++
+	// Compose FLAT (uncapped): every evidence row carries the grouped issue ID
+	// (enrichIdentity keys it on owner-else-self + category) and its resolved
+	// Owner. Counting DISTINCT grouped issue IDs per resource — keyed on each
+	// evidence resource AND its owner (the grouped subject) — makes get_resource
+	// on the workload OR on ANY of its (arbitrarily many) affected pods surface
+	// the same issue. Iterating the grouped issue's inline Members instead would
+	// drop members past the maxInlineMembers cap; keying only the evidence (the
+	// old flat index) dropped the owner.
+	flat := issues.Compose(p, filters)
+	seen := make(map[string]map[string]bool, len(flat)) // resourceKey -> set of grouped issue IDs
+	mark := func(group, kind, namespace, name, id string) {
+		k := issueIndexKey(group, kind, namespace, name)
+		if seen[k] == nil {
+			seen[k] = make(map[string]bool)
 		}
+		seen[k][id] = true
+	}
+	for _, f := range flat {
+		mark(f.Group, f.Kind, f.Namespace, f.Name, f.ID)
+		if f.Owner.Kind != "" {
+			mark(f.Owner.Group, f.Owner.Kind, f.Owner.Namespace, f.Owner.Name, f.ID)
+		}
+	}
+	idx := make(IssueIndex, len(seen))
+	for k, ids := range seen {
+		idx[k] = len(ids)
 	}
 	return idx
 }
