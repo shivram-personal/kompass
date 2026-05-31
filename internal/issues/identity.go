@@ -1,6 +1,7 @@
 package issues
 
 import (
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
@@ -8,15 +9,15 @@ import (
 // Scope aliases the shared subject.Scope — issues consumes the unified resolver's
 // scope enum so issues, topology, and checks can't drift on it. The constants are
 // re-exported so existing issues.Scope* references keep working.
-type Scope = subject.Scope
+type Scope = issuesapi.Scope
 
 const (
-	ScopeUnknown  = subject.ScopeUnknown
-	ScopeWorkload = subject.ScopeWorkload
-	ScopeService  = subject.ScopeService
-	ScopeIngress  = subject.ScopeIngress
-	ScopePVC      = subject.ScopePVC
-	ScopeNode     = subject.ScopeNode
+	ScopeUnknown  = issuesapi.ScopeUnknown
+	ScopeWorkload = issuesapi.ScopeWorkload
+	ScopeService  = issuesapi.ScopeService
+	ScopeIngress  = issuesapi.ScopeIngress
+	ScopePVC      = issuesapi.ScopePVC
+	ScopeNode     = issuesapi.ScopeNode
 )
 
 // resourceKey is the canonical group|kind|namespace|name key, shared with
@@ -37,8 +38,9 @@ func enrichIdentity(i *Issue) {
 	if i.Owner.Kind != "" {
 		subjRef = i.Owner
 	}
-	i.GroupingScope = subject.ScopeForKind(subjRef.Kind)
-	i.ID = subject.StableID(i.GroupingScope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), discriminator(i))
+	scope := subject.ScopeForKind(subjRef.Kind)
+	i.GroupingScope = Scope(scope)
+	i.ID = subject.StableID(scope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), discriminator(i))
 }
 
 // discriminator is the cause portion of the issue ID. Category alone is the

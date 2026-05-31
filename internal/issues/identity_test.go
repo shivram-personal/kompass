@@ -23,7 +23,7 @@ func TestEnrichIdentity_SubjectIsOwnerElseSelf(t *testing.T) {
 	if pod.GroupingScope != ScopeWorkload {
 		t.Errorf("scope = %q, want workload", pod.GroupingScope)
 	}
-	if want := subject.StableID(ScopeWorkload, resourceKey("apps", "Deployment", "ns", "web"), string(CategoryImagePullFailed)); pod.ID != want {
+	if want := subject.StableID(subject.Scope(ScopeWorkload), resourceKey("apps", "Deployment", "ns", "web"), string(CategoryImagePullFailed)); pod.ID != want {
 		t.Errorf("ID = %q, want owner-keyed %q", pod.ID, want)
 	}
 
@@ -31,7 +31,7 @@ func TestEnrichIdentity_SubjectIsOwnerElseSelf(t *testing.T) {
 	solo := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "solo", Reason: "CrashLoopBackOff"}
 	classifyIssue(&solo)
 	enrichIdentity(&solo)
-	if want := subject.StableID(ScopeWorkload, resourceKey("", "Pod", "ns", "solo"), string(CategoryCrashLoop)); solo.ID != want {
+	if want := subject.StableID(subject.Scope(ScopeWorkload), resourceKey("", "Pod", "ns", "solo"), string(CategoryCrashLoop)); solo.ID != want {
 		t.Errorf("standalone pod ID = %q, want self-keyed %q", solo.ID, want)
 	}
 }
@@ -66,7 +66,7 @@ func TestEnrichIdentity_DistinctCausesDoNotCollapse(t *testing.T) {
 	cl := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-x", Reason: "CrashLoopBackOff", Owner: owner}
 	classifyIssue(&cl)
 	enrichIdentity(&cl)
-	if want := subject.StableID(ScopeWorkload, resourceKey("apps", "Deployment", "ns", "web"), string(CategoryCrashLoop)); cl.ID != want {
+	if want := subject.StableID(subject.Scope(ScopeWorkload), resourceKey("apps", "Deployment", "ns", "web"), string(CategoryCrashLoop)); cl.ID != want {
 		t.Errorf("single-cause category must stay category-keyed (no re-key): %q want %q", cl.ID, want)
 	}
 }

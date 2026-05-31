@@ -1,6 +1,10 @@
 package issues
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/skyhook-io/radar/pkg/issuesapi"
+)
 
 // Category is the user-facing symptom taxonomy for an issue — "what kind of
 // problem is this" from an operator's mental model. It is DERIVED from the
@@ -14,93 +18,93 @@ import "strings"
 //
 // `unknown` is first-class — an unmapped signal is honestly labeled, never
 // dropped or force-fit into a neat bucket.
-type Category string
+type Category = issuesapi.Category
 
 const (
-	CategoryUnknown Category = "unknown"
+	CategoryUnknown = issuesapi.CategoryUnknown
 
 	// scheduling — can't get onto a node / rejected at admission
-	CategoryUnschedulable            Category = "unschedulable"
-	CategoryQuotaExceeded            Category = "quota_exceeded"
-	CategoryAdmissionWebhookBlocking Category = "admission_webhook_blocking"
+	CategoryUnschedulable            = issuesapi.CategoryUnschedulable
+	CategoryQuotaExceeded            = issuesapi.CategoryQuotaExceeded
+	CategoryAdmissionWebhookBlocking = issuesapi.CategoryAdmissionWebhookBlocking
 
 	// startup — scheduled, can't start the container
-	CategoryImagePullFailed     Category = "image_pull_failed"
-	CategoryContainerWaiting    Category = "container_waiting"
-	CategoryInitContainerFailed Category = "init_container_failed"
+	CategoryImagePullFailed     = issuesapi.CategoryImagePullFailed
+	CategoryContainerWaiting    = issuesapi.CategoryContainerWaiting
+	CategoryInitContainerFailed = issuesapi.CategoryInitContainerFailed
 
 	// runtime — started, won't stay healthy
-	CategoryCrashLoop         Category = "crashloop"
-	CategoryOOMKilled         Category = "oom_killed"
-	CategoryLivenessProbeFail Category = "liveness_probe_failed"
-	CategoryReadinessFailed   Category = "readiness_failed"
-	CategoryWorkloadDegraded  Category = "workload_degraded"
+	CategoryCrashLoop         = issuesapi.CategoryCrashLoop
+	CategoryOOMKilled         = issuesapi.CategoryOOMKilled
+	CategoryLivenessProbeFail = issuesapi.CategoryLivenessProbeFail
+	CategoryReadinessFailed   = issuesapi.CategoryReadinessFailed
+	CategoryWorkloadDegraded  = issuesapi.CategoryWorkloadDegraded
 	// CategoryHighRestart is a container with a high cumulative restart count
 	// that is still unhealthy and churning, but isn't a classic
 	// CrashLoopBackOff (e.g. readiness-probe churn with clean exits). Sits
 	// alongside CategoryCrashLoop rather than replacing it.
-	CategoryHighRestart Category = "high_restart"
+	CategoryHighRestart = issuesapi.CategoryHighRestart
 	// batch workload failures (Job/CronJob) — runtime-stage failures of
 	// one-shot / scheduled workloads.
-	CategoryJobFailed     Category = "job_failed"
-	CategoryCronJobFailed Category = "cronjob_failed"
+	CategoryJobFailed     = issuesapi.CategoryJobFailed
+	CategoryCronJobFailed = issuesapi.CategoryCronJobFailed
 
 	// configuration
-	CategoryMissingConfigRef   Category = "missing_config_ref"
-	CategoryPDBBlocksEvictions Category = "pdb_blocks_evictions"
+	CategoryMissingConfigRef   = issuesapi.CategoryMissingConfigRef
+	CategoryPDBBlocksEvictions = issuesapi.CategoryPDBBlocksEvictions
 
 	// networking
-	CategoryServiceNoEndpoints    Category = "service_no_endpoints"
-	CategoryIngressBackendMissing Category = "ingress_backend_missing"
-	CategoryDNSFailure            Category = "dns_failure"
-	CategoryNetworkPolicyBlock    Category = "network_policy_block"
+	CategoryServiceNoEndpoints    = issuesapi.CategoryServiceNoEndpoints
+	CategoryIngressBackendMissing = issuesapi.CategoryIngressBackendMissing
+	CategoryDNSFailure            = issuesapi.CategoryDNSFailure
+	CategoryNetworkPolicyBlock    = issuesapi.CategoryNetworkPolicyBlock
 
 	// storage
-	CategoryPVCPending        Category = "pvc_pending"
-	CategoryPVCLost           Category = "pvc_lost"
-	CategoryVolumeMountFailed Category = "volume_mount_failed"
+	CategoryPVCPending        = issuesapi.CategoryPVCPending
+	CategoryPVCLost           = issuesapi.CategoryPVCLost
+	CategoryVolumeMountFailed = issuesapi.CategoryVolumeMountFailed
 	// CategoryVolumeAccessModeConflict is a config-level storage fault: a
 	// multi-replica Deployment mounts a ReadWriteOnce volume, which only one
 	// node can attach — surplus replicas can never start. Distinct from
 	// volume_mount_failed (the observed attach error) because this is the
 	// proactive root cause, detected from spec, before/independent of the symptom.
-	CategoryVolumeAccessModeConflict Category = "volume_access_mode_conflict"
+	CategoryVolumeAccessModeConflict = issuesapi.CategoryVolumeAccessModeConflict
 
 	// scaling / rollout
-	CategoryRolloutStalled     Category = "rollout_stalled"
-	CategoryHPALimitedOrFailed Category = "hpa_limited_or_failed"
+	CategoryRolloutStalled     = issuesapi.CategoryRolloutStalled
+	CategoryHPALimitedOrFailed = issuesapi.CategoryHPALimitedOrFailed
 
 	// security
-	CategoryRBACForbidden        Category = "rbac_forbidden"
-	CategoryCertificateNotReady  Category = "certificate_not_ready"
-	CategoryPodSecurityViolation Category = "pod_security_violation"
+	CategoryRBACForbidden        = issuesapi.CategoryRBACForbidden
+	CategoryCertificateNotReady  = issuesapi.CategoryCertificateNotReady
+	CategoryPodSecurityViolation = issuesapi.CategoryPodSecurityViolation
 
 	// control plane / operators / cluster infra
-	CategoryNodeNotReady          Category = "node_not_ready"
-	CategoryOperatorConditionFail Category = "operator_condition_failed"
-	CategoryGitOpsSyncFailed      Category = "gitops_sync_failed"
-	CategoryWebhookBackendDown    Category = "webhook_backend_down"
-	CategoryControlPlaneNotReady  Category = "control_plane_not_ready"
-	CategoryMachineNotReady       Category = "machine_not_ready"
+	CategoryNodeNotReady          = issuesapi.CategoryNodeNotReady
+	CategoryOperatorConditionFail = issuesapi.CategoryOperatorConditionFail
+	CategoryGitOpsSyncFailed      = issuesapi.CategoryGitOpsSyncFailed
+	CategoryWebhookBackendDown    = issuesapi.CategoryWebhookBackendDown
+	CategoryControlPlaneNotReady  = issuesapi.CategoryControlPlaneNotReady
+	CategoryMachineNotReady       = issuesapi.CategoryMachineNotReady
 )
 
 // CategoryGroup is the coarse rollup over categories — the ~10 buckets used for
 // the UI facet + summary strip. Derived from Category via categoryGroup; never
 // set independently. Named distinctly from Issue.Group (the resource's API
 // group) to avoid the two colliding.
-type CategoryGroup string
+type CategoryGroup = issuesapi.CategoryGroup
 
 const (
-	GroupUnknown       CategoryGroup = "unknown"
-	GroupScheduling    CategoryGroup = "scheduling"
-	GroupStartup       CategoryGroup = "startup"
-	GroupRuntime       CategoryGroup = "runtime"
-	GroupConfiguration CategoryGroup = "configuration"
-	GroupNetworking    CategoryGroup = "networking"
-	GroupStorage       CategoryGroup = "storage"
-	GroupScaling       CategoryGroup = "scaling"
-	GroupSecurity      CategoryGroup = "security"
-	GroupControlPlane  CategoryGroup = "control_plane"
+	GroupUnknown       = issuesapi.GroupUnknown
+	GroupScheduling    = issuesapi.GroupScheduling
+	GroupStartup       = issuesapi.GroupStartup
+	GroupRuntime       = issuesapi.GroupRuntime
+	GroupConfiguration = issuesapi.GroupConfiguration
+	GroupNetworking    = issuesapi.GroupNetworking
+	GroupStorage       = issuesapi.GroupStorage
+	GroupScaling       = issuesapi.GroupScaling
+	GroupSecurity      = issuesapi.GroupSecurity
+	GroupControlPlane  = issuesapi.GroupControlPlane
 )
 
 // categoryGroup is the fixed category→group rollup. Server-side source of
