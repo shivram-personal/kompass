@@ -7,7 +7,20 @@ import (
 
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// listScoped reads gvr at the right scope for a curated detector: an explicit
+// namespace lists just that namespace; "" (the cluster-wide "all visible scope"
+// intent) uses ListWatched, which UNIONS cluster-wide AND per-namespace caches —
+// unlike List(gvr,"") which is cluster-wide-only and silently drops namespace-
+// scoped contents in a namespace-restricted install.
+func listScoped(dc *DynamicResourceCache, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	if namespace == "" {
+		return dc.ListWatched(gvr)
+	}
+	return dc.List(gvr, namespace)
+}
 
 const (
 	argoGroup   = "argoproj.io"
@@ -36,7 +49,7 @@ func DetectGitOpsProblems(dynamicCache *DynamicResourceCache, discovery *Resourc
 		if !ok {
 			return nil // controller not installed — expected
 		}
-		items, err := dynamicCache.List(gvr, namespace)
+		items, err := listScoped(dynamicCache, gvr, namespace)
 		if err != nil {
 			log.Printf("[gitops-problems] Failed to list %s.%s: %v", kind, group, err)
 			return nil

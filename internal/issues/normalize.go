@@ -28,6 +28,13 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		sev = SeverityCritical
 	}
 	since := now.Add(-time.Duration(p.DurationSeconds) * time.Second)
+	if p.DurationSeconds == 0 && p.AgeSeconds > 0 {
+		// Detectors that don't track how long the problem has persisted leave
+		// DurationSeconds zero; without this, FirstSeen would reset to `now` on
+		// every compose and the queue (sorted by first_seen) would keep a chronic
+		// issue looking fresh. AgeSeconds (resource age) is a stable lower bound.
+		since = now.Add(-time.Duration(p.AgeSeconds) * time.Second)
+	}
 	iss := Issue{
 		Severity:             sev,
 		Source:               source,
@@ -37,6 +44,7 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		Name:                 p.Name,
 		Reason:               p.Reason,
 		Message:              p.Message,
+		Fingerprint:          p.Fingerprint,
 		FirstSeen:            since,
 		LastSeen:             now,
 		Count:                1,

@@ -25,7 +25,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			if !ok {
 				return nil // CRD not installed — expected
 			}
-			resources, err := dynamicCache.List(gvr, namespace)
+			resources, err := listScoped(dynamicCache, gvr, namespace)
 			if err != nil {
 				log.Printf("[capi-problems] Failed to list %s (%s): %v", kind, group, err)
 				return nil
@@ -36,7 +36,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 		if !ok {
 			return nil // CRD not installed — expected
 		}
-		resources, err := dynamicCache.List(gvr, namespace)
+		resources, err := listScoped(dynamicCache, gvr, namespace)
 		if err != nil {
 			log.Printf("[capi-problems] Failed to list %s: %v", kind, err)
 			return nil

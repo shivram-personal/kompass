@@ -96,6 +96,11 @@ func missingRefProblemSev(kind, group, ns, name, severity, reason, message strin
 		AgeSeconds:      int64(age.Seconds()),
 		Duration:        FormatAge(age),
 		DurationSeconds: int64(age.Seconds()),
+		// The message names the specific missing target ("references ConfigMap
+		// %q…") and is deterministic, so it's a stable per-cause fingerprint: a
+		// workload missing two different refs stays two distinct issues instead
+		// of collapsing to one missing_config_ref row.
+		Fingerprint: reason + "|" + message,
 	}
 }
 

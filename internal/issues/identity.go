@@ -38,5 +38,25 @@ func enrichIdentity(i *Issue) {
 		subjRef = i.Owner
 	}
 	i.GroupingScope = subject.ScopeForKind(subjRef.Kind)
-	i.ID = subject.StableID(i.GroupingScope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), string(i.Category))
+	i.ID = subject.StableID(i.GroupingScope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), discriminator(i))
+}
+
+// discriminator is the cause portion of the issue ID. Category alone is the
+// user-facing rollup but too coarse to be the durable identity for categories
+// where one subject can have several distinct causes: it would collapse them
+// into one row and drop every cause but the representative's. So:
+//   - a detector-supplied stable Fingerprint (missing-ref target) splits each
+//     distinct cause into its own issue;
+//   - unknown has no curated grouping, so key on source+reason;
+//   - every other (single-cause) category stays category-only — byte-identical
+//     to the prior ID, so those issues do not re-key.
+func discriminator(i *Issue) string {
+	switch {
+	case i.Fingerprint != "":
+		return string(i.Category) + "\x00" + i.Fingerprint
+	case i.Category == CategoryUnknown:
+		return string(i.Category) + "\x00" + string(i.Source) + "\x00" + i.Reason
+	default:
+		return string(i.Category)
+	}
 }

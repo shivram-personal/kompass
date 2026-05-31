@@ -105,9 +105,11 @@ func foldGroup(members []Issue) Issue {
 }
 
 // betterRepresentative reports whether cand should replace cur as a group's
-// representative: worst severity wins, then newest last_seen, then name
-// (member names are unique within a group, so the order is total →
-// deterministic regardless of iteration order).
+// representative: worst severity wins, then newest last_seen, then a fully
+// deterministic total order over the identity-bearing fields. The representative
+// donates Source/Reason/Message/crash-context to the grouped row, so the
+// tiebreak must be total — same name with a different kind/group/source must
+// resolve the same way regardless of input order.
 func betterRepresentative(cand, cur Issue) bool {
 	if c, r := SeverityRank(cand.Severity), SeverityRank(cur.Severity); c != r {
 		return c > r
@@ -115,7 +117,14 @@ func betterRepresentative(cand, cur Issue) bool {
 	if !cand.LastSeen.Equal(cur.LastSeen) {
 		return cand.LastSeen.After(cur.LastSeen)
 	}
-	return cand.Name < cur.Name
+	ck := []string{cand.Group, cand.Kind, cand.Namespace, cand.Name, string(cand.Source), cand.Reason, cand.Message}
+	rk := []string{cur.Group, cur.Kind, cur.Namespace, cur.Name, string(cur.Source), cur.Reason, cur.Message}
+	for i := range ck {
+		if ck[i] != rk[i] {
+			return ck[i] < rk[i]
+		}
+	}
+	return false
 }
 
 func affectedOf(refs []Ref) Affected {

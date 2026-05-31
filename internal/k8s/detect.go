@@ -11,6 +11,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
@@ -59,6 +60,13 @@ type Detection struct {
 	OwnerGroup string
 	OwnerKind  string
 	OwnerName  string
+	// Fingerprint is an optional STABLE cause key for detectors where one
+	// subject+category can have multiple distinct causes that must NOT collapse
+	// into one issue (e.g. a workload missing both a ConfigMap and a Secret —
+	// both are missing_config_ref). It feeds the issue ID discriminator so each
+	// cause is its own row. MUST be stable across polls (don't use a flapping
+	// reason or a count); empty means "fold by category" (the common case).
+	Fingerprint string
 }
 
 // podOwnerKindName resolves a Pod's topmost stable controller for issue
@@ -370,14 +378,17 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			if hp.Problem == "cannot-scale" {
 				severity = "critical"
 			}
+			ageDur := resourceAge(now, hpas, hp.Namespace, hp.Name)
 			problems = append(problems, Detection{
-				Kind:      "HorizontalPodAutoscaler",
-				Namespace: hp.Namespace,
-				Name:      hp.Name,
-				Group:     "autoscaling",
-				Severity:  severity,
-				Reason:    hp.Problem,
-				Message:   hp.Reason,
+				Kind:            "HorizontalPodAutoscaler",
+				Namespace:       hp.Namespace,
+				Name:            hp.Name,
+				Group:           "autoscaling",
+				Severity:        severity,
+				Reason:          hp.Problem,
+				Message:         hp.Reason,
+				Age:             FormatAge(ageDur),
+				AgeSeconds:      int64(ageDur.Seconds()),
 			})
 		}
 	}
@@ -391,14 +402,17 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			cronjobs, _ = cjLister.List(labels.Everything())
 		}
 		for _, cp := range DetectCronJobProblems(cronjobs) {
+			ageDur := resourceAge(now, cronjobs, cp.Namespace, cp.Name)
 			problems = append(problems, Detection{
-				Kind:      "CronJob",
-				Namespace: cp.Namespace,
-				Name:      cp.Name,
-				Group:     "batch",
-				Severity:  "medium",
-				Reason:    cp.Problem,
-				Message:   cp.Reason,
+				Kind:       "CronJob",
+				Namespace:  cp.Namespace,
+				Name:       cp.Name,
+				Group:      "batch",
+				Severity:   "medium",
+				Reason:     cp.Problem,
+				Message:    cp.Reason,
+				Age:        FormatAge(ageDur),
+				AgeSeconds: int64(ageDur.Seconds()),
 			})
 		}
 	}
@@ -540,6 +554,20 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 // state until a consuming pod is scheduled, not a fault. Resolves the PVC's
 // explicit StorageClass, falling back to the cluster default. Unknown SC →
 // false (can't prove benign, so let the caller flag it).
+// resourceAge returns now-creationTimestamp for the item in items matching
+// namespace/name, or 0 if absent. Used to stamp a stable AgeSeconds on
+// detections from per-kind detectors (HPA/CronJob) that don't track how long
+// the problem has persisted — without it, the issues layer would derive
+// FirstSeen=now on every compose and a chronic issue would sort as fresh.
+func resourceAge[T metav1.Object](now time.Time, items []T, namespace, name string) time.Duration {
+	for _, it := range items {
+		if it.GetNamespace() == namespace && it.GetName() == name {
+			return now.Sub(it.GetCreationTimestamp().Time)
+		}
+	}
+	return 0
+}
+
 func pvcAwaitsFirstConsumer(cache *ResourceCache, pvc *corev1.PersistentVolumeClaim) bool {
 	scl := cache.StorageClasses()
 	if scl == nil {

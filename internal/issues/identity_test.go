@@ -35,3 +35,38 @@ func TestEnrichIdentity_SubjectIsOwnerElseSelf(t *testing.T) {
 		t.Errorf("standalone pod ID = %q, want self-keyed %q", solo.ID, want)
 	}
 }
+
+// TestEnrichIdentity_DistinctCausesDoNotCollapse pins that two distinct causes
+// on the same subject+category (a workload missing both a ConfigMap and a
+// Secret — both missing_config_ref) get DISTINCT ids via the stable
+// Fingerprint, instead of collapsing to one row; same cause folds; and a
+// single-cause category stays category-keyed (no re-key).
+func TestEnrichIdentity_DistinctCausesDoNotCollapse(t *testing.T) {
+	owner := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
+	mk := func(reason, fp string) Issue {
+		i := Issue{Source: SourceMissingRef, Kind: "Pod", Namespace: "ns", Name: "web-x", Reason: reason, Owner: owner, Fingerprint: fp}
+		classifyIssue(&i)
+		enrichIdentity(&i)
+		return i
+	}
+	cm := mk("Missing ConfigMap", `Missing ConfigMap|references ConfigMap "foo"`)
+	sec := mk("Missing Secret", `Missing Secret|references Secret "bar"`)
+	if cm.Category != CategoryMissingConfigRef || sec.Category != CategoryMissingConfigRef {
+		t.Fatalf("precondition: both should classify missing_config_ref, got %q/%q", cm.Category, sec.Category)
+	}
+	if cm.ID == sec.ID {
+		t.Errorf("distinct missing-ref causes must get distinct IDs, both = %q", cm.ID)
+	}
+	if cm2 := mk("Missing ConfigMap", `Missing ConfigMap|references ConfigMap "foo"`); cm.ID != cm2.ID {
+		t.Errorf("same cause must fold to one ID: %q vs %q", cm.ID, cm2.ID)
+	}
+
+	// A single-cause category (no fingerprint) stays category-only keyed — the
+	// bulk of issues must NOT re-key from this change.
+	cl := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-x", Reason: "CrashLoopBackOff", Owner: owner}
+	classifyIssue(&cl)
+	enrichIdentity(&cl)
+	if want := subject.StableID(ScopeWorkload, resourceKey("apps", "Deployment", "ns", "web"), string(CategoryCrashLoop)); cl.ID != want {
+		t.Errorf("single-cause category must stay category-keyed (no re-key): %q want %q", cl.ID, want)
+	}
+}

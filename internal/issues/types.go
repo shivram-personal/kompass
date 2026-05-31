@@ -117,6 +117,11 @@ type Issue struct {
 	// into the subject (Kind/Group/Namespace/Name) and leave Owner zero, so
 	// the TS Issue type (which only consumes grouped output) doesn't model it.
 	Owner Ref `json:"owner,omitzero"`
+	// Fingerprint is an internal, stable per-cause key (NOT on the wire): it
+	// feeds the ID discriminator so distinct causes on the same subject+category
+	// (e.g. two different missing refs) don't collapse into one row. Empty for
+	// single-cause categories, which fold by category as before.
+	Fingerprint string `json:"-"`
 	// RestartCount + LastTerminatedReason carry Pod crash-debugging
 	// context from k8s.Problem through to issues consumers (MCP `issues`
 	// tool + /api/issues + hub fleet_issues). Populated only for Pod
