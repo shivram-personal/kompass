@@ -16,7 +16,8 @@
 //
 //	CompileIssueFilter — bindings shaped to an issues.Issue:
 //	  severity, source, category, category_group, kind, group, ns,
-//	  name, reason, message, count, last_seen, cluster
+//	  name, reason, message, count, first_seen, last_seen, grouping_scope,
+//	  restart_count, last_terminated_reason
 //
 // Both return a Filter whose Match(activation) yields (bool, error).
 // Compile errors are returned verbatim (CEL's parser produces
@@ -105,7 +106,10 @@ var envIssue = mustNewEnv(
 	cel.Variable("reason", cel.StringType),
 	cel.Variable("message", cel.StringType),
 	cel.Variable("count", cel.IntType),
-	cel.Variable("cluster", cel.StringType),
+	// No `cluster` binding: a single Radar is one cluster. Cross-cluster scoping
+	// is the hub's `clusters=`/target mechanism (applied at fan-out), not a
+	// per-issue CEL predicate — Issue.Cluster was always empty here, so a
+	// forwarded `cluster == "x"` matched nothing.
 	// first_seen/last_seen are int unix-second timestamps so the agent can
 	// write `first_seen > timestamp("2025-01-01T00:00:00Z")` or compare
 	// against a "now - 1h" delta. Prefer first_seen for "issues older

@@ -28,7 +28,6 @@ func issueToActivation(i Issue) map[string]any {
 		"reason":  i.Reason,
 		"message": i.Message,
 		"count":   int64(i.Count),
-		"cluster": i.Cluster,
 		// first_seen is the onset (the axis the queue sorts on); last_seen
 		// churns to compose-time every poll, so `last_seen > X` ("older
 		// than…") is near-useless. Both are int unix seconds.

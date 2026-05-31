@@ -139,7 +139,8 @@ type Issue struct {
 	Affected         Affected `json:"affected,omitzero"`
 	Members          []Ref    `json:"members,omitempty"`
 	MembersTruncated bool     `json:"members_truncated,omitempty"`
-	// Cluster is left empty here; the hub injects it when emitting
-	// cross-cluster envelopes via fleet_issues.
-	Cluster string `json:"cluster,omitempty"`
+	// Cluster identity is NOT an OSS-issue concept (a Radar is one cluster). The
+	// hub adds cluster_id/cluster_name in its own fleet DTO post-fan-out; cross-
+	// cluster scoping is the hub's clusters=/target mechanism, not a per-issue
+	// field or CEL predicate.
 }

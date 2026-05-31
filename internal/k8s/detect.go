@@ -338,6 +338,11 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Name:            svc.Name,
 					Severity:        "critical",
 					Reason:          fmt.Sprintf("0/%d selected pods ready", len(selected)),
+					// A Service can be BOTH no-ready-endpoints AND have an
+					// unresolved named targetPort — distinct fixes (the workload
+					// vs the Service port spec). Stable per-cause fingerprints
+					// (not the flapping replica count) keep them as two issues.
+					Fingerprint:     "svc:no-ready-endpoints",
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
@@ -352,6 +357,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Severity:        "high",
 					Reason:          fmt.Sprintf("Unresolved named targetPort: %s", strings.Join(missing, ", ")),
 					Message:         "No selected pod declares a container port with this name",
+					Fingerprint:     "svc:unresolved-targetport",
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
