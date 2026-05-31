@@ -66,6 +66,36 @@ type ComposeStats struct {
 	TotalMatched int
 }
 
+// ListResponse is the canonical /api/issues + MCP `issues` response shape. HTTP
+// and MCP both build from NewListResponse so the contract can't drift between
+// them (and the hub mirrors one shape). Visibility and NarrowHint are set by the
+// caller — visibility is server-side RBAC data; NarrowHint is the MCP steering
+// string for a capped result.
+type ListResponse struct {
+	Issues            []Issue `json:"issues"`
+	Total             int     `json:"total"`
+	TotalMatched      int     `json:"total_matched"`
+	FilterErrors      int     `json:"filter_errors,omitempty"`
+	FilterErrorSample string  `json:"filter_error_sample,omitempty"`
+	Visibility        any     `json:"visibility,omitempty"`
+	NarrowHint        string  `json:"narrowHint,omitempty"`
+}
+
+// NewListResponse fills the shared fields from a Compose result. out==nil
+// becomes [] so the wire always carries a JSON array, never null.
+func NewListResponse(out []Issue, stats ComposeStats) ListResponse {
+	if out == nil {
+		out = []Issue{}
+	}
+	return ListResponse{
+		Issues:            out,
+		Total:             len(out),
+		TotalMatched:      stats.TotalMatched,
+		FilterErrors:      stats.FilterErrors,
+		FilterErrorSample: stats.FilterErrorSample,
+	}
+}
+
 // Compose runs the curated operational sources and merges their output.
 // Backward-compatible signature for callers that don't care about stats.
 func Compose(p Provider, f Filters) []Issue {

@@ -2433,30 +2433,20 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		filters.Filter = f
 	}
 	out, stats := issues.ComposeWithStats(provider, filters)
-	resp := map[string]any{
-		"issues": out,
-		"total":  len(out),
-		// total_matched is the uncapped count — tells the caller
-		// whether the response is windowed or the whole set. Without
-		// it, an MCP agent can't distinguish "200 returned" from
-		// "200 of 1000". Mirrors the HTTP /api/issues response shape.
-		"total_matched": stats.TotalMatched,
-	}
-	// Steering hint when the issue list was capped.
+	// Shared response shape (issues.ListResponse) — identical to /api/issues so
+	// HTTP and MCP can't drift.
+	resp := issues.NewListResponse(out, stats)
+	// Steering hint when the issue list was capped (MCP-only).
 	if stats.TotalMatched > len(out) {
-		resp["narrowHint"] = fmt.Sprintf(
+		resp.NarrowHint = fmt.Sprintf(
 			"returned %d of %d issues — narrow with namespace=, kind=, severity=critical, add filter= CEL, or raise limit (cap 1000)",
 			len(out), stats.TotalMatched,
 		)
 	}
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		if visibility := k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(allowedNamespaces)); visibility != nil {
-			resp["visibility"] = visibility
+			resp.Visibility = visibility
 		}
-	}
-	if stats.FilterErrors > 0 {
-		resp["filter_errors"] = stats.FilterErrors
-		resp["filter_error_sample"] = stats.FilterErrorSample
 	}
 	return toJSONResult(resp)
 }

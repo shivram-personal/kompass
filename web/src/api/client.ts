@@ -342,9 +342,18 @@ export function useAudit(namespaces: string[] = []) {
 // internal/issues.Compose+Classify+Group). Single-cluster here; the Hub fleet
 // view fans the same shape across clusters. keepPreviousData semantics via
 // placeholderData so the queue doesn't flash empty on the 30s refresh.
+// total = rows returned (after the cap); total_matched = rows that matched
+// before the cap. total_matched > total means the queue was truncated — surface
+// that honestly rather than presenting a capped list as if it were complete.
+export interface IssuesResponse {
+  issues: Issue[]
+  total?: number
+  total_matched?: number
+}
+
 export function useIssues(namespaces: string[] = []) {
   const params = namespaces.length > 0 ? `?namespaces=${namespaces.join(',')}` : ''
-  return useQuery<{ issues: Issue[] }>({
+  return useQuery<IssuesResponse>({
     queryKey: ['issues', namespaces],
     queryFn: () => fetchJSON(`/issues${params}`),
     staleTime: 30000,

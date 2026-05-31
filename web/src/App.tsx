@@ -397,7 +397,9 @@ function AppInner() {
 
   // Navigate from a detector finding (Audit / Issues) to the resources list for
   // its kind, opening the resource. Shared by both queues — the body was
-  // duplicated verbatim at each render site.
+  // duplicated verbatim at each render site. Encodes the opened resource in the
+  // URL (?resource=ns/name) — the same deep-link shape the resources view
+  // round-trips — so refresh/share keeps the drawer open instead of dropping it.
   const navigateToResourceList = useCallback((resource: SelectedResource) => {
     const pluralKind = kindToPlural(resource.kind)
     setSelectedResource({ ...resource, kind: pluralKind })
@@ -405,7 +407,7 @@ function AppInner() {
     newParams.delete('kind')
     newParams.delete('mode')
     newParams.delete('group')
-    newParams.delete('resource')
+    newParams.set('resource', resource.namespace ? `${resource.namespace}/${resource.name}` : resource.name)
     if (resource.group) {
       newParams.set('apiGroup', resource.group)
     } else {

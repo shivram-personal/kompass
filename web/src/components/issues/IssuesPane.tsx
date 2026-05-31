@@ -52,6 +52,14 @@ export function IssuesPane({ namespaces, onBack, onNavigateToResource }: IssuesP
         </div>
       </div>
 
+      {/* Truncation honesty: when more issues matched than were returned, say
+          so — don't present a capped list as the complete picture. */}
+      {data?.total_matched != null && data.total_matched > (data.issues?.length ?? 0) && (
+        <p className="-mt-3 text-xs text-theme-text-tertiary">
+          Showing {data.issues?.length ?? 0} of {data.total_matched} issues (capped) — narrow by namespace to see the rest.
+        </p>
+      )}
+
       {/* anyData = the query resolved, i.e. the cluster is reachable; an empty
           list then means "nothing broken" rather than "not connected". */}
       <IssuesView issues={data?.issues ?? []} anyData={!!data} onResourceClick={onResourceClick} />
