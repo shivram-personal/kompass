@@ -64,6 +64,7 @@ func main() {
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables cleanup (unbounded growth).")
+	timelineMaxSize := flag.String("timeline-max-size", fmt.Sprintf("%d", fileCfg.TimelineMaxSizeBytesOr(0)), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	// --prometheus-header Key=Value, repeatable. Defaults populated from
@@ -152,6 +153,10 @@ func main() {
 	if *kubeconfig != "" && *kubeconfigDir != "" {
 		log.Fatalf("--kubeconfig and --kubeconfig-dir are mutually exclusive")
 	}
+	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
+	if err != nil {
+		log.Fatalf("Invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
+	}
 
 	cfg := app.AppConfig{
 		Kubeconfig:           *kubeconfig,
@@ -172,6 +177,7 @@ func main() {
 		TimelineStorage:      *timelineStorage,
 		TimelineDBPath:       *timelineDBPath,
 		TimelineRetention:    *timelineRetention,
+		TimelineMaxSizeBytes: timelineMaxSizeBytes,
 		PrometheusURL:        *prometheusURL,
 		PrometheusHeaders:    promHeaders.value(),
 		MCPEnabled:           !*noMCP,

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ type Config struct {
 	TimelineStorage   string   `json:"timelineStorage,omitempty"`
 	TimelineDBPath    string   `json:"timelineDbPath,omitempty"`
 	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables
+	TimelineMaxSize   string   `json:"timelineMaxSize,omitempty"`   // Byte size (e.g. "800Mi", "8Gi"); "0" disables
 	HistoryLimit      int      `json:"historyLimit,omitempty"`
 	PrometheusURL     string   `json:"prometheusUrl,omitempty"`
 	// PrometheusHeaders are sent with every request to the Prometheus API.
@@ -147,6 +149,65 @@ func (c Config) TimelineRetentionOr(def time.Duration) time.Duration {
 		return def
 	}
 	return d
+}
+
+func (c Config) TimelineMaxSizeBytesOr(def int64) int64 {
+	if c.TimelineMaxSize == "" {
+		return def
+	}
+	n, err := ParseByteSize(c.TimelineMaxSize)
+	if err != nil {
+		log.Printf("[config] Invalid timelineMaxSize %q (using default %d): %v", c.TimelineMaxSize, def, err)
+		return def
+	}
+	return n
+}
+
+func ParseByteSize(raw string) (int64, error) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return 0, strconv.ErrSyntax
+	}
+	lower := strings.ToLower(s)
+	multipliers := []struct {
+		suffix string
+		value  int64
+	}{
+		{"gib", 1 << 30},
+		{"gb", 1000 * 1000 * 1000},
+		{"gi", 1 << 30},
+		{"g", 1000 * 1000 * 1000},
+		{"mib", 1 << 20},
+		{"mb", 1000 * 1000},
+		{"mi", 1 << 20},
+		{"m", 1000 * 1000},
+		{"kib", 1 << 10},
+		{"kb", 1000},
+		{"ki", 1 << 10},
+		{"k", 1000},
+		{"b", 1},
+	}
+	for _, m := range multipliers {
+		if strings.HasSuffix(lower, m.suffix) {
+			num := strings.TrimSpace(s[:len(s)-len(m.suffix)])
+			v, err := strconv.ParseFloat(num, 64)
+			if err != nil {
+				return 0, err
+			}
+			if v < 0 {
+				return 0, strconv.ErrSyntax
+			}
+			return int64(v * float64(m.value)), nil
+		}
+	}
+	v, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, err
+	}
+	if v < 0 {
+		return 0, strconv.ErrSyntax
+	}
+	return v, nil
 }
 
 // KubeconfigDirsFlag returns KubeconfigDirs joined as a comma-separated string

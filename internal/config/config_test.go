@@ -173,6 +173,40 @@ func TestHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("TimelineMaxSizeBytesOr", func(t *testing.T) {
+		if (Config{}).TimelineMaxSizeBytesOr(123) != 123 {
+			t.Error("empty TimelineMaxSize should return default")
+		}
+		if got := (Config{TimelineMaxSize: "800Mi"}).TimelineMaxSizeBytesOr(0); got != 800*(1<<20) {
+			t.Errorf("TimelineMaxSizeBytesOr(800Mi) = %d", got)
+		}
+		if got := (Config{TimelineMaxSize: "0"}).TimelineMaxSizeBytesOr(123); got != 0 {
+			t.Errorf("TimelineMaxSizeBytesOr(0) = %d, want 0", got)
+		}
+		if got := (Config{TimelineMaxSize: "bad"}).TimelineMaxSizeBytesOr(123); got != 123 {
+			t.Errorf("bad TimelineMaxSize should return default, got %d", got)
+		}
+	})
+
+	t.Run("ParseByteSize", func(t *testing.T) {
+		cases := map[string]int64{
+			"42":    42,
+			"1Ki":   1024,
+			"1.5Mi": int64(1.5 * float64(1<<20)),
+			"2Gi":   2 << 30,
+			"3GB":   3_000_000_000,
+		}
+		for in, want := range cases {
+			got, err := ParseByteSize(in)
+			if err != nil {
+				t.Fatalf("ParseByteSize(%q): %v", in, err)
+			}
+			if got != want {
+				t.Errorf("ParseByteSize(%q) = %d, want %d", in, got, want)
+			}
+		}
+	})
+
 	t.Run("KubeconfigDirsFlag", func(t *testing.T) {
 		if (Config{}).KubeconfigDirsFlag() != "" {
 			t.Error("nil dirs should return empty string")
