@@ -235,7 +235,7 @@ func Classify(in classifyInput) Category {
 			}
 			// AppProject/ApplicationSet/etc. are control-plane CRDs, not a sync.
 			return CategoryOperatorConditionFail
-		case strings.Contains(g, "fluxcd"):
+		case strings.Contains(g, "fluxcd.io"):
 			switch in.Kind {
 			case "Kustomization", "HelmRelease":
 				return CategoryGitOpsSyncFailed
@@ -355,7 +355,7 @@ func classifyProblem(in classifyInput) Category {
 
 	case "Kustomization", "HelmRelease":
 		// Flux reconciler failure from DetectGitOpsProblems.
-		if strings.Contains(strings.ToLower(in.APIGroup), "fluxcd") {
+		if strings.Contains(strings.ToLower(in.APIGroup), "fluxcd.io") {
 			return CategoryGitOpsSyncFailed
 		}
 		return CategoryUnknown

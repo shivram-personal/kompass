@@ -51,6 +51,9 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			continue
 		}
 		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)
+		if clusterScoped && len(f.Namespaces) > 0 {
+			continue
+		}
 		if clusterScoped && f.CanReadClusterScoped != nil && !f.CanReadClusterScoped(kind, gvr.Group) {
 			continue
 		}
@@ -175,32 +178,20 @@ func classifyDynamicScope(p Provider, gvr schema.GroupVersionResource, kind stri
 	return k8s.ClassifyKindScope(kind, gvr.Group)
 }
 
-// isCuratedCRDGroup returns true for groups that have their own
-// dedicated checker upstream — generic fallback skips them so we
-// don't emit duplicate issues with shallower context. Add to this
-// list whenever a curated checker is wired into Compose.
-func isCuratedCRDGroup(group string) bool {
-	switch group {
-	case "cluster.x-k8s.io",
-		"controlplane.cluster.x-k8s.io",
-		"infrastructure.cluster.x-k8s.io",
-		"bootstrap.cluster.x-k8s.io":
-		return true
-	}
-	return false
-}
-
 // isCuratedCRDKind reports whether a curated detector already owns this
 // (group, kind), so the generic CRD fallback must skip it to avoid a
-// double-report. CAPI groups are curated wholesale; the GitOps groups are
-// curated only for the specific kinds DetectGitOpsProblems handles —
-// sibling kinds (e.g. argoproj.io Rollout, fluxcd GitRepository) still flow
-// through the generic path, which is their only coverage.
+// double-report. CAPI is deliberately kind-specific: the curated detector owns
+// core Cluster/Machine/KCP/MHC shapes, while provider CRDs such as AWSMachine
+// and bootstrap configs still need the generic condition fallback.
 func isCuratedCRDKind(group, kind string) bool {
-	if isCuratedCRDGroup(group) {
-		return true
-	}
 	switch group {
+	case "cluster.x-k8s.io":
+		switch kind {
+		case "Cluster", "Machine", "MachineDeployment", "MachineHealthCheck":
+			return true
+		}
+	case "controlplane.cluster.x-k8s.io":
+		return kind == "KubeadmControlPlane"
 	case "argoproj.io":
 		return kind == "Application"
 	case "kustomize.toolkit.fluxcd.io":
@@ -248,13 +239,16 @@ func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, o
 		return
 	}
 	if s, r, m := cond("InvalidSpec"); s == "True" {
-		if r == "" {
-			r = "InvalidSpec"
+		// Match the "CondType: reason" shape every other condition row uses; keep
+		// the bare condType when reason is empty or just restates it.
+		reason := "InvalidSpec"
+		if r != "" && r != "InvalidSpec" {
+			reason = condTypeReason("InvalidSpec", r)
 		}
-		return r, m, true
+		return reason, m, true
 	}
 	if s, r, m := cond("Progressing"); s == "False" && r == "ProgressDeadlineExceeded" {
-		return r, m, true
+		return condTypeReason("Progressing", r), m, true
 	}
 	return "", "", false
 }

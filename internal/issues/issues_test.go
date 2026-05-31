@@ -549,6 +549,30 @@ func TestCompose_CAPIGroupSkippedByGenericFallback(t *testing.T) {
 	}
 }
 
+func TestCompose_CAPIProviderCRDsUseGenericFallback(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "infrastructure.cluster.x-k8s.io", Version: "v1beta1", Resource: "awsmachines"}
+	m := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"name": "m1", "namespace": "capi-system"},
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Ready", "status": "False", "reason": "InstanceNotFound", "message": "EC2 instance not found"},
+			},
+		},
+	}}
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {m}},
+		kinds:      map[schema.GroupVersionResource]string{gvr: "AWSMachine"},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: true},
+	}
+	out := Compose(p, Filters{})
+	if len(out) != 1 {
+		t.Fatalf("provider CRD condition should use generic fallback, got %+v", out)
+	}
+	if out[0].Source != SourceCondition || out[0].Kind != "AWSMachine" || out[0].Group != "infrastructure.cluster.x-k8s.io" {
+		t.Fatalf("wrong provider CRD issue: %+v", out[0])
+	}
+}
+
 func TestCompose_DropsUnauthorizedClusterScopedIssues(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{
@@ -599,6 +623,35 @@ func TestCompose_DropsUnauthorizedClusterScopedCRDConditions(t *testing.T) {
 	})
 	if len(out) != 0 {
 		t.Fatalf("cluster-scoped CRD condition leaked despite denied access: %+v", out)
+	}
+}
+
+func TestCompose_NamespaceFilterDropsClusterScopedGenericCRDConditions(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
+	np := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata":   map[string]any{"name": "default"},
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Ready", "status": "False", "reason": "Drifted"},
+			},
+		},
+	}}
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {np}},
+		kinds:      map[schema.GroupVersionResource]string{gvr: "NodePool"},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: false},
+	}
+	out := Compose(p, Filters{
+		Namespaces: []string{"prod"},
+		CanReadClusterScoped: func(kind, group string) bool {
+			t.Fatalf("namespace-scoped issue query should not authorize cluster-scoped generic CRD rows: kind=%q group=%q", kind, group)
+			return true
+		},
+	})
+	if len(out) != 0 {
+		t.Fatalf("cluster-scoped CRD condition should not appear under namespace filter: %+v", out)
 	}
 }
 

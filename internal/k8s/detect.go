@@ -98,7 +98,20 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			deps, _ = depLister.List(labels.Everything())
 		}
 		for _, d := range deps {
-			if d.Status.UnavailableReplicas > 0 {
+			// A ProgressDeadlineExceeded rollout is the more specific, actionable
+			// signal AND it implies unavailable replicas — so when the rollout is
+			// stuck, emit only the rollout row, not a redundant "X/Y available"
+			// degraded row for the same Deployment (one incident, not two).
+			var stuck *appsv1.DeploymentCondition
+			for i := range d.Status.Conditions {
+				c := &d.Status.Conditions[i]
+				if c.Type == appsv1.DeploymentProgressing && c.Status == "False" && c.Reason == "ProgressDeadlineExceeded" {
+					stuck = c
+					break
+				}
+			}
+
+			if d.Status.UnavailableReplicas > 0 && stuck == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				durDur := ageDur // fallback to creation time
 				for _, cond := range d.Status.Conditions {
@@ -107,13 +120,11 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						break
 					}
 				}
-				// Report available/DESIRED, not available/created: a Deployment
-				// wanting 1 with 0 pods created has status.replicas=0, which would
-				// render a misleading "0/0 available". spec.replicas is the goal.
-				desired := d.Status.Replicas
-				if d.Spec.Replicas != nil && *d.Spec.Replicas > desired {
-					desired = *d.Spec.Replicas
-				}
+				// Report available/DESIRED: spec.replicas is the authoritative goal
+				// (nil defaults to 1; a scale-down's terminating pods inflate
+				// status.replicas above the target). schedDesiredReplicas encodes
+				// the nil→1 default.
+				desired := schedDesiredReplicas(d.Spec.Replicas)
 				problems = append(problems, Detection{
 					Kind:            "Deployment",
 					Namespace:       d.Namespace,
@@ -127,36 +138,33 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					DurationSeconds: int64(durDur.Seconds()),
 				})
 			}
-			// Stuck rollout: ProgressDeadlineExceeded
-			for _, cond := range d.Status.Conditions {
-				if cond.Type == appsv1.DeploymentProgressing && cond.Status == "False" && cond.Reason == "ProgressDeadlineExceeded" {
-					durDur := now.Sub(d.CreationTimestamp.Time)
-					if !cond.LastTransitionTime.IsZero() {
-						durDur = now.Sub(cond.LastTransitionTime.Time)
-					}
-					message := cond.Message
-					if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
-						if message != "" {
-							message += " " + detail
-						} else {
-							message = detail
-						}
-					}
-					problems = append(problems, Detection{
-						Kind:            "Deployment",
-						Namespace:       d.Namespace,
-						Name:            d.Name,
-						Group:           "apps",
-						Severity:        "critical",
-						Reason:          "Rollout stuck",
-						Message:         message,
-						Age:             FormatAge(now.Sub(d.CreationTimestamp.Time)),
-						AgeSeconds:      int64(now.Sub(d.CreationTimestamp.Time).Seconds()),
-						Duration:        FormatAge(durDur),
-						DurationSeconds: int64(durDur.Seconds()),
-					})
-					break
+
+			if stuck != nil {
+				durDur := now.Sub(d.CreationTimestamp.Time)
+				if !stuck.LastTransitionTime.IsZero() {
+					durDur = now.Sub(stuck.LastTransitionTime.Time)
 				}
+				message := stuck.Message
+				if detail := rolloutRWOVolumeDetail(cache, d); detail != "" {
+					if message != "" {
+						message += " " + detail
+					} else {
+						message = detail
+					}
+				}
+				problems = append(problems, Detection{
+					Kind:            "Deployment",
+					Namespace:       d.Namespace,
+					Name:            d.Name,
+					Group:           "apps",
+					Severity:        "critical",
+					Reason:          "Rollout stuck",
+					Message:         message,
+					Age:             FormatAge(now.Sub(d.CreationTimestamp.Time)),
+					AgeSeconds:      int64(now.Sub(d.CreationTimestamp.Time).Seconds()),
+					Duration:        FormatAge(durDur),
+					DurationSeconds: int64(durDur.Seconds()),
+				})
 			}
 		}
 	}

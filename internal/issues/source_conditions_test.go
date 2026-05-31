@@ -36,7 +36,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
 		{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "timed out"},
 	})
-	if r, _, ok := argoRolloutFailure(stalled); !ok || r != "ProgressDeadlineExceeded" {
+	if r, _, ok := argoRolloutFailure(stalled); !ok || r != "Progressing: ProgressDeadlineExceeded" {
 		t.Errorf("ProgressDeadlineExceeded fallback: got (%q,%v)", r, ok)
 	}
 
