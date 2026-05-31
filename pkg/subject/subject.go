@@ -71,7 +71,9 @@ const (
 
 // Subject is the deterministic Tier-1 identity spine. Ref is the owner-collapsed
 // root controller; Scope = ScopeForKind(Ref.Kind); Anchor records HOW it
-// resolved. ~100% derivable from ownerReferences + the EdgeManages chain.
+// resolved. Derived purely from CONTROLLER ownership (ownerReferences[].
+// controller, or controllerRef-derived topology edges) — never from declarative
+// "management" edges (Argo/Flux/Helm), which are Tier-2 AppOverlay.
 type Subject struct {
 	Ref    Ref
 	Scope  Scope
@@ -232,10 +234,10 @@ func minRef(refs []Ref) Ref {
 }
 
 // HeuristicPodOwnerResolver is the built-in single-pod OwnerResolver: walks
-// pod.OwnerReferences (controller==true else [0]), RS->Deployment +
+// pod.OwnerReferences[].controller==true (controller-only, per the contract;
+// pods with no controller ref resolve to no owner), RS->Deployment +
 // StripReplicaSetHash, Job stays Job (CronJob hop handled by the multi-hop loop
-// when a topology OwnerResolver provides the Job->CronJob parent). Exact move of
-// topOwnerForPod's logic so the upstream k8s walk has ONE home.
+// when a topology OwnerResolver provides the Job->CronJob parent).
 //
 // It resolves a parent ONLY for the Pod itself: it returns the Pod's controller
 // once, then (zero, false) for anything else, since a bare Pod's
@@ -271,9 +273,11 @@ func (p HeuristicPodOwnerResolver) ParentOf(child Ref) (Ref, bool) {
 			return pick(ref)
 		}
 	}
-	if len(refs) > 0 {
-		return pick(refs[0])
-	}
+	// Controller-only, per the OwnerResolver contract: a pod with only
+	// NON-controller ownerRefs has no canonical owner — it is its own subject.
+	// (topOwnerForPod historically fell back to refs[0], collapsing pods under
+	// an arbitrary non-controller owner; that is exactly the "management edge as
+	// identity" the contract forbids, so it's dropped here.)
 	return Ref{}, false
 }
 
@@ -319,9 +323,16 @@ type Resolved struct {
 	App     *AppOverlay
 }
 
-// Resolve is the single front door. Tier-1 always populates Subject (never
-// fails, never needs a label); Tier-2 is best-effort. obj supplies BOTH the pod
-// meta for the owner walk AND the labels/annotations for the overlay.
+// Resolve composes Tier-1 + Tier-2. Tier-1 always populates Subject (never
+// fails, never needs a label). Tier-2 is best-effort.
+//
+// IMPORTANT — the two inputs feed different tiers and are NOT interchangeable:
+//   - owners drives ownership (Tier-1). obj is NOT consulted for the owner walk;
+//     pass owners=nil only when start truly has no controller (Resolve(ref, obj,
+//     nil, …) yields a bare/self Subject even if obj carries ownerRefs). To walk
+//     a pod's owners, inject a resolver — HeuristicPodOwnerResolver{Pod: obj} for
+//     the no-cache path, or a cache/controllerRef-backed one in production.
+//   - obj supplies ONLY the labels/annotations for the Tier-2 overlay.
 func Resolve(start Ref, obj metav1.Object, owners OwnerResolver, ops OperatorRootHook, allowBareApp bool) Resolved {
 	return Resolved{
 		Subject: ResolveSubject(start, owners, ops),

@@ -293,6 +293,27 @@ func TestResolveSubject_CycleIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestHeuristicPodOwnerResolver_ControllerOnly pins the contract: only a
+// controller==true ownerRef yields a parent. A pod with only NON-controller
+// ownerRefs has no canonical owner — it must NOT be collapsed under an arbitrary
+// owner (the old refs[0] fallback).
+func TestHeuristicPodOwnerResolver_ControllerOnly(t *testing.T) {
+	notCtrl := false
+	nonController := metav1.OwnerReference{APIVersion: "example.com/v1", Kind: "Thing", Name: "t1", Controller: &notCtrl}
+	pod := obj("ns", "p1", nil, nil, nonController)
+	start := Ref{Kind: "Pod", Namespace: "ns", Name: "p1"}
+	if got := ResolveSubject(start, HeuristicPodOwnerResolver{Pod: pod}, nil); got.Ref != start || got.Anchor != AnchorBare {
+		t.Errorf("non-controller-only owner: got %+v/%s, want the pod itself (bare)", got.Ref, got.Anchor)
+	}
+
+	// A controller ref IS followed.
+	podCtrl := obj("ns", "p2", nil, nil, ctrlRef("ReplicaSet", "web-7d8", "apps/v1"))
+	start2 := Ref{Kind: "Pod", Namespace: "ns", Name: "p2"}
+	if got := ResolveSubject(start2, HeuristicPodOwnerResolver{Pod: podCtrl}, nil); got.Ref.Kind != "Deployment" || got.Ref.Name != "web" {
+		t.Errorf("controller owner: got %+v, want Deployment/web", got.Ref)
+	}
+}
+
 // TestResolveSubject_StopsAtController pins the Tier-1/Tier-2 boundary: with a
 // controller-ownership resolver (Pod→ReplicaSet→Deployment, Deployment having no
 // further CONTROLLER), the Subject is the Deployment — even though an Argo

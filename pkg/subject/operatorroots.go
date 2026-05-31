@@ -28,10 +28,12 @@ var crossplaneXRGroups = map[string]bool{
 	"apiextensions.crossplane.io": true,
 }
 
-// OwnerLookup returns the immediate owner of a resource (one hop), used by
-// DefaultOperatorRoots to inspect a workload's parent without pkg/subject
-// importing topology. pkg/topology satisfies it with the same walkTopmostOwner
-// adapter it uses for OwnerResolver (single hop).
+// OwnerLookup returns the immediate CONTROLLER owner of a resource (one hop),
+// used by DefaultOperatorRoots to inspect a workload's parent without pkg/subject
+// importing topology. Same contract as OwnerResolver: controller ownership only
+// (the generated workload's controllerRef points at the operator CR) — NOT
+// declarative management edges. A topology adapter must resolve from
+// controllerReferences, not from a raw EdgeManages walk.
 type OwnerLookup interface {
 	ImmediateOwner(child Ref) (parent Ref, ok bool)
 }
