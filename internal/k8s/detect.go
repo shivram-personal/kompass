@@ -97,13 +97,20 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						break
 					}
 				}
+				// Report available/DESIRED, not available/created: a Deployment
+				// wanting 1 with 0 pods created has status.replicas=0, which would
+				// render a misleading "0/0 available". spec.replicas is the goal.
+				desired := d.Status.Replicas
+				if d.Spec.Replicas != nil && *d.Spec.Replicas > desired {
+					desired = *d.Spec.Replicas
+				}
 				problems = append(problems, Detection{
 					Kind:            "Deployment",
 					Namespace:       d.Namespace,
 					Name:            d.Name,
 					Group:           "apps",
 					Severity:        "critical",
-					Reason:          fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
+					Reason:          fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, desired),
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(durDur),
@@ -227,6 +234,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Name:                 pod.Name,
 				Severity:             severity,
 				Reason:               PodProblemReason(pod),
+				Message:              PodProblemMessage(pod),
 				Age:                  FormatAge(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
 				Duration:             FormatAge(ageDur),

@@ -268,6 +268,32 @@ func isFatalWaitingReason(reason string) bool {
 	return false
 }
 
+// PodProblemMessage returns the kubelet's waiting/terminated message for the
+// first container in a problem state (init containers first, mirroring
+// podProblemReasonRaw's walk). This is the actionable detail behind an
+// otherwise-bare reason — ImagePullBackOff's "Failed to pull image X: …not
+// found", CreateContainerConfigError's "couldn't find key Y in Secret Z" —
+// which is small, decisive, and otherwise only visible by opening the pod.
+func PodProblemMessage(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Message != "" {
+			return cs.State.Waiting.Message
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Message != "" {
+			return cs.State.Terminated.Message
+		}
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Message != "" {
+			return cs.State.Waiting.Message
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Message != "" {
+			return cs.State.Terminated.Message
+		}
+	}
+	return ""
+}
+
 func podProblemReasonRaw(pod *corev1.Pod) string {
 	for _, cs := range pod.Status.InitContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {

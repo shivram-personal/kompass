@@ -99,16 +99,28 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			if isTransientCRDCondition(u, reason) {
 				continue
 			}
+			severity := SeverityWarning
+			issReason := condTypeReason(condType, reason)
+			issMsg := msg
+			// Argo Rollout: FindFalseCondition picks Healthy=False/RolloutHealthy
+			// first (Healthy precedes Available in the Rollout's condition list),
+			// which reads as "healthy" and buries the real cause. When a
+			// definitive failure condition is present, surface it as critical.
+			if kind == "Rollout" && strings.Contains(strings.ToLower(gvr.Group), "argoproj.io") {
+				if r, m, found := argoRolloutFailure(u); found {
+					issReason, issMsg, severity = r, m, SeverityCritical
+				}
+			}
 			lastSeen := time.Now().Add(-since)
 			iss := Issue{
-				Severity:  SeverityWarning,
+				Severity:  severity,
 				Source:    SourceCondition,
 				Kind:      kind,
 				Group:     gvr.Group,
 				Namespace: u.GetNamespace(),
 				Name:      u.GetName(),
-				Reason:    condTypeReason(condType, reason),
-				Message:   msg,
+				Reason:    issReason,
+				Message:   issMsg,
 				FirstSeen: lastSeen,
 				LastSeen:  lastSeen,
 				Count:     1,
@@ -207,6 +219,44 @@ func condTypeReason(condType, reason string) string {
 		return condType + ": " + reason
 	}
 	return condType + "=False"
+}
+
+// argoRolloutFailure returns the definitive failing condition of an Argo
+// Rollout, in root-cause-first order: an invalid spec, then a progress-deadline
+// stall. Both are unambiguous failures (no in-progress ambiguity), so the
+// caller promotes them to critical and uses their reason instead of the generic
+// Healthy=False/RolloutHealthy the condition reader would otherwise surface.
+// ok=false leaves the generic reason untouched.
+func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, ok bool) {
+	conds, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	if !found {
+		return "", "", false
+	}
+	cond := func(condType string) (status, reason, message string) {
+		for _, c := range conds {
+			cm, isMap := c.(map[string]any)
+			if !isMap {
+				continue
+			}
+			if ct, _ := cm["type"].(string); ct == condType {
+				status, _ = cm["status"].(string)
+				reason, _ = cm["reason"].(string)
+				message, _ = cm["message"].(string)
+				return
+			}
+		}
+		return
+	}
+	if s, r, m := cond("InvalidSpec"); s == "True" {
+		if r == "" {
+			r = "InvalidSpec"
+		}
+		return r, m, true
+	}
+	if s, r, m := cond("Progressing"); s == "False" && r == "ProgressDeadlineExceeded" {
+		return r, m, true
+	}
+	return "", "", false
 }
 
 // ---------------------------------------------------------------------------
