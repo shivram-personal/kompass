@@ -144,6 +144,12 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		return nil, nil, fmt.Errorf("resource not found: %w", err)
 	}
 	k8s.SetTypeMeta(obj)
+	gvk := obj.GetObjectKind().GroupVersionKind()
+	canonicalGroup := gvk.Group
+	canonicalKind := gvk.Kind
+	if canonicalKind == "" {
+		canonicalKind = kindNorm
+	}
 	minified, err := aicontext.Minify(obj, aicontext.LevelDetail)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to minify: %w", err)
@@ -176,7 +182,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		// Surface the issues Radar already classified for this object (subject
 		// or affected member), scoped to its namespace — so the agent sees
 		// "crashloop + missing ConfigMap" up front, not just raw logs.
-		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), []string{input.Namespace}, "", kindNorm, input.Namespace, input.Name),
+		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), []string{input.Namespace}, canonicalGroup, canonicalKind, input.Namespace, input.Name),
 	}
 
 	// Cap the log fan-out so a DaemonSet with 50 nodes doesn't trigger

@@ -22,9 +22,10 @@ import (
 // reference, a degraded Argo app. It carries NO classification, grouping, or
 // ranking; those are the issues layer's job.
 //
-// detection.go and its sibling detectors (health.go, missing_refs.go,
-// scheduling.go, capi.go, gitops.go) ARE that detector layer: each reads the
-// live cache and returns []Detection. internal/issues is the layer ABOVE them —
+// detect.go and its sibling detectors (health.go, detect_missing_refs.go,
+// detect_scheduling.go, detect_capi.go, detect_gitops.go) ARE that detector
+// layer: each reads the live cache and returns []Detection. internal/issues is
+// the layer ABOVE them —
 // it classifies each Detection into a symptom Category, resolves its Subject,
 // and folds replica fan-out into the public grouped Issue model; the home
 // dashboard and MCP also consume Detections directly. So this is the bottom

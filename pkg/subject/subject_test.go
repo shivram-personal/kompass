@@ -94,6 +94,32 @@ func TestResolveSubject_OperatorCRRootHop(t *testing.T) {
 	}
 }
 
+func TestResolveSubject_StrimziKafkaRootHop(t *testing.T) {
+	podRef := Ref{Kind: "Pod", Namespace: "ns", Name: "kafka-0"}
+	stsRef := Ref{Group: "apps", Kind: "StatefulSet", Namespace: "ns", Name: "kafka-kafka"}
+	kafka := Ref{Group: "kafka.strimzi.io", Kind: "Kafka", Namespace: "ns", Name: "kafka"}
+	owners := fakeOwners{refKey(podRef): stsRef}
+	ops := DefaultOperatorRoots{Owners: fakeLookup{refKey(stsRef): kafka}}
+	got := ResolveSubject(podRef, owners, ops)
+	if got.Anchor != AnchorOperatorCR || got.Ref != kafka {
+		t.Errorf("Strimzi Kafka hop: got %+v, want ref=%+v anchor=operator_cr", got, kafka)
+	}
+}
+
+func TestResolveSubject_CrossplaneXRRootHop(t *testing.T) {
+	// Crossplane XRs are matched structurally by the apiextensions.crossplane.io
+	// group rather than by an enumerated kind.
+	podRef := Ref{Kind: "Pod", Namespace: "ns", Name: "db-1"}
+	stsRef := Ref{Group: "apps", Kind: "StatefulSet", Namespace: "ns", Name: "db"}
+	xr := Ref{Group: "apiextensions.crossplane.io", Kind: "XPostgreSQLInstance", Namespace: "ns", Name: "db"}
+	owners := fakeOwners{refKey(podRef): stsRef}
+	ops := DefaultOperatorRoots{Owners: fakeLookup{refKey(stsRef): xr}}
+	got := ResolveSubject(podRef, owners, ops)
+	if got.Anchor != AnchorOperatorCR || got.Ref != xr {
+		t.Errorf("Crossplane XR hop: got %+v, want ref=%+v anchor=operator_cr", got, xr)
+	}
+}
+
 func TestResolveSubject_UnknownOperatorDegradesToWorkload(t *testing.T) {
 	// A CR not on the allowlist must NOT hop — degrade to the workload (raw-always).
 	podRef := Ref{Kind: "Pod", Namespace: "ns", Name: "x-1"}
@@ -319,7 +345,7 @@ func TestHeuristicPodOwnerResolver_ControllerOnly(t *testing.T) {
 // further CONTROLLER), the Subject is the Deployment — even though an Argo
 // Application "manages" that Deployment. Application ownership is declarative,
 // not a controllerRef, so it must NEVER appear as the Subject; it belongs in
-// Tier-2 AppOverlay. A topology adapter (#823) that wrapped the GitOps-inclusive
+// Tier-2 AppOverlay. A topology adapter that wrapped the GitOps-inclusive
 // EdgeManages walk would break this — hence the explicit OwnerResolver contract.
 func TestResolveSubject_StopsAtController(t *testing.T) {
 	pod := Ref{Kind: "Pod", Namespace: "ns", Name: "web-7d8-xyz"}

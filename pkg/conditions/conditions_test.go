@@ -58,3 +58,20 @@ func TestFindFalseCondition(t *testing.T) {
 		t.Error("status.v1beta2.conditions should be read")
 	}
 }
+
+func TestFindFalseCondition_V1beta2TakesPrecedence(t *testing.T) {
+	// When both slices carry a False condition, v1beta2 is the authoritative
+	// one (CAPI v1beta2 is the forward shape) and must win.
+	both := cond(map[string]any{
+		"v1beta2": map[string]any{"conditions": []any{
+			map[string]any{"type": "Ready", "status": "False", "reason": "V1Beta2Reason"},
+		}},
+		"conditions": []any{
+			map[string]any{"type": "Ready", "status": "False", "reason": "V1Beta1Reason"},
+		},
+	})
+	_, reason, _, _, ok := FindFalseCondition(both, "Ready")
+	if !ok || reason != "V1Beta2Reason" {
+		t.Fatalf("got reason=%q ok=%v, want V1Beta2Reason/true (v1beta2 must take precedence)", reason, ok)
+	}
+}

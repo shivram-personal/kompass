@@ -49,7 +49,6 @@ const GROUP_BADGE_CLASS: Record<string, string> = {
   scaling: 'bg-fuchsia-50 text-fuchsia-700 ring-1 ring-fuchsia-200 dark:bg-fuchsia-950/40 dark:text-fuchsia-300 dark:ring-fuchsia-900',
   security: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900',
   control_plane: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:ring-slate-700',
-  application: 'bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:ring-emerald-900',
 };
 
 export function groupBadgeClass(group: string): string {
@@ -108,7 +107,6 @@ const GROUP_LABEL: Record<string, string> = {
   scaling: 'Scaling',
   security: 'Security',
   control_plane: 'Control plane',
-  application: 'Application',
   unknown: 'Unknown',
 };
 

@@ -180,6 +180,22 @@ func TestRelatedIssues_SubjectAndMember(t *testing.T) {
 	}
 }
 
+func TestRelatedIssues_GroupIsExact(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{
+		{Kind: "Service", Namespace: "prod", Name: "api", Reason: "0/1 selected pods ready", Severity: "critical"},
+		{Kind: "Service", Group: "serving.knative.dev", Namespace: "prod", Name: "api", Reason: "0/1 selected pods ready", Severity: "critical"},
+	}}
+
+	core := RelatedIssues(p, nil, "", "Service", "prod", "api")
+	if len(core) != 1 || core[0].Group != "" {
+		t.Fatalf("core Service lookup should match only core-group issue, got %+v", core)
+	}
+	knative := RelatedIssues(p, nil, "serving.knative.dev", "Service", "prod", "api")
+	if len(knative) != 1 || knative[0].Group != "serving.knative.dev" {
+		t.Fatalf("Knative Service lookup should match only serving.knative.dev issue, got %+v", knative)
+	}
+}
+
 // TestRelatedIssues_UncappedMembers pins that a resource resolves its issue even
 // when it's member #11+ of a large grouped fan-out — RelatedIssues matches flat
 // evidence (uncapped), not the inline Members slice (capped at maxInlineMembers).

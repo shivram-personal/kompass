@@ -462,14 +462,14 @@ func nodeReadyStatus(node *corev1.Node) string {
 // (Deployment with its true name, an Argo Rollout, a standalone ReplicaSet, …).
 // Falls back to the pod-only heuristic when the ReplicaSet isn't cached.
 func topOwnerForPodResolved(cache *ResourceCache, pod *corev1.Pod) *TopOwnerInfo {
-	ref := controllerOrFirstOwner(pod.OwnerReferences)
+	ref := controllerOwnerRef(pod.OwnerReferences)
 	if ref == nil {
 		return nil
 	}
 	if ref.Kind == "ReplicaSet" && cache != nil {
 		if rsl := cache.ReplicaSets(); rsl != nil {
 			if rs, err := rsl.ReplicaSets(pod.Namespace).Get(ref.Name); err == nil && rs != nil {
-				if owner := controllerOrFirstOwner(rs.OwnerReferences); owner != nil {
+				if owner := controllerOwnerRef(rs.OwnerReferences); owner != nil {
 					return &TopOwnerInfo{
 						Group: schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind).Group,
 						Kind:  owner.Kind,
@@ -484,16 +484,13 @@ func topOwnerForPodResolved(cache *ResourceCache, pod *corev1.Pod) *TopOwnerInfo
 	return topOwnerForPod(pod)
 }
 
-// controllerOrFirstOwner returns the controller=true ownerReference, falling
-// back to the first reference — matching topOwnerForPod's existing preference.
-func controllerOrFirstOwner(refs []metav1.OwnerReference) *metav1.OwnerReference {
+// controllerOwnerRef returns the controller=true ownerReference. Non-controller
+// ownerRefs are descriptive, not identity, and must not group issues.
+func controllerOwnerRef(refs []metav1.OwnerReference) *metav1.OwnerReference {
 	for i := range refs {
 		if refs[i].Controller != nil && *refs[i].Controller {
 			return &refs[i]
 		}
-	}
-	if len(refs) > 0 {
-		return &refs[0]
 	}
 	return nil
 }
@@ -506,13 +503,6 @@ func topOwnerForPod(pod *corev1.Pod) *TopOwnerInfo {
 			}
 			return &TopOwnerInfo{Group: schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind).Group, Kind: ref.Kind, Name: ref.Name}
 		}
-	}
-	if len(pod.OwnerReferences) > 0 {
-		ref := pod.OwnerReferences[0]
-		if ref.Kind == "ReplicaSet" {
-			return &TopOwnerInfo{Group: "apps", Kind: "Deployment", Name: stripReplicaSetHash(ref.Name)}
-		}
-		return &TopOwnerInfo{Group: schema.FromAPIVersionAndKind(ref.APIVersion, ref.Kind).Group, Kind: ref.Kind, Name: ref.Name}
 	}
 	return nil
 }

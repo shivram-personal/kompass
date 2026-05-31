@@ -4,7 +4,7 @@
 // Tier-1 owner-walk and Tier-2 AppOverlay engine are the canonical model that
 // pkg/topology's currently-independent logic (top_metrics.go:topOwnerForPod,
 // pod_grouping.go:determineGroupKey, managedby.go) is meant to migrate ONTO —
-// staged for #823, not yet wired. Until that lands this package is the agreed
+// planned, not yet wired. Until that lands this package is the agreed
 // vocabulary, NOT a second live "truth": topology still resolves its own
 // grouping, so don't treat subject.Resolve as the running topology path yet.
 //
@@ -118,7 +118,7 @@ func ScopeForKind(kind string) Scope {
 // the Subject. Collapsing a Deployment up to its Application here would erase
 // the identity/overlay boundary the whole package exists to keep.
 //
-// CAUTION for the topology adapter (#823): do NOT wrap pkg/topology's
+// CAUTION for a future topology adapter: do NOT wrap pkg/topology's
 // walkTopmostOwner directly — it follows every EdgeManages edge, and EdgeManages
 // is deliberately overloaded in the graph to include GitOps/Helm management
 // edges (Argo Application→resource, GitRepository→Kustomization, …). Resolve

@@ -165,8 +165,8 @@ type classifyInput struct {
 // Classify maps a detection signal to a user-facing Category. Pure and
 // deterministic — same inputs always yield the same category, so the
 // category-in-issue-id contract stays stable (no oscillation). Grounded in the
-// exact reason vocabulary emitted by internal/k8s/{health,problems,scheduling,
-// missing_refs}.go and internal/issues/conditions.go.
+// exact reason vocabulary emitted by the detector layer in internal/k8s and the
+// CRD-condition source in internal/issues.
 //
 // Coverage is intentionally partial: signals without a clean mapping (and
 // categories whose detectors don't exist yet — probes, DNS, network policy,
@@ -235,15 +235,6 @@ func Classify(in classifyInput) Category {
 			}
 			// AppProject/ApplicationSet/etc. are control-plane CRDs, not a sync.
 			return CategoryOperatorConditionFail
-		case strings.Contains(g, "fluxcd.io"):
-			switch in.Kind {
-			case "Kustomization", "HelmRelease":
-				return CategoryGitOpsSyncFailed
-			}
-			// Source CRDs (GitRepository/OCIRepository/Bucket/HelmChart/
-			// HelmRepository) failing to fetch is a source/reconcile failure,
-			// not a sync — don't inherit the applier's category.
-			return CategoryOperatorConditionFail
 		default:
 			return CategoryOperatorConditionFail
 		}
@@ -289,7 +280,7 @@ func classifyProblem(in classifyInput) Category {
 		if in.Reason == "Rollout stuck" {
 			return CategoryRolloutStalled
 		}
-		// Stable reason literal emitted by k8s.detectSharedRWOVolumeConflicts —
+		// Stable reason literal emitted by sharedRWOVolumeConflicts —
 		// a multi-replica Deployment mounting a ReadWriteOnce volume.
 		if in.Reason == "ReadWriteOnce volume shared across replicas" {
 			return CategoryVolumeAccessModeConflict
@@ -355,7 +346,8 @@ func classifyProblem(in classifyInput) Category {
 
 	case "Kustomization", "HelmRelease":
 		// Flux reconciler failure from DetectGitOpsProblems.
-		if strings.Contains(strings.ToLower(in.APIGroup), "fluxcd.io") {
+		g := strings.ToLower(in.APIGroup)
+		if g == "kustomize.toolkit.fluxcd.io" || g == "helm.toolkit.fluxcd.io" {
 			return CategoryGitOpsSyncFailed
 		}
 		return CategoryUnknown

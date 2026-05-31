@@ -135,11 +135,16 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 			continue
 		}
 
-		// Condition-based: BootstrapReady=False, NodeHealthy=False, InfrastructureReady=False
-		// (catches problems that phase alone misses, e.g. Running phase but NodeHealthy=False)
-		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(m,
+		// Condition-based: BootstrapReady=False, NodeHealthy=False, InfrastructureReady=False,
+		// with Ready=False as a fallback. Catches problems that phase alone misses,
+		// e.g. Running phase but NodeHealthy=False.
+		ct, reason, msg, dur, ok := conditions.FindFalseCondition(m,
 			"BootstrapReady", "NodeHealthy", "InfrastructureReady",
-		); ok {
+		)
+		if !ok {
+			ct, reason, msg, dur, ok = conditions.FindFalseCondition(m, "Ready")
+		}
+		if ok && capiConditionCurrent(m, reason) {
 			severity := "high"
 			if ct == "BootstrapReady" {
 				severity = "critical"
@@ -167,6 +172,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 	for _, md := range listCAPI("MachineDeployment", capiGroup) {
 		desired, _, _ := unstructured.NestedInt64(md.Object, "spec", "replicas")
 		ready, _, _ := unstructured.NestedInt64(md.Object, "status", "readyReplicas")
+		emitted := false
 		if desired > 0 && ready < desired {
 			ageDur := now.Sub(md.GetCreationTimestamp().Time)
 			if ageDur > 5*time.Minute {
@@ -181,7 +187,24 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 					Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
 					Duration: FormatAge(ageDur), DurationSeconds: int64(ageDur.Seconds()),
 				})
+				emitted = true
 			}
+		}
+		if emitted {
+			continue
+		}
+		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(md, "Ready", "Available"); ok && capiConditionCurrent(md, reason) {
+			ageDur := now.Sub(md.GetCreationTimestamp().Time)
+			d := dur
+			if d == 0 {
+				d = ageDur
+			}
+			problems = append(problems, Detection{
+				Kind: "MachineDeployment", Namespace: md.GetNamespace(), Name: md.GetName(), Group: capiGroup,
+				Severity: "high", Reason: capiDisplayReason(ct, reason), Message: msg,
+				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Duration: FormatAge(d), DurationSeconds: int64(d.Seconds()),
+			})
 		}
 	}
 
@@ -223,6 +246,7 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 	for _, mhc := range listCAPI("MachineHealthCheck", capiGroup) {
 		expected, _, _ := unstructured.NestedInt64(mhc.Object, "status", "expectedMachines")
 		healthy, _, _ := unstructured.NestedInt64(mhc.Object, "status", "currentHealthy")
+		emitted := false
 		if expected > 0 && healthy < expected {
 			ageDur := now.Sub(mhc.GetCreationTimestamp().Time)
 			problems = append(problems, Detection{
@@ -234,10 +258,46 @@ func DetectCAPIProblems(dynamicCache *DynamicResourceCache, discovery *ResourceD
 				Duration:        FormatAge(ageDur),
 				DurationSeconds: int64(ageDur.Seconds()),
 			})
+			emitted = true
+		}
+		if emitted {
+			continue
+		}
+		if ct, reason, msg, dur, ok := conditions.FindFalseCondition(mhc, "Ready", "RemediationAllowed"); ok && capiConditionCurrent(mhc, reason) {
+			ageDur := now.Sub(mhc.GetCreationTimestamp().Time)
+			d := dur
+			if d == 0 {
+				d = ageDur
+			}
+			problems = append(problems, Detection{
+				Kind: "MachineHealthCheck", Namespace: mhc.GetNamespace(), Name: mhc.GetName(), Group: capiGroup,
+				Severity: "high", Reason: capiDisplayReason(ct, reason), Message: msg,
+				Age: FormatAge(ageDur), AgeSeconds: int64(ageDur.Seconds()),
+				Duration: FormatAge(d), DurationSeconds: int64(d.Seconds()),
+			})
 		}
 	}
 
 	return problems
+}
+
+func capiDisplayReason(condType, reason string) string {
+	if reason != "" {
+		return reason
+	}
+	return condType + "=False"
+}
+
+func capiConditionCurrent(u *unstructured.Unstructured, reason string) bool {
+	if conditions.IsInProgressForIssues(reason) {
+		return false
+	}
+	gen := u.GetGeneration()
+	if gen == 0 {
+		return true
+	}
+	observed, ok, _ := unstructured.NestedInt64(u.Object, "status", "observedGeneration")
+	return !ok || observed == 0 || observed >= gen
 }
 
 // capiFailureDetail returns a CAPI object's terminal failure detail —

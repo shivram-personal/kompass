@@ -1,10 +1,12 @@
 package issues
 
 import (
+	"log"
 	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/logsafe"
 	"github.com/skyhook-io/radar/pkg/conditions"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -70,6 +72,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 		case clusterScoped:
 			its, err := p.ListDynamic(gvr, "")
 			if err != nil {
+				log.Printf("[issues] Failed to list %s (%s): %s", logsafe.Sanitize(gvr.Resource), logsafe.Sanitize(gvr.Group), logsafe.Sanitize(err.Error()))
 				continue
 			}
 			items = its
@@ -77,6 +80,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			for _, ns := range f.Namespaces {
 				its, err := p.ListDynamic(gvr, ns)
 				if err != nil {
+					log.Printf("[issues] Failed to list %s (%s) in %s: %s", logsafe.Sanitize(gvr.Resource), logsafe.Sanitize(gvr.Group), logsafe.Sanitize(ns), logsafe.Sanitize(err.Error()))
 					continue
 				}
 				items = append(items, its...)
@@ -84,6 +88,7 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 		default:
 			its, err := p.ListDynamicAllNamespaces(gvr)
 			if err != nil {
+				log.Printf("[issues] Failed to list %s (%s) across namespaces: %s", logsafe.Sanitize(gvr.Resource), logsafe.Sanitize(gvr.Group), logsafe.Sanitize(err.Error()))
 				continue
 			}
 			items = its
@@ -241,11 +246,11 @@ func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, o
 	if s, r, m := cond("InvalidSpec"); s == "True" {
 		// Match the "CondType: reason" shape every other condition row uses; keep
 		// the bare condType when reason is empty or just restates it.
-		reason := "InvalidSpec"
+		rolloutReason := "InvalidSpec"
 		if r != "" && r != "InvalidSpec" {
-			reason = condTypeReason("InvalidSpec", r)
+			rolloutReason = condTypeReason("InvalidSpec", r)
 		}
-		return reason, m, true
+		return rolloutReason, m, true
 	}
 	if s, r, m := cond("Progressing"); s == "False" && r == "ProgressDeadlineExceeded" {
 		return condTypeReason("Progressing", r), m, true

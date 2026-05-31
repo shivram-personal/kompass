@@ -38,14 +38,12 @@ func applyClusterScopedAccess(in []Issue, f Filters) []Issue {
 			continue
 		}
 		// Namespace-less issue: must be cluster-scoped (a namespaced
-		// resource without a namespace would be invalid wire data). We
-		// previously gated on k8s.ClassifyKindScope (a hardcoded list of
-		// known cluster-scoped kinds) and silently dropped anything that
-		// didn't match — which meant CRDs like Karpenter NodePool, whose
-		// emitter already classified them as cluster-scoped via dynamic
-		// API discovery, vanished from the issues list for authenticated
-		// users. CanReadClusterScoped (SAR-backed) is authoritative on
-		// access; we don't need a pre-classification gate at this layer.
+		// resource without a namespace would be invalid wire data). Don't
+		// pre-gate on a static cluster-scoped kind list here: dynamically
+		// discovered cluster-scoped CRDs (e.g. Karpenter NodePool), already
+		// classified cluster-scoped by their emitter, would be dropped for
+		// authenticated users. CanReadClusterScoped (SAR-backed) is the
+		// authoritative access gate; no pre-classification is needed.
 		if f.CanReadClusterScoped(i.Kind, i.Group) {
 			out = append(out, i)
 		}
@@ -55,7 +53,7 @@ func applyClusterScopedAccess(in []Issue, f Filters) []Issue {
 
 // SeverityRank orders the normalized issue severity, higher = worse. Shared by
 // the grouping comparators here and by the per-resource summary rollups in the
-// server/MCP layers (which previously each carried an identical local copy).
+// server/MCP layers, so all three rank off one function.
 func SeverityRank(s Severity) int {
 	switch s {
 	case SeverityCritical:

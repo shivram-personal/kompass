@@ -8,7 +8,9 @@ import (
 // RelatedIssues returns the grouped issues whose subject OR an affected member
 // is the given resource — what an agent diagnosing an object wants: "issues
 // Radar already classified here." Kind is matched case-insensitively (callers
-// may pass the K8s Kind or a normalized form); an empty group matches any.
+// may pass the K8s Kind or a normalized form); group is exact, including the
+// empty core API group, so core/CRD kind collisions cannot bleed into each
+// other's resourceContext.
 func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name string) []Issue {
 	// Compose FLAT (uncapped) then group: matching against the flat evidence —
 	// not the grouped issue's inline Members (capped at maxInlineMembers) — is
@@ -16,10 +18,10 @@ func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name
 	flat := Compose(p, Filters{Namespaces: namespaces, Limit: NoLimit})
 	grouped := GroupIssues(flat)
 	match := func(g, k, ns, n string) bool {
-		return strings.EqualFold(k, kind) && ns == namespace && n == name && (group == "" || g == group)
+		return strings.EqualFold(k, kind) && ns == namespace && n == name && g == group
 	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
-	for _, g := range grouped {       // as the grouped SUBJECT (owner-collapsed)
+	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
 		if match(g.Group, g.Kind, g.Namespace, g.Name) {
 			matched[g.ID] = true
 		}

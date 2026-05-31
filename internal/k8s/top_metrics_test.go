@@ -71,3 +71,25 @@ func TestTopOwnerForPodStripsReplicaSetHash(t *testing.T) {
 		t.Fatalf("owner = %+v, want Deployment/api", owner)
 	}
 }
+
+func TestTopOwnerForPodIgnoresNonControllerOwnerRefs(t *testing.T) {
+	controller := false
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "api-pod",
+			Namespace: "default",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "api",
+				Controller: &controller,
+			}},
+		},
+	}
+	if owner := topOwnerForPod(pod); owner != nil {
+		t.Fatalf("topOwnerForPod = %+v, want nil for non-controller ownerRef", owner)
+	}
+	if owner := topOwnerForPodResolved(nil, pod); owner != nil {
+		t.Fatalf("topOwnerForPodResolved = %+v, want nil for non-controller ownerRef", owner)
+	}
+}

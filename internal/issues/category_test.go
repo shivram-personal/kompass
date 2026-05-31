@@ -35,6 +35,7 @@ func TestClassify(t *testing.T) {
 		{"argo app outofsync", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OutOfSync"}, CategoryGitOpsSyncFailed},
 		{"flux kustomization problem", classifyInput{Source: SourceProblem, Kind: "Kustomization", APIGroup: "kustomize.toolkit.fluxcd.io", Reason: "ReconciliationFailed"}, CategoryGitOpsSyncFailed},
 		{"flux helmrelease problem", classifyInput{Source: SourceProblem, Kind: "HelmRelease", APIGroup: "helm.toolkit.fluxcd.io", Reason: "InstallFailed"}, CategoryGitOpsSyncFailed},
+		{"flux-looking kustomization group is not gitops", classifyInput{Source: SourceProblem, Kind: "Kustomization", APIGroup: "custom-fluxcd.io", Reason: "ReconciliationFailed"}, CategoryUnknown},
 		{"non-argo Application kind is not gitops", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "other.example.com", Reason: "whatever"}, CategoryUnknown},
 
 		// argo Rollout is progressive delivery, NOT a sync failure
@@ -79,7 +80,8 @@ func TestClassify(t *testing.T) {
 
 		// condition (CRD fallback) — discriminated by API group
 		{"argo sync failed", classifyInput{Source: SourceCondition, Kind: "Application", APIGroup: "argoproj.io", Reason: "Synced: ComparisonError"}, CategoryGitOpsSyncFailed},
-		{"flux helmrelease", classifyInput{Source: SourceCondition, Kind: "HelmRelease", APIGroup: "helm.toolkit.fluxcd.io", Reason: "Ready=False"}, CategoryGitOpsSyncFailed},
+		{"flux helmrelease condition fallback is not sync", classifyInput{Source: SourceCondition, Kind: "HelmRelease", APIGroup: "helm.toolkit.fluxcd.io", Reason: "Ready=False"}, CategoryOperatorConditionFail},
+		{"flux-looking helmrelease group is not sync", classifyInput{Source: SourceCondition, Kind: "HelmRelease", APIGroup: "custom-fluxcd.io", Reason: "Ready=False"}, CategoryOperatorConditionFail},
 		{"cert-manager not ready", classifyInput{Source: SourceCondition, Kind: "Certificate", APIGroup: "cert-manager.io", Reason: "Ready: DoesNotExist"}, CategoryCertificateNotReady},
 		{"cert-manager Issuer is NOT certificate_not_ready", classifyInput{Source: SourceCondition, Kind: "ClusterIssuer", APIGroup: "cert-manager.io", Reason: "Ready=False"}, CategoryOperatorConditionFail},
 		{"generic operator condition", classifyInput{Source: SourceCondition, Kind: "Foo", APIGroup: "example.com", Reason: "Ready=False"}, CategoryOperatorConditionFail},
