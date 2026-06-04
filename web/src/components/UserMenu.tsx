@@ -67,18 +67,17 @@ export function UserMenu() {
               </p>
             )}
           </div>
-          {authMe.authMode === 'proxy' ? (
-            <p className="px-3 py-1.5 text-[11px] text-theme-text-tertiary">
-              Session managed by auth proxy
+          <button
+            onClick={handleLogout}
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover transition-colors"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Logout
+          </button>
+          {authMe.authMode === 'proxy' && !authMe.proxyLogoutConfigured && (
+            <p className="px-3 py-1.5 text-[11px] text-theme-text-tertiary border-t border-theme-border">
+              Logout clears the Radar session. The auth proxy may sign you back in automatically.
             </p>
-          ) : (
-            <button
-              onClick={handleLogout}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover transition-colors"
-            >
-              <LogOut className="w-3.5 h-3.5" />
-              Logout
-            </button>
           )}
         </div>
       )}

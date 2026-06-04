@@ -738,6 +738,10 @@ export interface AuthMe {
   /** Pre-computed Cloud tier from `cloud:<tier>` group prefix.
    *  Absent when not running under Cloud (OSS, OIDC, no role group). */
   cloudRole?: CloudRole
+  /** Proxy mode only: whether an upstream sign-out URL is configured.
+   *  When false, logout clears Radar's cookie but the proxy may re-auth
+   *  the same user on the next request. */
+  proxyLogoutConfigured?: boolean
 }
 
 export function useAuthMe() {

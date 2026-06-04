@@ -57,6 +57,14 @@ radar --auth-mode=proxy \
 
 > **Security:** Your ingress must strip `X-Forwarded-User` and `X-Forwarded-Groups` headers from external requests to prevent spoofing. The auth proxy should be the **only** path to Radar. Radar logs a warning at startup as a reminder.
 
+**Logout behavior:**
+
+The user menu always shows a **Logout** button. Clicking it clears Radar's session cookie. On its own, that isn't enough to switch users: your proxy re-injects the identity header on the next request and signs the same user back in.
+
+To make logout actually switch users, point Radar at your proxy's sign-out URL with `--auth-proxy-logout-url` (or `auth.proxy.logoutURL` in Helm) — e.g. oauth2-proxy's `/oauth2/sign_out`. Radar then redirects the browser there after clearing its own cookie, so the upstream session is torn down too. When unset, the menu shows a note that the proxy may re-authenticate automatically.
+
+> **Note:** HTTP Basic Auth has no reliable logout mechanism — browsers cache credentials and resend them. If you need user-switching, prefer a proxy with a real sign-out endpoint (oauth2-proxy, Authelia) over plain Basic Auth.
+
 ### OIDC Mode
 
 Use this when you want Radar to handle login directly — no separate auth proxy needed. Radar redirects to your identity provider (Google, Okta, Dex, Keycloak, etc.), validates the token, and creates a session cookie.
@@ -383,6 +391,7 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | Cookie TTL | `--auth-cookie-ttl` | `auth.cookieTTL` | `4h` (sliding) |
 | User header (proxy) | `--auth-user-header` | `auth.proxy.userHeader` | `X-Forwarded-User` |
 | Groups header (proxy) | `--auth-groups-header` | `auth.proxy.groupsHeader` | `X-Forwarded-Groups` |
+| Proxy logout URL (proxy) | `--auth-proxy-logout-url` | `auth.proxy.logoutURL` | — |
 | OIDC issuer | `--auth-oidc-issuer` | `auth.oidc.issuerURL` | — |
 | OIDC client ID | `--auth-oidc-client-id` | `auth.oidc.clientID` | — |
 | OIDC client secret | `--auth-oidc-client-secret` | `auth.oidc.clientSecret` | — |

@@ -18,8 +18,9 @@ type Config struct {
 	CookieTTL time.Duration // default 4h, sliding
 
 	// Proxy mode
-	UserHeader   string // default "X-Forwarded-User"
-	GroupsHeader string // default "X-Forwarded-Groups"
+	UserHeader     string // default "X-Forwarded-User"
+	GroupsHeader   string // default "X-Forwarded-Groups"
+	ProxyLogoutURL string // optional, URL the logout button redirects to so the upstream proxy session is torn down (e.g. oauth2-proxy /oauth2/sign_out)
 
 	// Session revocation (optional, used by backchannel logout)
 	Revoker SessionRevoker

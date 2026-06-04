@@ -82,6 +82,7 @@ func main() {
 	authCookieTTL := flag.Duration("auth-cookie-ttl", 4*time.Hour, "Session cookie TTL (sliding — extends on activity)")
 	authUserHeader := flag.String("auth-user-header", "X-Forwarded-User", "Header for username (proxy mode)")
 	authGroupsHeader := flag.String("auth-groups-header", "X-Forwarded-Groups", "Header for groups (proxy mode)")
+	authProxyLogoutURL := flag.String("auth-proxy-logout-url", "", "URL the logout button redirects to in proxy mode, to tear down the upstream proxy session (e.g. oauth2-proxy's /oauth2/sign_out). The proxy must actually invalidate the session at this URL — Radar only clears its own cookie (Basic Auth has no logout). Empty = clear Radar's cookie only.")
 	authOIDCIssuer := flag.String("auth-oidc-issuer", "", "OIDC issuer URL")
 	authOIDCClientID := flag.String("auth-oidc-client-id", "", "OIDC client ID")
 	authOIDCClientSecret := flag.String("auth-oidc-client-secret", "", "OIDC client secret")
@@ -195,6 +196,7 @@ func main() {
 			CookieTTL:                 *authCookieTTL,
 			UserHeader:                *authUserHeader,
 			GroupsHeader:              *authGroupsHeader,
+			ProxyLogoutURL:            *authProxyLogoutURL,
 			OIDCIssuer:                *authOIDCIssuer,
 			OIDCClientID:              *authOIDCClientID,
 			OIDCClientSecret:          *authOIDCClientSecret,

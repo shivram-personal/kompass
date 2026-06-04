@@ -3285,13 +3285,25 @@ func (s *Server) requireConnected(w http.ResponseWriter) bool {
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, auth.ClearSessionCookie())
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "logged out"})
+	resp := map[string]string{"status": "logged out"}
+	// Clearing Radar's cookie alone doesn't switch users: the proxy
+	// re-injects the identity header on the next request. Redirect to the
+	// proxy's sign-out URL so the upstream session is torn down too.
+	if s.authConfig.ProxyLogoutURL != "" {
+		resp["redirectTo"] = s.authConfig.ProxyLogoutURL
+	}
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"authEnabled": s.authConfig.Enabled(),
 		"authMode":    s.authConfig.Mode,
+	}
+	// Tells the SPA whether proxy-mode logout can tear down the upstream
+	// session (vs only clearing Radar's cookie), so it can warn the user.
+	if s.authConfig.Mode == "proxy" {
+		resp["proxyLogoutConfigured"] = s.authConfig.ProxyLogoutURL != ""
 	}
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		resp["username"] = user.Username
