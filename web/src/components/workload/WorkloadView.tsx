@@ -5,6 +5,7 @@ import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
+  type WorkloadTabType,
   type RendererOverrides,
   type GitOpsOwnerRef,
   type GitOpsStatus,
@@ -57,7 +58,7 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { apiVersionToGroup } from '../../utils/navigation'
 
-type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
+type TabType = WorkloadTabType
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {

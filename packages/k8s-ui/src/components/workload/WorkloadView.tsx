@@ -19,11 +19,15 @@ import {
   Maximize2,
   X,
   BarChart3,
+  Network,
 } from 'lucide-react'
-import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom } from '../../types'
+import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
-import { refToSelectedResource, pluralToKind } from '../../utils/navigation'
+import { refToSelectedResource, pluralToKind, kindToPlural, apiVersionToGroup } from '../../utils/navigation'
+import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
+import { TopologyGraph } from '../topology/TopologyGraph'
+import { ToastProvider } from '../ui/Toast'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
@@ -49,7 +53,8 @@ import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
 import { getKindColorOutline, formatKindName } from '../ui/drawer-components'
 
-type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
+export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'yaml'
+type TabType = WorkloadTabType
 
 // ============================================================================
 // MAIN WORKLOAD VIEW — presentation only, data injected via props
@@ -86,6 +91,8 @@ interface WorkloadViewProps {
    * workload picker in Radar Cloud. Absent in standalone Radar.
    */
   scopeControls?: ReactNode
+  /** Hide WorkloadView's own breadcrumb/identity header when a host page owns that chrome. */
+  compactHeader?: boolean
 
   // ── Data (injected by wrapper) ──────────────────────────────────────────
   /** The resource data object */
@@ -107,8 +114,8 @@ interface WorkloadViewProps {
   allEvents?: TimelineEvent[]
   /** Whether timeline events are loading */
   eventsLoading?: boolean
-  /** Topology data for hierarchy building */
-  topology?: any
+  /** Topology data for hierarchy building + the Topology tab's neighborhood. */
+  topology?: Topology
   resourceFocusedK8sEvents?: TimelineEvent[]
   resourceFocusedUpdates?: TimelineEvent[]
   resourceFocusedEventsLoading?: boolean
@@ -118,6 +125,8 @@ interface WorkloadViewProps {
   // ── Capabilities ─────────────────────────────────────────────────────────
   /** Whether secrets can be updated */
   canUpdateSecrets?: boolean
+  /** Whether YAML editing should be disabled for read-only host surfaces. */
+  readOnlyYaml?: boolean
 
   // ── Mutations ────────────────────────────────────────────────────────────
   /** Update a resource from YAML */
@@ -219,6 +228,7 @@ export function WorkloadView({
   group,
   breadcrumb,
   scopeControls,
+  compactHeader,
   // Data
   resource,
   relationships,
@@ -237,6 +247,7 @@ export function WorkloadView({
   resourceFocusedUpdatesError = null,
   // Capabilities
   canUpdateSecrets,
+  readOnlyYaml,
   // Mutations
   onUpdateResource,
   isUpdatingResource,
@@ -316,6 +327,30 @@ export function WorkloadView({
       groupByApp: true,
     })
   }, [allEvents, topology, kind, namespace, name])
+
+  // Topology tab — the seeded neighborhood around this one workload (its
+  // ownership core + attached Services/config/policies), not the whole namespace.
+  const neighborhoodSeed = useMemo(() => [{ kind, namespace, name }], [kind, namespace, name])
+  const neighborhood = useMemo(
+    () => (topology ? neighborhoodFor(topology, neighborhoodSeed) : null),
+    [topology, neighborhoodSeed],
+  )
+  const neighborhoodFocusId = useMemo(
+    () => (topology ? seedNodeIds(topology, neighborhoodSeed)[0] : undefined),
+    [topology, neighborhoodSeed],
+  )
+  const handleTopologyNodeClick = useCallback(
+    (node: TopologyNode) => {
+      if (!onNavigateToResource || !node.kind || !node.name) return
+      onNavigateToResource({
+        kind: kindToPlural(node.kind),
+        namespace: (node.data?.namespace as string) || '',
+        name: node.name,
+        group: apiVersionToGroup(node.data?.apiVersion as string | undefined),
+      })
+    },
+    [onNavigateToResource],
+  )
 
   // Flatten events from hierarchy
   const resourceEvents = useMemo(() => {
@@ -446,6 +481,7 @@ export function WorkloadView({
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const tabs: DetailShellTab<TabType>[] = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
+    { id: 'topology', label: 'Topology', icon: <Network className="w-4 h-4" />, hidden: !topology },
     {
       id: 'timeline',
       label: 'Timeline',
@@ -548,6 +584,7 @@ export function WorkloadView({
               data={resource}
               onCopy={(text) => copyToClipboard(text, 'yaml')}
               copied={copied === 'yaml'}
+              readOnly={readOnlyYaml}
               onSaved={handleSaved}
               onSave={onUpdateResource}
               isSaving={isUpdatingResource}
@@ -678,6 +715,7 @@ export function WorkloadView({
       scopeControls={scopeControls}
       tabStripEnd={<ResourceActionsBar resource={selectedResource} data={resource} hideLogs {...actionsBarProps} />}
       overlay={saveSuccess ? <SaveSuccessAnimation /> : null}
+      compactHeader={compactHeader}
     >
         {activeTab === 'overview' && (
             <InfoTab
@@ -695,13 +733,28 @@ export function WorkloadView({
               onSwitchToTimeline={() => handleSetTab('timeline')}
               rendererOverrides={rendererOverrides}
               resolvedEnvFrom={resolvedEnvFrom}
-              events={resourceFocusedK8sEvents}
-              eventsLoading={resourceFocusedEventsLoading}
+              events={resourceEvents}
+              eventsLoading={eventsLoading || resourceFocusedEventsLoading}
               updates={resourceFocusedUpdates}
               eventsError={resourceFocusedK8sError}
               updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
             />
+        )}
+        {activeTab === 'topology' && topology && (
+          <div className="relative h-full min-h-0 w-full">
+            <ToastProvider>
+              <TopologyGraph
+                topology={neighborhood}
+                viewMode="resources"
+                groupingMode="namespace"
+                hideGroupHeader
+                onNodeClick={handleTopologyNodeClick}
+                showExportButton={false}
+                focusNodeId={neighborhoodFocusId}
+              />
+            </ToastProvider>
+          </div>
         )}
         {activeTab === 'timeline' && (
           <EventsTab
@@ -745,6 +798,7 @@ export function WorkloadView({
                 data={resource}
                 onCopy={(text) => copyToClipboard(text, 'yaml')}
                 copied={copied === 'yaml'}
+                readOnly={readOnlyYaml}
                 onSaved={handleSaved}
                 onSave={onUpdateResource}
                 isSaving={isUpdatingResource}
@@ -1240,7 +1294,7 @@ function InfoTab({
             onClick={onSwitchToTimeline}
             className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
           >
-            These are events for this resource only. Switch to the <span className="underline">Timeline</span> tab to see events across all related resources.
+            Showing recent events across this workload. Switch to the <span className="underline">Timeline</span> tab for full history and resource relationships.
           </button>
         )}
         renderSidebar={(sidebarSections) => (

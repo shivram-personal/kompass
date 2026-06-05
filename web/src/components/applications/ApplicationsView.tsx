@@ -10,6 +10,7 @@ import {
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { useTopology } from '../../api/client'
 import { kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
 
@@ -46,25 +47,7 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
   const selected = useMemo(() => apps.find((a) => a.key === selectedKey) ?? null, [apps, selectedKey])
 
   if (selectedKey && selected) {
-    return (
-      <div className="flex-1 overflow-auto">
-        <ApplicationDetail
-          app={selected}
-          onBack={() => setSelectedKey(null)}
-          renderWorkload={(workload: SelectedAppWorkload) => (
-            <div className="h-[calc(100vh-14rem)] min-h-[560px] overflow-hidden">
-              <WorkloadView
-                kind={kindToPlural(workload.kind)}
-                namespace={workload.namespace}
-                name={workload.name}
-                onBack={() => setSelectedKey(null)}
-                onNavigateToResource={onOpenResource}
-              />
-            </div>
-          )}
-        />
-      </div>
-    )
+    return <AppDetailRoute app={selected} onBack={() => setSelectedKey(null)} onOpenResource={onOpenResource} />
   }
 
   return (
@@ -87,6 +70,40 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
       ) : (
         <ApplicationsList apps={apps} onSelect={setSelectedKey} />
       )}
+    </div>
+  )
+}
+
+// AppDetailRoute wires the OSS data hooks the shared ApplicationDetail can't:
+// the resources-view topology over the app's namespaces (for the app graph)
+// and the per-workload WorkloadView (which fetches its own topology for the
+// Topology tab). Split out so useTopology runs unconditionally (Rules of Hooks).
+function AppDetailRoute({ app, onBack, onOpenResource }: { app: AppRow; onBack: () => void; onOpenResource: (resource: SelectedResource) => void }) {
+  const appNamespaces = useMemo(
+    () => Array.from(new Set((app.workloads ?? []).map((w) => w.namespace).filter(Boolean))).sort(),
+    [app.workloads],
+  )
+  const { data: topology } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0 })
+
+  return (
+    <div className="flex-1 overflow-auto">
+      <ApplicationDetail
+        app={app}
+        onBack={onBack}
+        topology={topology}
+        onNavigateToResource={onOpenResource}
+        renderWorkload={(workload: SelectedAppWorkload) => (
+          <div className="h-[calc(100vh-16rem)] min-h-[520px] overflow-hidden">
+            <WorkloadView
+              kind={kindToPlural(workload.kind)}
+              namespace={workload.namespace}
+              name={workload.name}
+              onBack={onBack}
+              onNavigateToResource={onOpenResource}
+            />
+          </div>
+        )}
+      />
     </div>
   )
 }
