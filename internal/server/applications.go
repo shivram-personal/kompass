@@ -57,6 +57,7 @@ type appRow struct {
 	WorkloadClass string            `json:"workload_class,omitempty"` // service | worker | job | unknown
 	Health        string            `json:"health"`                   // worst-of across workloads
 	Versions      []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
+	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
 	Workloads     []appWorkload     `json:"workloads"`
 	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
 	Relationships *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
@@ -94,6 +95,7 @@ type appWorkload struct {
 	WorkloadClass string `json:"workload_class,omitempty"` // service | worker | job | unknown
 	Image         string `json:"image,omitempty"`          // full primary-container image ref
 	Version       string `json:"version,omitempty"`        // image tag (digest-only → empty)
+	AppVersion    string `json:"appVersion,omitempty"`     // app.kubernetes.io/version label (upstream release, e.g. v2.49.1)
 	Health        string `json:"health"`
 	Ready         int    `json:"ready"`            // ready/available replicas
 	Desired       int    `json:"desired"`          // desired replicas
@@ -324,6 +326,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				WorkloadClass: classifyWorkload(kind, rels),
 				Image:         image,
 				Version:       imageTag(image),
+				AppVersion:    lbls["app.kubernetes.io/version"],
 				Health:        string(health),
 				Ready:         ready,
 				Desired:       desired,
@@ -468,6 +471,7 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		ins := members[comp]
 		r := &appRow{}
 		identifyApp(r, ins)
+		appVers := map[string]struct{}{}
 		for _, in := range ins {
 			r.Workloads = append(r.Workloads, in.wl)
 			r.Events = append(r.Events, in.events...)
@@ -475,7 +479,18 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 			if v := in.wl.Version; v != "" && !slices.Contains(r.Versions, v) {
 				r.Versions = append(r.Versions, v)
 			}
+			if av := in.wl.AppVersion; av != "" {
+				appVers[av] = struct{}{}
+			}
 			mergeRelationships(r, in.rels)
+		}
+		// A single upstream version across the app's workloads is its "main
+		// version" (a single-chart add-on). A multi-chart umbrella disagrees, so
+		// we leave it empty and the UI falls back to per-workload image tags.
+		if len(appVers) == 1 {
+			for av := range appVers {
+				r.AppVersion = av
+			}
 		}
 		finalizeRelationships(r)
 		sort.Strings(r.Versions)

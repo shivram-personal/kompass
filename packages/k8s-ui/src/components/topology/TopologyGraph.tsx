@@ -28,6 +28,7 @@ import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
+import { NEUTRAL_OWNER } from '../../utils/workload-colors'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, type GroupDisplayLevel } from './layout'
 import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode } from '../../types'
 import { pluralize } from '../../utils/pluralize'
@@ -179,6 +180,13 @@ interface TopologyGraphProps {
   focusNodeId?: string
   /** Increment to request a focus on focusNodeId (lets the same node be re-focused). */
   focusNonce?: number
+  /** Application graph: when set, nodes NOT owned by this workload (matched on
+   *  `data.ownerWorkloadId`, neutral nodes as NEUTRAL_OWNER) dim. Cheap node-data
+   *  toggle — never re-layouts. */
+  focusedOwnerId?: string | null
+  /** Hover a node → reports its TopologyNode (null on leave). Drives the rail's
+   *  reciprocal highlight. */
+  onNodeHover?: (node: TopologyNode | null) => void
 }
 
 export function TopologyGraph({
@@ -197,6 +205,8 @@ export function TopologyGraph({
   namespacesKey = '',
   focusNodeId,
   focusNonce,
+  focusedOwnerId,
+  onNodeHover,
 }: TopologyGraphProps) {
   const isTrafficView = viewMode === 'traffic'
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
@@ -298,18 +308,26 @@ export function TopologyGraph({
     fitAllAfterLayoutRef.current = true
   }, [groupingMode])
 
-  // Expand pod group to show individual pods
+  // Expand pod group to show individual pods. Clear saved positions so ELK
+  // re-lays out the whole graph from scratch — otherwise existing nodes snap
+  // back to their saved spots while the newly-added pods get fresh ELK
+  // coordinates, and the two coordinate spaces collide (overlapping nodes).
+  // Re-fit afterwards since the expanded pods enlarge the content bounds.
   const handleExpandPodGroup = useCallback((podGroupId: string) => {
     setExpandedPodGroups(prev => new Set(prev).add(podGroupId))
+    savedPositionsRef.current.clear()
+    fitAllAfterLayoutRef.current = true
   }, [])
 
-  // Collapse pod group back
+  // Collapse pod group back — same full relayout + re-fit (the graph shrinks).
   const handleCollapsePodGroup = useCallback((podGroupId: string) => {
     setExpandedPodGroups(prev => {
       const next = new Set(prev)
       next.delete(podGroupId)
       return next
     })
+    savedPositionsRef.current.clear()
+    fitAllAfterLayoutRef.current = true
   }, [])
 
   // Expand PodGroup to individual pods
@@ -710,6 +728,17 @@ export function TopologyGraph({
     [topology, workingNodes, onNodeClick]
   )
 
+  const handleNodeMouseEnter = useCallback(
+    (_e: React.MouseEvent, node: Node) => {
+      if (!onNodeHover || node.type === 'group') return
+      const topologyNode =
+        topology?.nodes.find(n => n.id === node.id) ?? workingNodes.find(n => n.id === node.id)
+      if (topologyNode) onNodeHover(topologyNode)
+    },
+    [topology, workingNodes, onNodeHover]
+  )
+  const handleNodeMouseLeave = useCallback(() => onNodeHover?.(null), [onNodeHover])
+
   // Update selected state - only update nodes that actually changed
   useEffect(() => {
     setNodes(nds => {
@@ -742,6 +771,34 @@ export function TopologyGraph({
     // target node (e.g. search expands a collapsed group). Safe from loops: the
     // functional update returns the same array ref when nothing changed.
   }, [selectedNodeId, setNodes, nodes])
+
+  // Hover-focus dim (application graph): when a workload is focused, dim every
+  // resource node not owned by it. A pure data toggle on the existing nodes —
+  // positions are untouched, so it never re-runs the (expensive) ELK layout.
+  useEffect(() => {
+    setNodes(nds => {
+      let changed = false
+      const updated = nds.map(node => {
+        if (node.type === 'group') return node
+        const data = node.data?.nodeData as Record<string, unknown> | undefined
+        const focusIds = (data?.focusWorkloadIds as string[] | undefined) ?? []
+        const isNeutral = ((data?.ownerWorkloadId as string | null | undefined) ?? null) == null
+        // A focused workload lights its whole neighborhood (focusIds); the
+        // "Shared / unscoped" focus lights every neutral node.
+        const inFocus =
+          focusedOwnerId == null
+            ? true
+            : focusedOwnerId === NEUTRAL_OWNER
+              ? isNeutral
+              : focusIds.includes(focusedOwnerId)
+        const shouldDim = focusedOwnerId != null && !inFocus
+        if (!!node.data?.dimmed === shouldDim) return node
+        changed = true
+        return { ...node, data: { ...node.data, dimmed: shouldDim } }
+      })
+      return changed ? updated : nds
+    })
+  }, [focusedOwnerId, setNodes, nodes])
 
   if (!topology) {
     return <PaneLoader label="Loading topology…" className="absolute inset-0" />
@@ -884,6 +941,8 @@ export function TopologyGraph({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}

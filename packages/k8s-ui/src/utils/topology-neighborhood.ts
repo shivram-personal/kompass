@@ -145,6 +145,116 @@ export function neighborhoodFor(
   }
 }
 
+// ─── Workload ownership tagging ──────────────────────────────────────────────
+//
+// For the application graph (seeds = the app's workloads) we want to show which
+// resources belong to which workload. A resource is "owned" by a workload when
+// it belongs to that workload ALONE — its pods (manages-descendants), and the
+// Service/config/policy attached to exactly one workload. Anything attached to
+// two or more workloads (a shared ConfigMap, a GitOps manager) stays NEUTRAL, as
+// does anything attached to none. This is the visual twin of the leaf rule: the
+// graph already refuses to bridge through shared resources, and here they
+// refuse to claim a color.
+
+export interface WorkloadOwnership {
+  /** The neighborhood subgraph, each node's `data` stamped with:
+   *   - `ownerWorkloadId` (workload key | null) + `ownerColorIndex` (number | null)
+   *     — the EXCLUSIVE owner, for the color wash. Shared nodes are null (neutral).
+   *   - `focusWorkloadIds` (workload keys) — every workload whose neighborhood
+   *     includes this node, for hover-focus. A shared ConfigMap belongs to all
+   *     workloads that use it, so focusing any of them lights it up (matching the
+   *     single-workload topology), even though it stays neutral-colored. */
+  topology: Topology
+  /** Color index per workload key (`kind/namespace/name`) — for rail swatches. */
+  colorByWorkload: Map<string, number>
+}
+
+const workloadKeyOf = (kind: string, namespace: string, name: string): string =>
+  `${kind}/${namespace}/${name}`
+
+/** Run the neighborhood query for `seeds`, then tag each node with the workload
+ *  that exclusively owns it (or neutral). Returns the tagged subgraph plus the
+ *  color + node-ownership maps the application rail needs. */
+export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed[]): WorkloadOwnership {
+  const sub = neighborhoodFor(topology, seeds)
+
+  // Stable color per workload: order of `seeds` (matches the rail's order).
+  const colorByWorkload = new Map<string, number>()
+  for (const s of seeds) {
+    const k = workloadKeyOf(s.kind, s.namespace, s.name)
+    if (!colorByWorkload.has(k)) colorByWorkload.set(k, colorByWorkload.size)
+  }
+
+  // The seed nodes present in the subgraph, by their workload key.
+  const seedKeyById = new Map<string, string>()
+  for (const n of sub.nodes) {
+    if (seeds.some((s) => s.kind === n.kind && s.name === n.name && s.namespace === nodeNamespace(n))) {
+      seedKeyById.set(n.id, workloadKeyOf(n.kind, nodeNamespace(n), n.name))
+    }
+  }
+
+  // manages-DOWN children (source manages target) + undirected neighbors.
+  const downChildren = new Map<string, string[]>()
+  const neighbors = new Map<string, Set<string>>()
+  for (const e of sub.edges) {
+    if (e.type === 'manages') {
+      if (!downChildren.has(e.source)) downChildren.set(e.source, [])
+      downChildren.get(e.source)!.push(e.target)
+    }
+    for (const [a, b] of [[e.source, e.target], [e.target, e.source]] as const) {
+      if (!neighbors.has(a)) neighbors.set(a, new Set())
+      neighbors.get(a)!.add(b)
+    }
+  }
+
+  // Core = each seed plus everything reachable DOWN the manages chain from it
+  // (its ReplicaSets, Pods). Exclusive by construction — a pod has one controller.
+  const coreOwner = new Map<string, string>()
+  for (const [seedId, key] of seedKeyById) {
+    const queue = [seedId]
+    while (queue.length) {
+      const id = queue.shift()!
+      if (coreOwner.has(id)) continue
+      coreOwner.set(id, key)
+      for (const c of downChildren.get(id) ?? []) if (!coreOwner.has(c)) queue.push(c)
+    }
+  }
+
+  // For each node, figure out which workloads it belongs to. A core node (the
+  // workload itself + its manages-descendants) belongs to its own workload. Any
+  // other node belongs to every workload-core it touches: that's its focus set.
+  // The color owner is the EXCLUSIVE case only — a node touching exactly one
+  // workload and not a GitOps manager (managers are context, never owned).
+  const nodes = sub.nodes.map((n) => {
+    const core = coreOwner.get(n.id) ?? null
+    let focusWorkloadIds: string[]
+    let owner: string | null
+    if (core) {
+      focusWorkloadIds = [core]
+      owner = core
+    } else {
+      const related = new Set<string>()
+      for (const nb of neighbors.get(n.id) ?? []) {
+        const o = coreOwner.get(nb)
+        if (o) related.add(o)
+      }
+      focusWorkloadIds = [...related]
+      owner = related.size === 1 && !GITOPS_MANAGER_KINDS.has(n.kind) ? [...related][0] : null
+    }
+    return {
+      ...n,
+      data: {
+        ...n.data,
+        ownerWorkloadId: owner,
+        ownerColorIndex: owner ? colorByWorkload.get(owner) ?? null : null,
+        focusWorkloadIds,
+      },
+    }
+  })
+
+  return { topology: { ...sub, nodes }, colorByWorkload }
+}
+
 /** The set of node IDs that are the seeds themselves — handy for the caller to
  *  pass `focusNodeId` (pan/zoom to the workload) into <TopologyGraph/>. */
 export function seedNodeIds(topology: Topology, seeds: NeighborhoodSeed[]): string[] {

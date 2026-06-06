@@ -22,11 +22,11 @@ import {
   envRank,
   isSystemNamespace,
   overlayProvenance,
-  provenanceTooltip,
   resolveEnv,
   sourceOf,
   workloadClassOf,
 } from '../../utils/applications'
+import { ProvenanceTooltip, VersionTooltip } from './AppTooltips'
 
 // ApplicationsList — pure, single-cluster dense list of logical apps. Health
 // dot + name + provenance/add-on/mixed chips; a Namespace column; an env pill
@@ -125,7 +125,7 @@ function ProvenanceBadge({ row }: { row: AppRow }) {
         : 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900'
   const label = overlayProvenance(row.tier)
   return (
-    <Tooltip content={provenanceTooltip(row.tier, row.key, conf)} delay={150}>
+    <Tooltip content={<ProvenanceTooltip tier={row.tier} appKey={row.key} confidence={conf} />} delay={150}>
       <span className={`inline-flex items-center rounded-sm px-1.5 py-px text-[10px] font-medium ring-1 ring-inset ${tone}`}>{label}</span>
     </Tooltip>
   )
@@ -377,7 +377,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={e.workloadClass} /></td>
                       <td className="px-2 py-2.5"><ReadyBar ready={e.ready} desired={e.desired} /></td>
                       <td className="px-2 py-2.5">
-                        {e.versions.length === 0 ? <span className="text-theme-text-tertiary">—</span> : e.versions.length === 1 ? <span className="font-mono text-xs text-theme-text-secondary">{e.versions[0]}</span> : <span className="rounded-sm bg-amber-50 px-1 text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900">{e.versions.length} versions</span>}
+                        {e.row.appVersion ? <Tooltip content={<VersionTooltip workloads={e.row.workloads ?? []} />} delay={150}><span className="font-mono text-xs text-theme-text-secondary">{e.row.appVersion}</span></Tooltip> : e.versions.length === 0 ? <span className="text-theme-text-tertiary">—</span> : e.versions.length === 1 ? <span className="font-mono text-xs text-theme-text-secondary">{e.versions[0]}</span> : <Tooltip content={<VersionTooltip workloads={e.row.workloads ?? []} />} delay={150}><span className="rounded-sm bg-amber-50 px-1 text-[10px] font-medium text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:ring-amber-900">{e.versions.length} versions</span></Tooltip>}
                       </td>
                       <td className="px-2 py-2.5">
                         {Object.keys(e.kinds).length === 0 ? (

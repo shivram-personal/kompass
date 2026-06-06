@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   ApplicationsList,
@@ -43,11 +44,28 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
   })
 
   const apps = query.data?.applications ?? []
-  const [selectedKey, setSelectedKey] = useState<string | null>(null)
+
+  // Which app is open lives in the URL (?app=<key>) so the detail view is
+  // deep-linkable and the browser back button returns to the list. Opening or
+  // closing an app also clears the per-app params (workload, tab).
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedKey = searchParams.get('app')
   const selected = useMemo(() => apps.find((a) => a.key === selectedKey) ?? null, [apps, selectedKey])
 
+  const selectApp = useCallback(
+    (key: string | null) => {
+      const params = new URLSearchParams(searchParams)
+      if (key) params.set('app', key)
+      else params.delete('app')
+      params.delete('workload')
+      params.delete('tab')
+      setSearchParams(params)
+    },
+    [searchParams, setSearchParams],
+  )
+
   if (selectedKey && selected) {
-    return <AppDetailRoute app={selected} onBack={() => setSelectedKey(null)} onOpenResource={onOpenResource} />
+    return <AppDetailRoute app={selected} onBack={() => selectApp(null)} onOpenResource={onOpenResource} />
   }
 
   return (
@@ -68,7 +86,7 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
           body="Deploy services, workers, or jobs to this cluster to see them grouped by app."
         />
       ) : (
-        <ApplicationsList apps={apps} onSelect={setSelectedKey} />
+        <ApplicationsList apps={apps} onSelect={selectApp} />
       )}
     </div>
   )
@@ -85,6 +103,24 @@ function AppDetailRoute({ app, onBack, onOpenResource }: { app: AppRow; onBack: 
   )
   const { data: topology } = useTopology(appNamespaces, 'resources', { enabled: appNamespaces.length > 0 })
 
+  // The selected workload (?workload=<key>) lives in the URL too: deep-linkable,
+  // and back returns from a workload's runtime to the app graph. Clearing it
+  // also drops the workload's tab param.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedWorkloadKey = searchParams.get('workload')
+  const selectWorkload = useCallback(
+    (key: string | null) => {
+      const params = new URLSearchParams(searchParams)
+      if (key) params.set('workload', key)
+      else {
+        params.delete('workload')
+        params.delete('tab')
+      }
+      setSearchParams(params)
+    },
+    [searchParams, setSearchParams],
+  )
+
   return (
     <div className="flex-1 overflow-auto">
       <ApplicationDetail
@@ -92,13 +128,15 @@ function AppDetailRoute({ app, onBack, onOpenResource }: { app: AppRow; onBack: 
         onBack={onBack}
         topology={topology}
         onNavigateToResource={onOpenResource}
+        selectedWorkloadKey={selectedWorkloadKey}
+        onSelectWorkload={selectWorkload}
         renderWorkload={(workload: SelectedAppWorkload) => (
-          <div className="h-[calc(100vh-16rem)] min-h-[520px] overflow-hidden">
+          <div className="h-full overflow-hidden">
             <WorkloadView
               kind={kindToPlural(workload.kind)}
               namespace={workload.namespace}
               name={workload.name}
-              onBack={onBack}
+              onBack={() => selectWorkload(null)}
               onNavigateToResource={onOpenResource}
             />
           </div>

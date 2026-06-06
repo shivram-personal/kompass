@@ -15,6 +15,7 @@ export interface AppWorkload {
   workload_class?: AppWorkloadClass
   image?: string
   version?: string
+  appVersion?: string
   health: string
   ready: number
   desired: number
@@ -56,6 +57,9 @@ export interface AppRow {
   health: string
   /** distinct image tags. */
   versions?: string[]
+  /** Single upstream version (app.kubernetes.io/version) when all workloads
+   *  agree — the app's "main version". Empty for multi-chart umbrellas. */
+  appVersion?: string
   workloads: AppWorkload[]
   events?: AppEvent[]
   relationships?: AppRelationships
@@ -204,24 +208,38 @@ function appNameFromKey(key: string): string {
   return slash >= 0 && slash < key.length - 1 ? key.slice(slash + 1) : key
 }
 
+// How an app was grouped, decomposed so the tooltip can render the source
+// resource / label key in an inline-code chip rather than a run-on sentence.
+// `lead` + `code` + `trail` reads as a phrase: "its Flux HelmRelease `argocd`"
+// or "the `app.kubernetes.io/part-of` label". `code` empty → no chip.
+export interface ProvenanceSource {
+  lead: string
+  code: string
+  trail?: string
+}
+
+export function provenanceSource(tier: number | undefined, key: string): ProvenanceSource {
+  const name = appNameFromKey(key)
+  switch (tier) {
+    case 1: return { lead: 'its Flux HelmRelease', code: name }
+    case 2: return { lead: 'its Flux Kustomization', code: name }
+    case 3:
+    case 4: return { lead: 'its Argo CD Application', code: name }
+    case 5: return { lead: 'its Helm release', code: name }
+    case 6: return { lead: 'the', code: 'app.kubernetes.io/instance', trail: 'label' }
+    case 7: return { lead: 'the', code: 'app.kubernetes.io/part-of', trail: 'label' }
+    case 8: return { lead: 'the', code: 'app.kubernetes.io/name', trail: 'label' }
+    case 9: return { lead: 'the', code: 'app', trail: 'label' }
+    default: return { lead: 'cluster-native evidence', code: '' }
+  }
+}
+
 /** A user-facing explanation of how an app was grouped, for the provenance
  *  tooltip — plain language naming the source resource, not the raw resolver key. */
 export function provenanceTooltip(tier: number | undefined, key: string, confidence: string | undefined): string {
   const conf = confidence ?? 'low'
-  const name = appNameFromKey(key)
-  let how: string
-  switch (tier) {
-    case 1: how = `its Flux HelmRelease "${name}"`; break
-    case 2: how = `its Flux Kustomization "${name}"`; break
-    case 3:
-    case 4: how = `its Argo CD Application "${name}"`; break
-    case 5: how = `its Helm release "${name}"`; break
-    case 6: how = 'the app.kubernetes.io/instance label'; break
-    case 7: how = 'the app.kubernetes.io/part-of label'; break
-    case 8: how = 'the app.kubernetes.io/name label'; break
-    case 9: how = 'the app label'; break
-    default: how = 'cluster-native evidence'
-  }
+  const s = provenanceSource(tier, key)
+  const how = s.code ? `${s.lead} ${s.code}${s.trail ? ` ${s.trail}` : ''}` : s.lead
   return `Grouped by ${how} · ${conf} confidence`
 }
 

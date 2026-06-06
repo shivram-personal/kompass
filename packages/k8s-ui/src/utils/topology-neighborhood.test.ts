@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { neighborhoodFor } from './topology-neighborhood'
+import { neighborhoodFor, tagWorkloadOwnership } from './topology-neighborhood'
 import type { Topology, NodeKind, EdgeType } from '../types/core'
 
 function node(id: string, kind: string, ns: string, name: string): Topology['nodes'][number] {
@@ -79,5 +79,68 @@ describe('neighborhoodFor', () => {
     const out = neighborhoodFor(topo, [{ kind: 'Deployment', namespace: 'app', name: 'missing' }])
     expect(out.nodes).toHaveLength(0)
     expect(out.warnings?.some((w) => w.includes('No topology nodes matched'))).toBe(true)
+  })
+})
+
+describe('tagWorkloadOwnership', () => {
+  const dataOf = (t: Topology, id: string) => t.nodes.find((n) => n.id === id)!.data as Record<string, unknown>
+
+  // Two workloads, each with its own Service + Pod, plus one shared ConfigMap.
+  // Each workload owns its exclusive satellites; the shared ConfigMap is neutral.
+  it('tags exclusive satellites + pods with their workload, shared as neutral', () => {
+    const topo: Topology = {
+      nodes: [
+        node('depA', 'Deployment', 'app', 'a'),
+        node('podA', 'Pod', 'app', 'a-1'),
+        node('svcA', 'Service', 'app', 'a'),
+        node('depB', 'Deployment', 'app', 'b'),
+        node('podB', 'Pod', 'app', 'b-1'),
+        node('shared', 'ConfigMap', 'app', 'shared'),
+      ],
+      edges: [
+        edge('depA', 'podA', 'manages'),
+        edge('svcA', 'depA', 'exposes'),
+        edge('depB', 'podB', 'manages'),
+        edge('shared', 'depA', 'configures'),
+        edge('shared', 'depB', 'configures'),
+      ],
+    }
+    const { topology, colorByWorkload } = tagWorkloadOwnership(topo, [
+      { kind: 'Deployment', namespace: 'app', name: 'a' },
+      { kind: 'Deployment', namespace: 'app', name: 'b' },
+    ])
+    const a = colorByWorkload.get('Deployment/app/a')
+    const b = colorByWorkload.get('Deployment/app/b')
+    expect(a).not.toBe(b)
+    // a's core + its exclusive Service carry a's color; its pod inherits it.
+    expect(dataOf(topology, 'depA').ownerWorkloadId).toBe('Deployment/app/a')
+    expect(dataOf(topology, 'podA').ownerColorIndex).toBe(a)
+    expect(dataOf(topology, 'svcA').ownerColorIndex).toBe(a)
+    expect(dataOf(topology, 'podB').ownerColorIndex).toBe(b)
+    // the ConfigMap touches both workloads → neutral color…
+    expect(dataOf(topology, 'shared').ownerWorkloadId).toBeNull()
+    expect(dataOf(topology, 'shared').ownerColorIndex).toBeNull()
+    // …but its focus set includes BOTH, so focusing either lights it up.
+    expect(new Set(dataOf(topology, 'shared').focusWorkloadIds as string[])).toEqual(
+      new Set(['Deployment/app/a', 'Deployment/app/b']),
+    )
+    // an exclusive satellite's focus set is just its own workload.
+    expect(dataOf(topology, 'svcA').focusWorkloadIds).toEqual(['Deployment/app/a'])
+  })
+
+  // A GitOps manager is context, not membership — it never claims a color even
+  // when it manages a single workload in the neighborhood.
+  it('leaves a GitOps manager neutral', () => {
+    const topo: Topology = {
+      nodes: [
+        node('ks', 'Kustomization', 'flux-system', 'apps'),
+        node('dep', 'Deployment', 'app', 'web'),
+        node('pod', 'Pod', 'app', 'web-1'),
+      ],
+      edges: [edge('ks', 'dep', 'manages'), edge('dep', 'pod', 'manages')],
+    }
+    const { topology } = tagWorkloadOwnership(topo, [{ kind: 'Deployment', namespace: 'app', name: 'web' }])
+    expect(dataOf(topology, 'ks').ownerWorkloadId).toBeNull()
+    expect(dataOf(topology, 'pod').ownerWorkloadId).toBe('Deployment/app/web')
   })
 })
