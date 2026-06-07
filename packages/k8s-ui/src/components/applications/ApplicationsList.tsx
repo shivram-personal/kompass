@@ -119,7 +119,7 @@ function searchTextForEntry(e: AppEntry): string {
     .toLowerCase()
 }
 
-function Facet<T extends string>({ title, options, selected, onToggle }: { title: string; options: { value: T; label: string; count: number; tone?: string; tooltip?: string }[]; selected: Set<T>; onToggle: (v: T) => void }) {
+export function Facet<T extends string>({ title, options, selected, onToggle }: { title: string; options: { value: T; label: string; count: number; tone?: string; tooltip?: string }[]; selected: Set<T>; onToggle: (v: T) => void }) {
   const visible = options.filter((o) => o.count > 0)
   if (visible.length === 0) return null
   return (
