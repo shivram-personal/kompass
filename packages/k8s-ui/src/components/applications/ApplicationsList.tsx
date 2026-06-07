@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { X, ChevronRight, ChevronUp, ChevronDown } from 'lucide-react'
+import { ChevronRight, ChevronUp, ChevronDown } from 'lucide-react'
 import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
 import { EmptyState } from '../ui/EmptyState'
+import { SearchBox } from '../ui/SearchBox'
 import { pluralize } from '../../utils/pluralize'
 import {
   type AppRow,
@@ -281,13 +282,20 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
         </div>
       </div>
 
+      <SearchBox
+        value={textFilter}
+        onChange={setTextFilter}
+        scope="applications"
+        shortcutId="applications-search"
+        className="max-w-md"
+        onEnter={() => {
+          if (entries[0]) onSelect(entries[0].row.key)
+        }}
+      />
+
       <div className="flex w-full gap-4">
         {/* Facet rail */}
         <aside className="hidden w-[200px] shrink-0 flex-col gap-4 lg:flex">
-          <div className="relative">
-            <input type="text" value={textFilter} onChange={(e) => setTextFilter(e.target.value)} placeholder="Filter…" className="w-full rounded-md border border-theme-border bg-theme-base px-2.5 py-1.5 pr-7 text-xs text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-skyhook-500 focus:outline-none focus:ring-2 focus:ring-skyhook-500/25" />
-            {textFilter && <button type="button" onClick={() => setTextFilter('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-theme-text-tertiary hover:text-theme-text-primary"><X className="h-3.5 w-3.5" /></button>}
-          </div>
           <Facet title="Availability" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_META[h].text }))} selected={fHealth} onToggle={(v) => toggle(fHealth, setFHealth, v)} />
           <Facet title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => toggle(fClass, setFClass, v)} />
           <Facet title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => toggle(fType, setFType, v)} />
