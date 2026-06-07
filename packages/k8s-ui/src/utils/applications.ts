@@ -104,11 +104,16 @@ export function envRank(env: string | undefined): number | null {
 // Namespace-name token → canonical env. Matched on the whole name first, then
 // on `-`/`_`-delimited segments (so `myapp-prod`, `staging-svc` resolve), which
 // avoids substring false-hits like `prod` inside `product`.
+// Mirrors the server's env vocabulary (applications_family.go) — the family
+// resolver and this client heuristic must recognize the same tokens, or rows
+// the server families (env=autopush) sit "unlabeled" in the Env column.
 const ENV_NS_TOKENS: Record<string, string> = {
   dev: 'dev', devel: 'dev', develop: 'dev', development: 'dev',
   stg: 'staging', stage: 'staging', staging: 'staging',
   prd: 'prod', prod: 'prod', production: 'prod', live: 'prod',
-  qa: 'qa', uat: 'uat', sandbox: 'sandbox', sbx: 'sandbox', preview: 'preview', demo: 'demo',
+  qa: 'qa', uat: 'uat', preprod: 'preprod', preview: 'preview', canary: 'canary',
+  autopush: 'autopush',
+  sandbox: 'sandbox', sbx: 'sandbox', demo: 'demo', test: 'test', perf: 'perf', integration: 'integration',
 }
 
 /** Infer a canonical environment from a namespace name, or null when nothing
