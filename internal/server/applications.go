@@ -60,6 +60,7 @@ type appRow struct {
 	Versions      []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
 	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
 	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
+	Family        *appFamily        `json:"family,omitempty"`         // env-family classification (never identity) — see applications_family.go
 	Workloads     []appWorkload     `json:"workloads"`
 	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
 	Relationships *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
@@ -148,7 +149,9 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	}
 	g := buildAppGraph(cache, namespaces)
 	wls := collectAppWorkloads(cache, namespaces, g)
-	return &applicationsResponse{Applications: groupApplications(wls)}, nil
+	rows := groupApplications(wls)
+	resolveAppFamilies(rows, argoSourcePaths(ctx, cache))
+	return &applicationsResponse{Applications: rows}, nil
 }
 
 // buildAppGraph constructs the same resources-view topology the /api/topology

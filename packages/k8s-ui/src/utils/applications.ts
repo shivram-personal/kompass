@@ -41,6 +41,18 @@ export interface AppEvent {
   lastSeen?: string
 }
 
+export interface AppFamily {
+  /** Shared display identity (the name stem). Derived classification — never
+   *  an address; instance keys remain the only URLs. */
+  key: string
+  /** This instance's canonical env token (dev | staging | prod | autopush | …). */
+  env: string
+  /** high (declared source path) | medium (name stem + shared image repo). */
+  confidence: string
+  /** Human-readable why, for the family chip tooltip. */
+  evidence: string
+}
+
 export interface AppRow {
   key: string
   name: string
@@ -49,6 +61,9 @@ export interface AppRow {
   namespace?: string
   /** All distinct workload namespaces, sorted. */
   namespaces?: string[]
+  /** Env-family classification (never identity) — instances of one logical
+   *  app across environments share family.key. See applications_family.go. */
+  family?: AppFamily
   /** pkg/subject overlay tier (0 = raw, no signal); 1-9. */
   tier?: number
   /** high | medium | low */
@@ -174,7 +189,30 @@ function parseVersion(v: string | undefined): number[] | null {
 }
 
 /** -1 if a<b, 1 if a>b, 0 if equal, null if either isn't a comparable version. */
+/** Date-stamped CI tags ("main_2026-03-26_05", "billing_main_2026-05-18_00"):
+ *  same prefix + extractable date (+ optional sequence) gives a total order.
+ *  Different prefixes or no date → not comparable; never guess. */
+const DATE_TAG = /^(.*?)[-_](\d{4})[-_.](\d{2})[-_.](\d{2})(?:[-_.](\d+))?$/
+
+function parseDateTag(v: string): { prefix: string; ord: number } | null {
+  const m = DATE_TAG.exec(v)
+  if (!m) return null
+  const [, prefix, y, mo, d, seq] = m
+  const ord = Number(y) * 1e8 + Number(mo) * 1e6 + Number(d) * 1e4 + Number(seq ?? 0)
+  return { prefix, ord }
+}
+
 export function compareVersions(a: string | undefined, b: string | undefined): number | null {
+  // Date-stamped pipeline tags first — semver parsing would misread them.
+  if (a && b) {
+    const da = parseDateTag(a)
+    const db = parseDateTag(b)
+    if (da && db) {
+      if (da.prefix !== db.prefix) return null
+      return da.ord === db.ord ? 0 : da.ord < db.ord ? -1 : 1
+    }
+    if (da || db) return null
+  }
   const pa = parseVersion(a)
   const pb = parseVersion(b)
   if (!pa || !pb) return null
