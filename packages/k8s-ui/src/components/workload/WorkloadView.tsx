@@ -27,7 +27,6 @@ import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, kindToPlural, apiVersionToGroup } from '../../utils/navigation'
 import { neighborhoodFor, seedNodeIds } from '../../utils/topology-neighborhood'
 import { TopologyGraph } from '../topology/TopologyGraph'
-import { ToastProvider } from '../ui/Toast'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { gitOpsRouteForResource } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
@@ -481,7 +480,7 @@ export function WorkloadView({
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
   const tabs: DetailShellTab<TabType>[] = [
     { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
-    { id: 'topology', label: 'Topology', icon: <Network className="w-4 h-4" />, hidden: !topology },
+    { id: 'topology', label: 'Topology', icon: <Network className="w-4 h-4" />, hidden: !neighborhood || neighborhood.nodes.length === 0 },
     {
       id: 'timeline',
       label: 'Timeline',
@@ -743,17 +742,15 @@ export function WorkloadView({
         )}
         {activeTab === 'topology' && topology && (
           <div className="relative h-full min-h-0 w-full">
-            <ToastProvider>
-              <TopologyGraph
-                topology={neighborhood}
-                viewMode="resources"
-                groupingMode="namespace"
-                hideGroupHeader
-                onNodeClick={handleTopologyNodeClick}
-                showExportButton={false}
-                focusNodeId={neighborhoodFocusId}
-              />
-            </ToastProvider>
+            <TopologyGraph
+              topology={neighborhood}
+              viewMode="resources"
+              groupingMode="namespace"
+              hideGroupHeader
+              onNodeClick={handleTopologyNodeClick}
+              showExportButton={false}
+              focusNodeId={neighborhoodFocusId}
+            />
           </div>
         )}
         {activeTab === 'timeline' && (

@@ -44,7 +44,11 @@ export interface AppEvent {
 export interface AppRow {
   key: string
   name: string
+  /** The single namespace the app's WORKLOADS run in; absent/empty when they
+   *  span several (use `namespaces`). Residence, not the GitOps manager's home. */
   namespace?: string
+  /** All distinct workload namespaces, sorted. */
+  namespaces?: string[]
   /** pkg/subject overlay tier (0 = raw, no signal); 1-9. */
   tier?: number
   /** high | medium | low */
@@ -183,27 +187,55 @@ export function compareVersions(a: string | undefined, b: string | undefined): n
 }
 
 // -----------------------------------------------------------------------------
-// Provenance — overlay tier → human label, mirroring pkg/subject's Tier
-// constants (1-9).
+// Provenance — overlay tier → everything tier-derived, mirroring pkg/subject's
+// Tier constants (1-9). ONE table: the badge label, the Source facet bucket,
+// and the tooltip phrase all read from TIER_META, so a new tier added in
+// pkg/subject has exactly one place to land here.
 // -----------------------------------------------------------------------------
 
-// Short badge label — the tool/source that grouped the app, at a glance.
-const TIER_PROVENANCE: Record<number, string> = {
-  1: 'Flux',
-  2: 'Flux',
-  3: 'Argo CD',
-  4: 'Argo CD',
-  5: 'Helm',
-  6: 'Label',
-  7: 'Label',
-  8: 'Label',
-  9: 'Label',
+/** Coarse provenance bucket for the Source facet. Stable ids — display labels
+ *  live in SOURCE_META (the house meta-map pattern), so they can be re-worded
+ *  without breaking facet state or future URL serialization. */
+export type AppSource = 'argocd' | 'flux' | 'helm' | 'label' | 'ungrouped'
+
+export const SOURCE_ORDER: AppSource[] = ['argocd', 'flux', 'helm', 'label', 'ungrouped']
+
+export const SOURCE_META: Record<AppSource, { label: string }> = {
+  argocd: { label: 'Argo CD' },
+  flux: { label: 'Flux' },
+  helm: { label: 'Helm' },
+  label: { label: 'Label' },
+  ungrouped: { label: 'Ungrouped' },
+}
+
+interface TierMeta {
+  source: AppSource
+  /** Tooltip phrase pieces: "Grouped by {lead} `{code(name)}` {trail}". */
+  lead: string
+  code: (name: string) => string
+  trail?: string
+}
+
+const TIER_META: Record<number, TierMeta> = {
+  1: { source: 'flux', lead: 'its Flux HelmRelease', code: (n) => n },
+  2: { source: 'flux', lead: 'its Flux Kustomization', code: (n) => n },
+  3: { source: 'argocd', lead: 'its Argo CD Application', code: (n) => n },
+  4: { source: 'argocd', lead: 'its Argo CD Application', code: (n) => n },
+  5: { source: 'helm', lead: 'its Helm release', code: (n) => n },
+  6: { source: 'label', lead: 'the', code: () => 'app.kubernetes.io/instance', trail: 'label' },
+  7: { source: 'label', lead: 'the', code: () => 'app.kubernetes.io/part-of', trail: 'label' },
+  8: { source: 'label', lead: 'the', code: () => 'app.kubernetes.io/name', trail: 'label' },
+  9: { source: 'label', lead: 'the', code: () => 'app', trail: 'label' },
+}
+
+export function sourceOf(tier: number | undefined): AppSource {
+  if (!tier) return 'ungrouped'
+  return TIER_META[tier]?.source ?? 'label'
 }
 
 /** Short badge label for an app's provenance tier (which tool/source grouped it). */
 export function overlayProvenance(tier: number | undefined): string {
-  if (!tier) return 'raw'
-  return TIER_PROVENANCE[tier] ?? 'Label'
+  return SOURCE_META[sourceOf(tier)].label
 }
 
 function appNameFromKey(key: string): string {
@@ -222,19 +254,9 @@ export interface ProvenanceSource {
 }
 
 export function provenanceSource(tier: number | undefined, key: string): ProvenanceSource {
-  const name = appNameFromKey(key)
-  switch (tier) {
-    case 1: return { lead: 'its Flux HelmRelease', code: name }
-    case 2: return { lead: 'its Flux Kustomization', code: name }
-    case 3:
-    case 4: return { lead: 'its Argo CD Application', code: name }
-    case 5: return { lead: 'its Helm release', code: name }
-    case 6: return { lead: 'the', code: 'app.kubernetes.io/instance', trail: 'label' }
-    case 7: return { lead: 'the', code: 'app.kubernetes.io/part-of', trail: 'label' }
-    case 8: return { lead: 'the', code: 'app.kubernetes.io/name', trail: 'label' }
-    case 9: return { lead: 'the', code: 'app', trail: 'label' }
-    default: return { lead: 'cluster-native evidence', code: '' }
-  }
+  const meta = tier ? TIER_META[tier] : undefined
+  if (!meta) return { lead: 'cluster-native evidence', code: '' }
+  return { lead: meta.lead, code: meta.code(appNameFromKey(key)), trail: meta.trail }
 }
 
 /** A user-facing explanation of how an app was grouped, for the provenance
@@ -246,15 +268,10 @@ export function provenanceTooltip(tier: number | undefined, key: string, confide
   return `Grouped by ${how} · ${conf} confidence`
 }
 
-// -----------------------------------------------------------------------------
-// Source — coarse provenance bucket derived from the tier, for facets.
-// -----------------------------------------------------------------------------
-
-export type AppSource = 'Argo CD' | 'Flux' | 'Helm' | 'Label' | 'Ungrouped'
-
-/** The distinct namespaces an app's workloads run in, sorted. Falls back to the
- *  row's namespace when there are no workloads to derive from. */
+/** The distinct namespaces an app's workloads run in, sorted. Prefers the
+ *  server's `namespaces` field, deriving from workloads for older payloads. */
 export function namespacesOf(app: AppRow): string[] {
+  if (app.namespaces && app.namespaces.length > 0) return app.namespaces
   const nss = Array.from(new Set((app.workloads || []).map((w) => w.namespace).filter(Boolean))).sort()
   if (nss.length > 0) return nss
   return app.namespace ? [app.namespace] : []
@@ -268,14 +285,10 @@ export function namespaceOf(app: AppRow): string {
   return nss.length === 1 ? nss[0] : ''
 }
 
-
-export function sourceOf(tier: number | undefined): AppSource {
-  const t = tier ?? 0
-  if (t === 1 || t === 2) return 'Flux'
-  if (t === 3 || t === 4) return 'Argo CD'
-  if (t === 5) return 'Helm'
-  if (t >= 6 && t <= 9) return 'Label' // tiers 6-9 are all label-based grouping
-  return 'Ungrouped'
+/** Normalize a wire health string to the AppHealth union (the health twin of
+ *  workloadClassOf — keeps `as AppHealth` casts out of components). */
+export function healthOf(value: string | undefined): AppHealth {
+  return value === 'unhealthy' || value === 'degraded' || value === 'healthy' ? value : 'unknown'
 }
 
 // -----------------------------------------------------------------------------

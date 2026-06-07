@@ -28,7 +28,8 @@ import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
-import { NEUTRAL_OWNER } from '../../utils/workload-colors'
+import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
+import { ownershipOf } from '../../utils/topology-neighborhood'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, type GroupDisplayLevel } from './layout'
 import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode } from '../../types'
 import { pluralize } from '../../utils/pluralize'
@@ -189,10 +190,10 @@ interface TopologyGraphProps {
   focusNodeId?: string
   /** Increment to request a focus on focusNodeId (lets the same node be re-focused). */
   focusNonce?: number
-  /** Application graph: when set, nodes NOT owned by this workload (matched on
-   *  `data.ownerWorkloadId`, neutral nodes as NEUTRAL_OWNER) dim. Cheap node-data
-   *  toggle — never re-layouts. */
-  focusedOwnerId?: string | null
+  /** Application graph hover-focus (see WorkloadFocus): when set, nodes outside
+   *  the focused workload's neighborhood dim. Cheap node-data toggle — never
+   *  re-layouts. */
+  focusedOwnerId?: WorkloadFocus
   /** Hover a node → reports its TopologyNode (null on leave). Drives the rail's
    *  reciprocal highlight. */
   onNodeHover?: (node: TopologyNode | null) => void
@@ -796,17 +797,15 @@ export function TopologyGraph({
       let changed = false
       const updated = nds.map(node => {
         if (node.type === 'group') return node
-        const data = node.data?.nodeData as Record<string, unknown> | undefined
-        const focusIds = (data?.focusWorkloadIds as string[] | undefined) ?? []
-        const isNeutral = ((data?.ownerWorkloadId as string | null | undefined) ?? null) == null
-        // A focused workload lights its whole neighborhood (focusIds); the
-        // "Shared / unscoped" focus lights every neutral node.
+        const stamp = ownershipOf(node.data?.nodeData as Record<string, unknown> | undefined)
+        // A focused workload lights its whole neighborhood (focusWorkloadIds);
+        // the "Shared / unscoped" focus lights every neutral node.
         const inFocus =
           focusedOwnerId == null
             ? true
             : focusedOwnerId === NEUTRAL_OWNER
-              ? isNeutral
-              : focusIds.includes(focusedOwnerId)
+              ? stamp.ownerWorkloadId == null
+              : stamp.focusWorkloadIds.includes(focusedOwnerId)
         const shouldDim = focusedOwnerId != null && !inFocus
         if (!!node.data?.dimmed === shouldDim) return node
         changed = true

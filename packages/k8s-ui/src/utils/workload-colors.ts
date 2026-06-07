@@ -19,8 +19,14 @@ export interface WorkloadHue {
 
 export const WORKLOAD_HUE_COUNT = SERIES_COLORS.length
 
-/** Sentinel owner for shared / unattached nodes — they get no hue (neutral). */
+/** Sentinel owner for shared / unattached nodes — they get no hue (neutral).
+ *  Collision-proof: real workload keys always contain two `/`. */
 export const NEUTRAL_OWNER = '__neutral__'
+
+/** The hover-focus channel's three states: `null` = no focus (everything lit),
+ *  `NEUTRAL_OWNER` = focus the shared/unscoped bucket, any other string = a
+ *  workload key (see `workloadKey`) whose neighborhood stays lit. */
+export type WorkloadFocus = string | null
 
 const NEUTRAL_FALLBACK = '#64748b' // slate-500
 

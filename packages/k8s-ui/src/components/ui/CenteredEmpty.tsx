@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
-import { EmptyState, type EmptyStateTone } from '../ui/EmptyState'
+import { EmptyState, type EmptyStateTone } from './EmptyState'
 
 // CenteredEmpty — the shared "whole panel is empty" state, centered in the
 // available height (matches how the view components present their own

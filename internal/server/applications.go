@@ -49,7 +49,8 @@ type applicationsResponse struct {
 type appRow struct {
 	Key           string            `json:"key"`                      // overlay key, structural-root key, or "<ns>/<kind>/<name>" raw
 	Name          string            `json:"name"`                     // display name
-	Namespace     string            `json:"namespace,omitempty"`      // grouping scope
+	Namespace     string            `json:"namespace,omitempty"`      // the single namespace the WORKLOADS run in (residence, not the GitOps manager's home); empty when they span several — see Namespaces
+	Namespaces    []string          `json:"namespaces,omitempty"`     // all distinct workload namespaces, sorted; the unambiguous form of Namespace
 	Tier          int               `json:"tier,omitempty"`           // pkg/subject overlay tier (0 = raw, no signal)
 	Confidence    string            `json:"confidence,omitempty"`     // high | medium | low
 	Category      string            `json:"category,omitempty"`       // app | addon | mixed; classification hint, never identity
@@ -501,14 +502,20 @@ func groupApplications(inputs []appWorkloadInput) []appRow {
 		// The app lives where its WORKLOADS run — a Flux HelmRelease in
 		// flux-system deploying into demo is a demo app, not a flux-system one
 		// (the manager's home is provenance, not residence; it also must not
-		// trip the system-namespace filter). Multiple namespaces → empty; the
-		// UI derives "N namespaces" from the workloads.
-		if len(nss) == 1 {
+		// trip the system-namespace filter). This deliberately overrides the
+		// provenance-key namespace identifyApp set. Multiple namespaces →
+		// Namespace empty, Namespaces carries the full list.
+		if len(nss) > 0 {
+			r.Namespaces = make([]string, 0, len(nss))
 			for ns := range nss {
-				r.Namespace = ns
+				r.Namespaces = append(r.Namespaces, ns)
 			}
-		} else if len(nss) > 1 {
-			r.Namespace = ""
+			sort.Strings(r.Namespaces)
+			if len(r.Namespaces) == 1 {
+				r.Namespace = r.Namespaces[0]
+			} else {
+				r.Namespace = ""
+			}
 		}
 		// Version skew means the SAME image runs different tags across the
 		// app's workloads — real drift. Different components shipping

@@ -9,6 +9,7 @@ import type { NodeKind, HealthStatus, PodSummary } from '../../types'
 import { displayKind } from '../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
 import { workloadHue } from '../../utils/workload-colors'
+import { ownershipOf } from '../../utils/topology-neighborhood'
 import { midTruncate } from '../../utils/format'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -378,8 +379,8 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   // Workload tint (application graph): a node owned by exactly one workload
   // carries that workload's hue. Only on healthy/unknown cards — degraded/
   // unhealthy already own the card background for health, which must win.
-  const ownerColorIndex = typeof nodeData.ownerColorIndex === 'number' ? nodeData.ownerColorIndex : undefined
-  const hue = ownerColorIndex !== undefined && (status === 'healthy' || status === 'unknown')
+  const { ownerColorIndex } = ownershipOf(nodeData)
+  const hue = ownerColorIndex !== null && (status === 'healthy' || status === 'unknown')
     ? workloadHue(ownerColorIndex)
     : undefined
   const subtitle = getSubtitle(kind, nodeData)

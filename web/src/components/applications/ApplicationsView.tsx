@@ -1,6 +1,5 @@
 import { useCallback, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
 import {
   ApplicationsList,
   ApplicationDetail,
@@ -10,14 +9,9 @@ import {
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
-import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
-import { useTopology } from '../../api/client'
+import { useApplications, useTopology } from '../../api/client'
 import { kindToPlural } from '../../utils/navigation'
 import { WorkloadView } from '../workload/WorkloadView'
-
-interface ApplicationsResponse {
-  applications: AppRow[]
-}
 
 interface ApplicationsViewProps {
   namespaces: string[]
@@ -25,24 +19,7 @@ interface ApplicationsViewProps {
 }
 
 export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsViewProps) {
-  const namespacesParam = namespaces.join(',')
-  const query = useQuery({
-    queryKey: ['applications', namespacesParam],
-    queryFn: async () => {
-      const params = new URLSearchParams()
-      if (namespaces.length > 0) params.set('namespaces', namespacesParam)
-      const qs = params.toString()
-      const res = await fetch(apiUrl(`/applications${qs ? `?${qs}` : ''}`), {
-        credentials: getCredentialsMode(),
-        headers: getAuthHeaders(),
-      })
-      if (!res.ok) throw new Error(`Failed to load applications: HTTP ${res.status}`)
-      return (await res.json()) as ApplicationsResponse
-    },
-    staleTime: 30_000,
-    refetchInterval: 60_000,
-  })
-
+  const query = useApplications(namespaces)
   const apps = query.data?.applications ?? []
 
   // Which app is open lives in the URL (?app=<key>) so the detail view is

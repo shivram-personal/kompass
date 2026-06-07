@@ -63,6 +63,19 @@ function nodeNamespace(node: TopologyNode): string {
   return typeof ns === 'string' ? ns : ''
 }
 
+/** The identity string for a workload/seed — `kind/namespace/name`. This format
+ *  is a cross-module contract: rail rows, the `?workload=` URL param, hover
+ *  focus, and the ownership stamp all compare these strings. Always construct
+ *  through here; never inline the template. (Unambiguous: K8s kinds and
+ *  DNS-1123 names cannot contain `/`.) */
+export function workloadKey(ref: NeighborhoodSeed): string {
+  return `${ref.kind}/${ref.namespace}/${ref.name}`
+}
+
+function matchSeedNode(node: TopologyNode, seeds: NeighborhoodSeed[]): boolean {
+  return seeds.some((s) => s.kind === node.kind && s.name === node.name && s.namespace === nodeNamespace(node))
+}
+
 /** Filter a topology to the neighborhood of `seeds`. Returns the subgraph; an
  *  empty graph (with a warning) when no seed node matches. */
 export function neighborhoodFor(
@@ -77,9 +90,7 @@ export function neighborhoodFor(
 
   const seedIds = new Set<string>()
   for (const n of topology.nodes) {
-    if (seeds.some((s) => s.kind === n.kind && s.name === n.name && s.namespace === nodeNamespace(n))) {
-      seedIds.add(n.id)
-    }
+    if (matchSeedNode(n, seeds)) seedIds.add(n.id)
   }
   if (seedIds.size === 0) {
     return {
@@ -159,21 +170,36 @@ export function neighborhoodFor(
 // graph already refuses to bridge through shared resources, and here they
 // refuse to claim a color.
 
-export interface WorkloadOwnership {
-  /** The neighborhood subgraph, each node's `data` stamped with:
-   *   - `ownerWorkloadId` (workload key | null) + `ownerColorIndex` (number | null)
-   *     — the EXCLUSIVE owner, for the color wash. Shared nodes are null (neutral).
-   *   - `focusWorkloadIds` (workload keys) — every workload whose neighborhood
-   *     includes this node, for hover-focus. A shared ConfigMap belongs to all
-   *     workloads that use it, so focusing any of them lights it up (matching the
-   *     single-workload topology), even though it stays neutral-colored. */
-  topology: Topology
-  /** Color index per workload key (`kind/namespace/name`) — for rail swatches. */
-  colorByWorkload: Map<string, number>
+/** What `tagWorkloadOwnership` stamps into each node's `data`:
+ *   - `ownerWorkloadId` + `ownerColorIndex` — the EXCLUSIVE owner, for the color
+ *     wash. Shared nodes are null (neutral).
+ *   - `focusWorkloadIds` — every workload whose neighborhood includes this node,
+ *     for hover-focus. A shared ConfigMap belongs to all workloads that use it,
+ *     so focusing any of them lights it up (matching the single-workload
+ *     topology), even though it stays neutral-colored.
+ *  Consumers MUST read via `ownershipOf` — never cast the raw data keys. */
+export interface OwnershipStamp {
+  ownerWorkloadId: string | null
+  ownerColorIndex: number | null
+  focusWorkloadIds: string[]
 }
 
-const workloadKeyOf = (kind: string, namespace: string, name: string): string =>
-  `${kind}/${namespace}/${name}`
+/** The single audited reader for the ownership stamp. Tolerates untagged nodes
+ *  (plain topologies) by returning the neutral stamp. */
+export function ownershipOf(data: Record<string, unknown> | undefined): OwnershipStamp {
+  return {
+    ownerWorkloadId: typeof data?.ownerWorkloadId === 'string' ? data.ownerWorkloadId : null,
+    ownerColorIndex: typeof data?.ownerColorIndex === 'number' ? data.ownerColorIndex : null,
+    focusWorkloadIds: Array.isArray(data?.focusWorkloadIds) ? (data.focusWorkloadIds as string[]) : [],
+  }
+}
+
+export interface WorkloadOwnership {
+  /** The neighborhood subgraph, each node's `data` carrying an OwnershipStamp. */
+  topology: Topology
+  /** Color index per workload key (see `workloadKey`) — for rail swatches. */
+  colorByWorkload: Map<string, number>
+}
 
 /** Run the neighborhood query for `seeds`, then tag each node with the workload
  *  that exclusively owns it (or neutral). Returns the tagged subgraph plus the
@@ -184,15 +210,15 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
   // Stable color per workload: order of `seeds` (matches the rail's order).
   const colorByWorkload = new Map<string, number>()
   for (const s of seeds) {
-    const k = workloadKeyOf(s.kind, s.namespace, s.name)
+    const k = workloadKey(s)
     if (!colorByWorkload.has(k)) colorByWorkload.set(k, colorByWorkload.size)
   }
 
   // The seed nodes present in the subgraph, by their workload key.
   const seedKeyById = new Map<string, string>()
   for (const n of sub.nodes) {
-    if (seeds.some((s) => s.kind === n.kind && s.name === n.name && s.namespace === nodeNamespace(n))) {
-      seedKeyById.set(n.id, workloadKeyOf(n.kind, nodeNamespace(n), n.name))
+    if (matchSeedNode(n, seeds)) {
+      seedKeyById.set(n.id, workloadKey({ kind: n.kind, namespace: nodeNamespace(n), name: n.name }))
     }
   }
 
@@ -244,15 +270,12 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
       focusWorkloadIds = [...related]
       owner = related.size === 1 && !GITOPS_MANAGER_KINDS.has(n.kind) ? [...related][0] : null
     }
-    return {
-      ...n,
-      data: {
-        ...n.data,
-        ownerWorkloadId: owner,
-        ownerColorIndex: owner ? colorByWorkload.get(owner) ?? null : null,
-        focusWorkloadIds,
-      },
+    const stamp: OwnershipStamp = {
+      ownerWorkloadId: owner,
+      ownerColorIndex: owner ? colorByWorkload.get(owner) ?? null : null,
+      focusWorkloadIds,
     }
+    return { ...n, data: { ...n.data, ...stamp } }
   })
 
   return { topology: { ...sub, nodes }, colorByWorkload }
@@ -261,11 +284,5 @@ export function tagWorkloadOwnership(topology: Topology, seeds: NeighborhoodSeed
 /** The set of node IDs that are the seeds themselves — handy for the caller to
  *  pass `focusNodeId` (pan/zoom to the workload) into <TopologyGraph/>. */
 export function seedNodeIds(topology: Topology, seeds: NeighborhoodSeed[]): string[] {
-  const ids: string[] = []
-  for (const n of topology.nodes) {
-    if (seeds.some((s) => s.kind === n.kind && s.name === n.name && s.namespace === nodeNamespace(n))) {
-      ids.push(n.id)
-    }
-  }
-  return ids
+  return topology.nodes.filter((n) => matchSeedNode(n, seeds)).map((n) => n.id)
 }

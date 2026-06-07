@@ -20,19 +20,20 @@ import {
   CATEGORY_META,
   CHIP,
   CHIP_TONE,
+  SOURCE_ORDER,
+  SOURCE_META,
   categoryOf,
   envRank,
+  healthOf,
   isSystemNamespace,
   namespaceOf,
   namespacesOf,
-  overlayProvenance,
   resolveEnv,
   sourceOf,
   workloadClassOf,
 } from '../../utils/applications'
-import { midTruncate } from '../../utils/format'
 import { ReadyBar } from './ReadyBar'
-import { ProvenanceTooltip, VersionTooltip } from './AppTooltips'
+import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
 
 // ApplicationsList — pure, single-cluster dense list of logical apps. Health
 // dot + name + provenance/add-on/mixed chips; a Namespace column; an env pill
@@ -58,8 +59,6 @@ interface AppEntry {
   source: AppSource
 }
 
-/** The namespace an app runs in: the row's namespace, else the shared
- *  namespace of its workloads (single-cluster rows are namespace-coherent). */
 function buildEntry(row: AppRow): AppEntry {
   const kinds: Record<string, number> = {}
   let ready = 0
@@ -73,7 +72,7 @@ function buildEntry(row: AppRow): AppEntry {
   const { env, inferred } = resolveEnv(undefined, namespace)
   return {
     row,
-    health: (row.health as AppHealth) || 'unknown',
+    health: healthOf(row.health),
     versions: Array.from(new Set((row.versions || []).filter(Boolean))),
     namespace,
     namespaces: namespacesOf(row),
@@ -97,7 +96,7 @@ function searchTextForEntry(e: AppEntry): string {
     e.row.name,
     e.row.key,
     e.namespace,
-    e.source,
+    SOURCE_META[e.source].label,
     CLASS_META[e.workloadClass].label,
     CATEGORY_META[e.category].label,
     ...e.versions,
@@ -108,33 +107,6 @@ function searchTextForEntry(e: AppEntry): string {
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
-}
-
-function ProvenanceBadge({ row }: { row: AppRow }) {
-  const conf = row.confidence ?? 'low'
-  if (!row.tier) {
-    return (
-      <Tooltip content="No GitOps, Helm, or app-label grouping signal — shown as the raw workload." delay={150}>
-        <span className={`${CHIP} ${CHIP_TONE.muted}`}>ungrouped</span>
-      </Tooltip>
-    )
-  }
-  const tone = conf === 'high' ? CHIP_TONE.emerald : conf === 'medium' ? CHIP_TONE.neutral : CHIP_TONE.amber
-  const label = overlayProvenance(row.tier)
-  return (
-    <Tooltip content={<ProvenanceTooltip tier={row.tier} appKey={row.key} confidence={conf} />} delay={150}>
-      <span className={`${CHIP} ${tone}`}>{label}</span>
-    </Tooltip>
-  )
-}
-
-function ClassBadge({ workloadClass }: { workloadClass: AppWorkloadClass }) {
-  const meta = CLASS_META[workloadClass]
-  return (
-    <Tooltip content={meta.tooltip} delay={150}>
-      <span className={`${CHIP} ${meta.pill}`}>{meta.label}</span>
-    </Tooltip>
-  )
 }
 
 function Facet<T extends string>({ title, options, selected, onToggle }: { title: string; options: { value: T; label: string; count: number; tone?: string; tooltip?: string }[]; selected: Set<T>; onToggle: (v: T) => void }) {
@@ -308,7 +280,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
           <Facet title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => toggle(fClass, setFClass, v)} />
           <Facet title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => toggle(fType, setFType, v)} />
           <Facet title="Environment" options={envOptions} selected={fEnv} onToggle={(v) => toggle(fEnv, setFEnv, v)} />
-          <Facet title="Source" options={(['Argo CD', 'Flux', 'Helm', 'Label', 'Ungrouped'] as AppSource[]).map((s) => ({ value: s, label: s, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => toggle(fSource, setFSource, v)} />
+          <Facet title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => toggle(fSource, setFSource, v)} />
           {systemCount > 0 && (
             <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover">
               <input type="checkbox" checked={showSystem} onChange={(e) => setShowSystem(e.target.checked)} className="accent-skyhook-500" />
@@ -346,9 +318,8 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                             <span className="inline-flex"><StatusDot tone={mapHealthToTone(e.health)} /></span>
                           </Tooltip>
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
-                          <ProvenanceBadge row={e.row} />
-                          {e.category === 'addon' && <span className={`${CHIP} ${CHIP_TONE.muted}`}>add-on</span>}
-                          {e.category === 'mixed' && <span className={`${CHIP} ${CHIP_TONE.amber}`}>mixed</span>}
+                          <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />
+                          <CategoryChip category={e.category} addonReason={e.row.addonReason} />
                         </span>
                       </td>
                       <td className="px-2 py-2.5">
@@ -366,7 +337,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                         {e.env ? (
                           e.envInferred ? (
                             <Tooltip content={`Inferred from namespace "${e.namespace || e.env}"`} delay={150}>
-                              <span className={`${CHIP} italic ring-dashed ${CHIP_TONE.muted}`}>~{e.env}</span>
+                              <span className={`${CHIP} italic ${CHIP_TONE.muted}`}>~{e.env}</span>
                             </Tooltip>
                           ) : (
                             <span className={`${CHIP} ${CHIP_TONE.neutral}`}>{e.env}</span>
@@ -378,27 +349,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={e.workloadClass} /></td>
                       <td className="px-2 py-2.5"><ReadyBar ready={e.ready} desired={e.desired} /></td>
                       <td className="px-2 py-2.5">
-                        {e.row.appVersion ? (
-                          <Tooltip content={<VersionTooltip workloads={e.row.workloads ?? []} />} delay={150}>
-                            <span className="font-mono text-xs text-theme-text-secondary">{midTruncate(e.row.appVersion)}</span>
-                          </Tooltip>
-                        ) : e.versions.length === 0 ? (
-                          <span className="text-theme-text-tertiary">—</span>
-                        ) : e.versions.length === 1 ? (
-                          e.versions[0].length > 24 ? (
-                            <Tooltip content={e.versions[0]} delay={150}>
-                              <span className="font-mono text-xs text-theme-text-secondary">{midTruncate(e.versions[0])}</span>
-                            </Tooltip>
-                          ) : (
-                            <span className="font-mono text-xs text-theme-text-secondary">{e.versions[0]}</span>
-                          )
-                        ) : (
-                          // Amber only on real skew (same image, different tags) —
-                          // multi-image apps naturally run several versions.
-                          <Tooltip content={<VersionTooltip workloads={e.row.workloads ?? []} />} delay={150}>
-                            <span className={`${CHIP} ${e.row.versionSkew ? CHIP_TONE.amber : CHIP_TONE.neutral}`}>{e.versions.length} versions</span>
-                          </Tooltip>
-                        )}
+                        <VersionInfo app={e.row} variant="cell" />
                       </td>
                       <td className="px-2 py-2.5">
                         {Object.keys(e.kinds).length === 0 ? (

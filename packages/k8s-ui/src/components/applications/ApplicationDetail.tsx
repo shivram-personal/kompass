@@ -4,30 +4,25 @@ import { clsx } from 'clsx'
 import type { Topology, TopologyNode } from '../../types'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
-import { ToastProvider } from '../ui/Toast'
 import { TopologyGraph } from '../topology/TopologyGraph'
 import { pluralize } from '../../utils/pluralize'
 import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
-import { tagWorkloadOwnership, seedNodeIds } from '../../utils/topology-neighborhood'
-import { workloadHue, NEUTRAL_OWNER } from '../../utils/workload-colors'
+import { tagWorkloadOwnership, seedNodeIds, ownershipOf, workloadKey, type NeighborhoodSeed } from '../../utils/topology-neighborhood'
+import { workloadHue, NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
 import {
   type AppRow,
   type AppWorkload,
-  type AppHealth,
-  type AppWorkloadClass,
-  CHIP,
   CHIP_TONE,
-  CLASS_META,
   HEALTH_META,
+  healthOf,
   namespaceOf,
   namespacesOf,
-  overlayProvenance,
   resolveEnv,
   workloadClassOf,
   worstHealth,
 } from '../../utils/applications'
-import { midTruncate } from '../../utils/format'
-import { ProvenanceTooltip, CategoryTooltip, VersionTooltip } from './AppTooltips'
+import { VersionTooltip } from './AppTooltips'
+import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
 import { ReadyBar } from './ReadyBar'
 
 // ApplicationDetail — pure single-cluster detail shell. Owns the title row
@@ -43,13 +38,17 @@ import { ReadyBar } from './ReadyBar'
 // straight to the workload runtime — a graph of one Deployment + a Service
 // adds nothing.
 
-export interface SelectedAppWorkload {
-  kind: string
-  namespace: string
-  name: string
-}
+export type SelectedAppWorkload = NeighborhoodSeed
 
-export interface ApplicationDetailProps {
+/** Workload selection is either fully controlled (key + callback, the host
+ *  wires it to the URL so back/forward works) or fully internal — providing
+ *  only half silently freezes the rail, so the types forbid it. `null` = the
+ *  app graph landing; a key (see `workloadKey`) = that workload's runtime. */
+type SelectionProps =
+  | { selectedWorkloadKey: string | null; onSelectWorkload: (key: string | null) => void }
+  | { selectedWorkloadKey?: undefined; onSelectWorkload?: undefined }
+
+export type ApplicationDetailProps = {
   app: AppRow
   onBack: () => void
   /** Render the host's WorkloadView for the chosen workload. */
@@ -59,17 +58,7 @@ export interface ApplicationDetailProps {
   topology?: Topology
   /** Open a related (non-workload) resource clicked in the app graph. */
   onNavigateToResource?: (resource: { kind: string; namespace: string; name: string; group?: string }) => void
-  /** Controlled selected-workload key (`kind/namespace/name`); `null` = the app
-   *  graph landing. Omit entirely to let the component manage it internally
-   *  (uncontrolled) — the host wires this to the URL so back/forward works. */
-  selectedWorkloadKey?: string | null
-  onSelectWorkload?: (key: string | null) => void
-}
-
-function ClassBadge({ workloadClass }: { workloadClass: AppWorkloadClass }) {
-  const meta = CLASS_META[workloadClass]
-  return <span className={`${CHIP} ${meta.pill}`}>{meta.label}</span>
-}
+} & SelectionProps
 
 function ContextFact({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -78,10 +67,6 @@ function ContextFact({ label, children }: { label: string; children: ReactNode }
       <span className="min-w-0 truncate text-xs text-theme-text-secondary">{children}</span>
     </div>
   )
-}
-
-function workloadKey(w: SelectedAppWorkload): string {
-  return `${w.kind}/${w.namespace}/${w.name}`
 }
 
 export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNavigateToResource, selectedWorkloadKey, onSelectWorkload }: ApplicationDetailProps) {
@@ -96,12 +81,9 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNav
     [app.workloads],
   )
   const overall = worstHealth([app.health, ...workloads.map((w) => w.health)])
-  // Verdict pill/icon colors come from the shared chip dialect + HEALTH_META —
-  // no parallel health palette here.
-  const verdictTone = { unhealthy: CHIP_TONE.rose, degraded: CHIP_TONE.amber, healthy: CHIP_TONE.emerald, unknown: CHIP_TONE.muted }[overall]
+  const verdictTone = HEALTH_META[overall].pill
   const verdictLabel = HEALTH_META[overall].label
   const workloadClass = workloadClassOf(app.workload_class)
-  const provenance = app.tier ? overlayProvenance(app.tier) : null
   const versions = useMemo(() => Array.from(new Set((app.versions || []).filter(Boolean))), [app.versions])
   const ready = workloads.reduce((n, w) => n + (w.ready ?? 0), 0)
   const desired = workloads.reduce((n, w) => n + (w.desired ?? 0), 0)
@@ -122,17 +104,21 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNav
   // this and render the lone workload directly. Controlled by the host (URL) when
   // `selectedWorkloadKey` is provided, otherwise internal.
   const [internalSelected, setInternalSelected] = useState<string | null>(null)
-  const selected = selectedWorkloadKey !== undefined ? selectedWorkloadKey : internalSelected
+  const rawSelected = selectedWorkloadKey !== undefined ? selectedWorkloadKey : internalSelected
   const setSelected = useCallback(
     (key: string | null) => (onSelectWorkload ? onSelectWorkload(key) : setInternalSelected(key)),
     [onSelectWorkload],
   )
-  const selectedWorkload = selected ? workloads.find((w) => workloadKey(w) === selected) : undefined
+  const selectedWorkload = rawSelected ? workloads.find((w) => workloadKey(w) === rawSelected) : undefined
+  // A stale controlled key (a deleted workload still in the URL) falls back to
+  // the app graph rather than silently rendering a different workload under a
+  // URL that names the missing one.
+  const selected = rawSelected !== null && !selectedWorkload ? null : rawSelected
 
   // Hover-focus: the workload (or NEUTRAL_OWNER) whose nodes should stay lit
   // while the rest of the graph dims. Driven by the rail and, reciprocally, by
   // hovering a node.
-  const [focusedOwnerId, setFocusedOwnerId] = useState<string | null>(null)
+  const [focusedOwnerId, setFocusedOwnerId] = useState<WorkloadFocus>(null)
 
   const appSeeds = useMemo(
     () => workloads.map((w) => ({ kind: w.kind, namespace: w.namespace, name: w.name })),
@@ -152,7 +138,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNav
   // Hovering a node lights up its owning workload (and the rail row); a shared/
   // unscoped node clears the focus rather than dimming everything.
   const handleNodeHover = useCallback((node: TopologyNode | null) => {
-    setFocusedOwnerId(node ? ((node.data?.ownerWorkloadId as string | null) ?? null) : null)
+    setFocusedOwnerId(node ? ownershipOf(node.data).ownerWorkloadId : null)
   }, [])
 
   // A node click in the app graph either drills into one of the app's workloads
@@ -187,25 +173,8 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNav
           <Boxes className="h-4 w-4" aria-hidden />
         </span>
         <h1 className="text-2xl font-semibold text-theme-text-primary">{app.name}</h1>
-        {provenance ? (
-          <Tooltip content={<ProvenanceTooltip tier={app.tier} appKey={app.key} confidence={app.confidence} />} delay={150}>
-            <span className={`${CHIP} ${app.confidence === 'high' ? CHIP_TONE.emerald : app.confidence === 'medium' ? CHIP_TONE.neutral : CHIP_TONE.amber}`}>{provenance}</span>
-          </Tooltip>
-        ) : (
-          <Tooltip content="No GitOps, Helm, or app-label grouping signal — shown as the raw workload." delay={150}>
-            <span className={`${CHIP} ${CHIP_TONE.muted}`}>ungrouped</span>
-          </Tooltip>
-        )}
-        {app.category === 'addon' && (
-          <Tooltip content={<CategoryTooltip category="addon" addonReason={app.addonReason} />} delay={150}>
-            <span className={`${CHIP} ${CHIP_TONE.muted}`}>add-on</span>
-          </Tooltip>
-        )}
-        {app.category === 'mixed' && (
-          <Tooltip content={<CategoryTooltip category="mixed" addonReason={app.addonReason} />} delay={150}>
-            <span className={`${CHIP} ${CHIP_TONE.amber}`}>mixed</span>
-          </Tooltip>
-        )}
+        <ProvenanceBadge tier={app.tier} appKey={app.key} confidence={app.confidence} />
+        <CategoryChip category={app.category} addonReason={app.addonReason} />
         <ClassBadge workloadClass={workloadClass} />
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
           <span className={`inline-flex items-center gap-2 rounded-md px-2.5 py-1 ring-1 ring-inset ${verdictTone}`}>
@@ -258,23 +227,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNav
         </ContextFact>
         {(app.appVersion || versions.length > 0) && (
           <ContextFact label="Version">
-            {app.appVersion ? (
-              <Tooltip content={<VersionTooltip workloads={workloads} />} delay={150}>
-                <span className="font-mono">{midTruncate(app.appVersion, 32)}</span>
-              </Tooltip>
-            ) : versions.length === 1 ? (
-              versions[0].length > 32 ? (
-                <Tooltip content={versions[0]} delay={150}>
-                  <span className="font-mono">{midTruncate(versions[0], 32)}</span>
-                </Tooltip>
-              ) : (
-                <span className="font-mono">{versions[0]}</span>
-              )
-            ) : (
-              <Tooltip content={<VersionTooltip workloads={workloads} />} delay={150}>
-                <span className="font-mono">{versions.length} versions</span>
-              </Tooltip>
-            )}
+            <VersionInfo app={app} variant="fact" />
           </ContextFact>
         )}
       </div>
@@ -297,19 +250,17 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNav
           />
           <div className="relative min-h-0 flex-1 overflow-hidden bg-theme-surface">
             {appGraphAvailable && selected === null ? (
-              <ToastProvider>
-                <TopologyGraph
-                  topology={appGraph}
-                  viewMode="resources"
-                  groupingMode="namespace"
-                  hideGroupHeader
-                  onNodeClick={handleAppNodeClick}
-                  showExportButton={false}
-                  focusNodeId={appGraphFocusId}
-                  focusedOwnerId={focusedOwnerId}
-                  onNodeHover={handleNodeHover}
-                />
-              </ToastProvider>
+              <TopologyGraph
+                topology={appGraph}
+                viewMode="resources"
+                groupingMode="namespace"
+                hideGroupHeader
+                onNodeClick={handleAppNodeClick}
+                showExportButton={false}
+                focusNodeId={appGraphFocusId}
+                focusedOwnerId={focusedOwnerId}
+                onNodeHover={handleNodeHover}
+              />
             ) : (
               <div key={workloadKey(selectedWorkload ?? workloads[0])} className="h-full min-h-0">
                 {renderWorkload(selectedWorkload ?? workloads[0])}
@@ -318,7 +269,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, onNav
           </div>
         </div>
       ) : (
-        renderRuntime(workloads[0], false, () => setSelected(null), renderWorkload)
+        renderRuntime(workloads[0], renderWorkload)
       )}
     </div>
   )
@@ -341,9 +292,9 @@ function WorkloadRail({
   colorByWorkload: Map<string, number> | null
   showAllEntry: boolean
   selectedKey: string | null
-  focusedOwnerId: string | null
+  focusedOwnerId: WorkloadFocus
   onSelect: (key: string | null) => void
-  onFocus: (owner: string | null) => void
+  onFocus: (owner: WorkloadFocus) => void
 }) {
   return (
     <div
@@ -385,7 +336,7 @@ function WorkloadRail({
             title={w.name}
             tooltip={`${w.name} · ${w.kind}`}
             subtitle={w.kind}
-            trailing={<StatusDot tone={mapHealthToTone((w.health as AppHealth) || 'unknown')} />}
+            trailing={<StatusDot tone={mapHealthToTone(healthOf(w.health))} />}
           />
         )
       })}
@@ -454,13 +405,11 @@ function RailRow({
   )
 }
 
-// renderRuntime shows one workload's runtime (host-injected WorkloadView). For a
-// multi-workload app the "← Back to app" affordance returns to the graph; a
-// single-workload app has no graph to go back to, so it's omitted.
+// renderRuntime shows the single-workload app's runtime (host-injected
+// WorkloadView). Multi-workload apps render runtimes beside the rail instead,
+// which also owns navigation back to the app graph.
 function renderRuntime(
   workload: SelectedAppWorkload | undefined,
-  canGoBackToApp: boolean,
-  onBackToApp: () => void,
   renderWorkload: (workload: SelectedAppWorkload) => ReactNode,
 ): ReactNode {
   if (!workload) {
@@ -475,15 +424,6 @@ function renderRuntime(
     // Topology tab positions ReactFlow absolutely and collapses to zero inside
     // a content-sized ancestor. Mirrors the multi-workload rail row's height.
     <div className="flex h-[calc(100vh-13rem)] min-h-[480px] flex-col">
-      {canGoBackToApp && (
-        <button
-          type="button"
-          onClick={onBackToApp}
-          className="flex w-fit items-center gap-1.5 px-4 py-2 text-xs text-theme-text-tertiary hover:text-theme-text-primary sm:px-6"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" aria-hidden /> Back to app
-        </button>
-      )}
       <div key={workloadKey(workload)} className="min-h-0 flex-1">{renderWorkload(workload)}</div>
     </div>
   )

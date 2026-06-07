@@ -151,10 +151,10 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 			node("dep-grafana", "Deployment", "monitoring", "grafana"),
 		},
 		Edges: []topology.Edge{
-			manages("gitrepo", "ks-apps"),       // source ref — must NOT be climbed through
-			manages("gitrepo", "ks-infra"),      // source ref — must NOT be climbed through
-			manages("ks-apps", "dep-api"),       // manager → workload
-			manages("ks-infra", "dep-grafana"),  // manager → workload
+			manages("gitrepo", "ks-apps"),      // source ref — must NOT be climbed through
+			manages("gitrepo", "ks-infra"),     // source ref — must NOT be climbed through
+			manages("ks-apps", "dep-api"),      // manager → workload
+			manages("ks-infra", "dep-grafana"), // manager → workload
 		},
 	}
 	g := &appGraph{byID: map[string]topology.Node{}, byKNN: map[string]string{}, topo: topo, idx: topology.IndexByResource(topo)}
@@ -242,5 +242,101 @@ func TestWorkloadClass_FacetIsDerivedFromRuntimeShape(t *testing.T) {
 	}
 	if got := rowByName(rows, "nightly"); got == nil || got.WorkloadClass != "job" {
 		t.Fatalf("cronjob row class = %+v, want job", got)
+	}
+}
+
+// The app's namespace is where its WORKLOADS run, not where the GitOps manager
+// lives: a Flux HelmRelease in flux-system deploying into demo is a demo app.
+// The residence override must win over identifyApp's provenance-key namespace.
+func TestGroupApplications_NamespaceIsWorkloadResidence(t *testing.T) {
+	rows := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "demo", "podinfo", "6.13.0", "healthy", subject.TierFluxHelmRelease, "flux-system/HelmRelease/podinfo", subject.ConfidenceHigh),
+	})
+	r := rowByName(rows, "podinfo")
+	if r == nil {
+		t.Fatalf("podinfo app missing: %+v", rows)
+	}
+	if r.Namespace != "demo" {
+		t.Errorf("Namespace = %q, want workload residence %q (not the HelmRelease's flux-system)", r.Namespace, "demo")
+	}
+	if len(r.Namespaces) != 1 || r.Namespaces[0] != "demo" {
+		t.Errorf("Namespaces = %v, want [demo]", r.Namespaces)
+	}
+}
+
+// An app spanning namespaces reports Namespace empty (no arbitrary pick) and
+// the full sorted list in Namespaces.
+func TestGroupApplications_MultiNamespaceApp(t *testing.T) {
+	rows := groupApplications([]appWorkloadInput{
+		overlayInput("Deployment", "prometheus", "server", "v2.49.1", "healthy", subject.TierArgoTrackingID, "/Application/prom", subject.ConfidenceHigh),
+		overlayInput("Deployment", "opencost", "opencost", "1.108.0", "healthy", subject.TierArgoTrackingID, "/Application/prom", subject.ConfidenceHigh),
+	})
+	r := rowByName(rows, "prom")
+	if r == nil {
+		t.Fatalf("prom app missing: %+v", rows)
+	}
+	if r.Namespace != "" {
+		t.Errorf("Namespace = %q, want empty for a multi-namespace app", r.Namespace)
+	}
+	want := []string{"opencost", "prometheus"}
+	if len(r.Namespaces) != 2 || r.Namespaces[0] != want[0] || r.Namespaces[1] != want[1] {
+		t.Errorf("Namespaces = %v, want %v", r.Namespaces, want)
+	}
+}
+
+// Version skew means the SAME image runs different tags; different components
+// shipping different images at different versions is diversity, not skew.
+func TestGroupApplications_VersionSkew(t *testing.T) {
+	skewA := overlayInput("Deployment", "prod", "api", "1.2.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+	skewA.wl.Image = "ghcr.io/acme/api:1.2.0"
+	skewB := overlayInput("Deployment", "prod", "api-canary", "1.3.0", "healthy", subject.TierPartOf, "prod/app/checkout", subject.ConfidenceMedium)
+	skewB.wl.Image = "ghcr.io/acme/api:1.3.0"
+	rows := groupApplications([]appWorkloadInput{skewA, skewB})
+	if r := rowByName(rows, "checkout"); r == nil || !r.VersionSkew {
+		t.Errorf("same image at two tags should set VersionSkew, got %+v", r)
+	}
+
+	divA := overlayInput("Deployment", "prod", "server", "v3.2.6", "healthy", subject.TierPartOf, "prod/app/argo", subject.ConfidenceMedium)
+	divA.wl.Image = "quay.io/argoproj/argocd:v3.2.6"
+	divB := overlayInput("Deployment", "prod", "redis", "8.2.2", "healthy", subject.TierPartOf, "prod/app/argo", subject.ConfidenceMedium)
+	divB.wl.Image = "ecr.io/redis:8.2.2"
+	rows = groupApplications([]appWorkloadInput{divA, divB})
+	if r := rowByName(rows, "argo"); r == nil || r.VersionSkew {
+		t.Errorf("different images at different tags is diversity, not skew, got %+v", r)
+	}
+}
+
+// AppVersion is the app's "main version" only when EVERY workload declares
+// app.kubernetes.io/version and they agree.
+func TestGroupApplications_AppVersionUnanimity(t *testing.T) {
+	mk := func(name, appVer string) appWorkloadInput {
+		in := overlayInput("Deployment", "prod", name, "x", "healthy", subject.TierPartOf, "prod/app/argo", subject.ConfidenceMedium)
+		in.wl.AppVersion = appVer
+		return in
+	}
+	if r := rowByName(groupApplications([]appWorkloadInput{mk("a", "v3.2.6"), mk("b", "v3.2.6")}), "argo"); r == nil || r.AppVersion != "v3.2.6" {
+		t.Errorf("unanimous labels should set AppVersion, got %+v", r)
+	}
+	if r := rowByName(groupApplications([]appWorkloadInput{mk("a", "v3.2.6"), mk("b", "")}), "argo"); r == nil || r.AppVersion != "" {
+		t.Errorf("a labeled workload among unlabeled ones must not set AppVersion, got %+v", r)
+	}
+	if r := rowByName(groupApplications([]appWorkloadInput{mk("a", "v3.2.6"), mk("b", "v2.44.0")}), "argo"); r == nil || r.AppVersion != "" {
+		t.Errorf("disagreeing labels must not set AppVersion, got %+v", r)
+	}
+}
+
+func TestImageRepo(t *testing.T) {
+	cases := map[string]string{
+		"nginx:1.27":                "nginx",
+		"ghcr.io/acme/api:1.2.0":    "ghcr.io/acme/api",
+		"registry:5000/team/img:v1": "registry:5000/team/img", // registry port colon is not the tag separator
+		"repo/img@sha256:abc":       "repo/img",
+		"registry:5000/team/img":    "registry:5000/team/img", // no tag
+		"":                          "",
+	}
+	for in, want := range cases {
+		if got := imageRepo(in); got != want {
+			t.Errorf("imageRepo(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
