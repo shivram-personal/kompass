@@ -4,10 +4,10 @@ import "testing"
 
 func TestClassifyAddon(t *testing.T) {
 	cases := []struct {
-		name              string
-		chart, app, partOf, wl string
-		wantAddon         bool
-		wantWhy           string
+		name                             string
+		chart, app, partOf, wl, addonMgr string
+		wantAddon                        bool
+		wantWhy                          string
 	}{
 		{
 			name: "catalog chart, exact", chart: "cert-manager-v1.14.0",
@@ -41,13 +41,27 @@ func TestClassifyAddon(t *testing.T) {
 			name: "empty", wantAddon: false, wantWhy: "",
 		},
 		{
+			// The upstream addon-manager label is the platform declaring
+			// "managed addon" — wins regardless of catalog coverage.
+			name: "addonmanager label (GKE-managed component)", wl: "networking-dra-driver", addonMgr: "Reconcile",
+			wantAddon: true, wantWhy: "addonmanager.kubernetes.io/mode=Reconcile",
+		},
+		{
+			name: "victoria-metrics family via prefix", chart: "victoria-metrics-single-0.8.48",
+			wantAddon: true, wantWhy: "chart=victoria-metrics-single (victoria-metrics)",
+		},
+		{
+			name: "caretta", chart: "caretta-0.0.16",
+			wantAddon: true, wantWhy: "chart=caretta",
+		},
+		{
 			name: "chart wins over later candidates", chart: "argo-cd", app: "payments",
 			wantAddon: true, wantWhy: "chart=argo-cd",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotAddon, gotWhy := ClassifyAddon(c.chart, c.app, c.partOf, c.wl)
+			gotAddon, gotWhy := ClassifyAddon(c.chart, c.app, c.partOf, c.wl, c.addonMgr)
 			if gotAddon != c.wantAddon || gotWhy != c.wantWhy {
 				t.Errorf("ClassifyAddon(%q,%q,%q,%q) = (%v,%q), want (%v,%q)",
 					c.chart, c.app, c.partOf, c.wl, gotAddon, gotWhy, c.wantAddon, c.wantWhy)
@@ -60,7 +74,7 @@ func TestClassifyAddon(t *testing.T) {
 // add-on — the catalog is derived from it, so a new CRD group joins for free.
 func TestAddonCatalogCoversCRDGroups(t *testing.T) {
 	for group, chart := range crdGroupToChart {
-		if addon, _ := ClassifyAddon(chart, "", "", ""); !addon {
+		if addon, _ := ClassifyAddon(chart, "", "", "", ""); !addon {
 			t.Errorf("crdGroupToChart[%q]=%q not classified as add-on", group, chart)
 		}
 	}

@@ -133,11 +133,12 @@ const SYSTEM_NAMESPACES = new Set(['kube-system', 'kube-public', 'kube-node-leas
 
 /** True for cluster-plumbing namespaces (kube-*, *-system operators) the app
  *  list hides by default. The `-system` suffix catches operator namespaces like
- *  `cert-manager`'s `gatekeeper-system`, `kourier-system`, etc. */
+ *  `cert-manager`'s `gatekeeper-system`, `kourier-system`, etc.; `gke-managed-`
+ *  is Google's documented prefix for GKE-managed component namespaces. */
 export function isSystemNamespace(ns: string | undefined): boolean {
   if (!ns) return false
   const lower = ns.toLowerCase()
-  return SYSTEM_NAMESPACES.has(lower) || lower.endsWith('-system')
+  return SYSTEM_NAMESPACES.has(lower) || lower.endsWith('-system') || lower.startsWith('gke-managed-')
 }
 
 // -----------------------------------------------------------------------------

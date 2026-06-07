@@ -181,7 +181,7 @@ func TestStructuralRoot_StopsAtManagerNotSource(t *testing.T) {
 // Add-ons are classified with evidence, never dropped (raw-always). A user
 // workload named "grafana" still appears — tagged, explained, foldable.
 func TestClassifyAddon_ClassifiesNotHides(t *testing.T) {
-	addon, why := packages.ClassifyAddon("", "grafana", "", "grafana-0")
+	addon, why := packages.ClassifyAddon("", "grafana", "", "grafana-0", "")
 	if !addon || why == "" {
 		t.Fatalf("grafana should classify as addon with evidence, got addon=%v why=%q", addon, why)
 	}
@@ -189,7 +189,7 @@ func TestClassifyAddon_ClassifiesNotHides(t *testing.T) {
 	rows := groupApplications([]appWorkloadInput{
 		func() appWorkloadInput {
 			in := rawInput("Deployment", "monitoring", "grafana", "10.0", "healthy")
-			in.addon, in.addonWhy = packages.ClassifyAddon("", "grafana", "", "grafana")
+			in.addon, in.addonWhy = packages.ClassifyAddon("", "grafana", "", "grafana", "")
 			return in
 		}(),
 		rawInput("Deployment", "prod", "my-service", "1.0", "healthy"),
@@ -209,7 +209,7 @@ func TestClassifyAddon_ClassifiesNotHides(t *testing.T) {
 
 func TestClassifyAddon_MixedEvidenceDoesNotForceAddon(t *testing.T) {
 	addon := rawInput("Deployment", "prod", "grafana-sidecar", "10.0", "healthy")
-	addon.addon, addon.addonWhy = packages.ClassifyAddon("", "grafana", "", "grafana-sidecar")
+	addon.addon, addon.addonWhy = packages.ClassifyAddon("", "grafana", "", "grafana-sidecar", "")
 	app := rawInput("Deployment", "prod", "api", "1.0", "healthy")
 	addon.overlay = &subject.AppOverlay{Winner: subject.Signal{Tier: subject.TierPartOf, Key: "prod/app/checkout", Confidence: subject.ConfidenceMedium}}
 	app.overlay = &subject.AppOverlay{Winner: subject.Signal{Tier: subject.TierPartOf, Key: "prod/app/checkout", Confidence: subject.ConfidenceMedium}}

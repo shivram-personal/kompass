@@ -24,18 +24,26 @@ var addonChartsExtra = []string{
 	"argocd", "argo-rollouts", "argo-workflows", "argo-events", "flux2", "capi",
 	// observability / logging / cost
 	"prometheus", "prometheus-operator", "grafana", "loki", "tempo", "mimir",
+	"victoria-metrics", "caretta", "alloy", "pyroscope", "promtail", "thanos",
+	"jaeger", "kiali",
 	"fluent-bit", "fluentd", "vector", "opencost", "kubecost",
 	"kube-state-metrics", "node-problem-detector", "datadog", "newrelic-bundle",
 	// service mesh / ingress / dns
 	"istiod", "istio-base", "ingress-nginx", "nginx-ingress", "external-dns",
-	// secrets / policy
+	"linkerd", "kong", "contour", "cilium",
+	// gateway-helm is Envoy Gateway's actual chart name
+	"envoy-gateway", "gateway-helm",
+	// secrets / policy / security
 	"sealed-secrets", "vault", "vault-secrets-operator", "gatekeeper",
+	"falco", "trivy-operator",
 	// autoscaling / scheduling / ops
 	"metrics-server", "cluster-autoscaler", "vertical-pod-autoscaler", "vpa",
-	"reloader", "descheduler", "aws-load-balancer-controller",
-	// platform / storage / networking
-	"cnpg", "opentelemetry-collector", "crossplane", "crossplane-rbac-manager",
-	"coredns", "calico", "longhorn", "metallb",
+	"reloader", "descheduler", "aws-load-balancer-controller", "keda",
+	"kured", "kube-fledged", "kubernetes-dashboard",
+	// platform / storage / networking / serverless
+	"cnpg", "cloudnative-pg", "opentelemetry-collector", "crossplane",
+	"crossplane-rbac-manager", "coredns", "calico", "longhorn", "metallb",
+	"knative-serving", "knative-eventing",
 }
 
 // knownAddonCharts is the resolved catalog: every canonical chart name
@@ -82,7 +90,14 @@ func matchAddonChart(value string) (base string, ok bool) {
 // This is a CLASSIFIER, never a drop filter: callers keep the row visible
 // (raw-always) and tag it, so the UI can fold add-ons away while still
 // explaining WHY each was tagged.
-func ClassifyAddon(chart, appName, partOf, name string) (addon bool, why string) {
+func ClassifyAddon(chart, appName, partOf, name, addonManagerMode string) (addon bool, why string) {
+	// The upstream addon-manager label is the platform itself declaring
+	// "managed addon" (GKE stamps it on managed components, upstream
+	// addon-manager on its manifests) — stronger than any catalog match, and
+	// no user app carries it.
+	if v := strings.TrimSpace(addonManagerMode); v != "" {
+		return true, "addonmanager.kubernetes.io/mode=" + v
+	}
 	chartBase, _ := splitChart(chart)
 	candidates := []struct{ field, value string }{
 		{"chart", chartBase},
