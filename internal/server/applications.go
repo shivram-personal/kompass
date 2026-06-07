@@ -104,6 +104,10 @@ type appWorkload struct {
 	Desired       int    `json:"desired"`          // desired replicas
 	Restarts      int    `json:"restarts"`         // total container restarts across the workload's pods
 	Reason        string `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
+
+	// envLabel is the explicit environment label, when the workload carries
+	// one (see envLabelOf) — family-resolver input, not on the wire.
+	envLabel string
 }
 
 // handleListApplications serves GET /api/applications.
@@ -150,7 +154,7 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	g := buildAppGraph(cache, namespaces)
 	wls := collectAppWorkloads(cache, namespaces, g)
 	rows := groupApplications(wls)
-	resolveAppFamilies(rows, argoSourcePaths(ctx, cache))
+	resolveAppFamilies(rows, argoSourcePaths(ctx, cache), namespaceEnvLabels(cache))
 	return &applicationsResponse{Applications: rows}, nil
 }
 
@@ -337,6 +341,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				Desired:       desired,
 				Restarts:      restarts,
 				Reason:        reason,
+				envLabel:      envLabelOf(lbls),
 			},
 			overlay:  subject.ResolveOverlay(&meta, false),
 			events:   eventsForWorkload(eventsByObj[ns], name, pods),

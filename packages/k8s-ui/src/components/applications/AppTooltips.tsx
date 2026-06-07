@@ -152,3 +152,25 @@ function EvidenceLine({ evidence }: { evidence: string }) {
   }
   return <>{evidence}</>
 }
+
+// EnvHint — how environments are determined + how to set one explicitly.
+// Rendered from the Environment facet's info icon and the unlabeled env
+// cells, so the answer lives exactly where the question arises.
+export function EnvHint({ unlabeled }: { unlabeled?: boolean }) {
+  return (
+    <div className="max-w-xs space-y-1">
+      {unlabeled ? (
+        <div className="text-xs text-theme-text-primary">No environment detected for this app.</div>
+      ) : (
+        <div className="text-xs text-theme-text-primary">Detected from labels, GitOps overlay paths, or name patterns (shown <span className="italic">~inferred</span>).</div>
+      )}
+      <div className="text-[11px] leading-snug text-theme-text-secondary">
+        Set it explicitly — label the namespace or workload:
+      </div>
+      <code className="inline-code">environment=staging</code>
+      <div className="text-[10px] text-theme-text-tertiary">
+        also recognized: <code className="inline-code">app.kubernetes.io/environment</code> · <code className="inline-code">env</code> · <code className="inline-code">tags.datadoghq.com/env</code>
+      </div>
+    </div>
+  )
+}

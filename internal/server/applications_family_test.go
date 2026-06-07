@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -37,7 +38,7 @@ func TestFamilies_DeclaredPathPlusRawNamespaceEnv(t *testing.T) {
 		famRow("billing-staging", "staging", 3, "/Application/billing-staging", "repo.dev/koala/billing:b_2026-06-05_01"),
 		famRow("billing", "dev", 0, "", "repo.dev/koala/billing:b_2026-05-18_00"),
 	}
-	resolveAppFamilies(rows, map[string]string{"billing-staging": "billing/deploy/overlays/staging"})
+	resolveAppFamilies(rows, map[string]string{"billing-staging": "billing/deploy/overlays/staging"}, nil)
 
 	st := famOf(t, rows, "billing-staging")
 	if st == nil || st.Key != "billing" || st.Env != "staging" || st.Confidence != "high" {
@@ -57,7 +58,7 @@ func TestFamilies_EnvPrefixTrackingPair(t *testing.T) {
 		famRow("autopush-koala-backend-us-east1", "autopush", 3, "/Application/autopush-koala-backend-us-east1", "repo.dev/koala/koala-backend:m1"),
 		famRow("staging-koala-backend-us-east1", "staging", 3, "/Application/staging-koala-backend-us-east1", "repo.dev/koala/koala-backend:m2"),
 	}
-	resolveAppFamilies(rows, nil)
+	resolveAppFamilies(rows, nil, nil)
 
 	a := famOf(t, rows, "autopush-koala-backend-us-east1")
 	b := famOf(t, rows, "staging-koala-backend-us-east1")
@@ -77,7 +78,7 @@ func TestFamilies_SameNameAcrossEnvNamespaces(t *testing.T) {
 		famRow("project-infra", "staging", 7, "staging/app/project-infra", "repo.dev/koala/project-infra:y"),
 		famRow("project-infra", "autopush", 7, "autopush/app/project-infra", "repo.dev/koala/project-infra:z"),
 	}
-	resolveAppFamilies(rows, nil)
+	resolveAppFamilies(rows, nil, nil)
 	envs := map[string]bool{}
 	for i := range rows {
 		f := rows[i].Family
@@ -98,7 +99,7 @@ func TestFamilies_NoRepoOverlapRefuses(t *testing.T) {
 		famRow("api", "dev", 0, "", "repo.dev/teamA/api:1"),
 		famRow("api", "staging", 0, "", "repo.dev/teamB/other:1"),
 	}
-	resolveAppFamilies(rows, nil)
+	resolveAppFamilies(rows, nil, nil)
 	if rows[0].Family != nil || rows[1].Family != nil {
 		t.Fatalf("uncorroborated stem match grouped: %+v / %+v", rows[0].Family, rows[1].Family)
 	}
@@ -110,7 +111,7 @@ func TestFamilies_SingleEnvRefuses(t *testing.T) {
 		famRow("worker", "staging", 0, "staging/app/worker-a", "repo.dev/koala/worker:1"),
 		famRow("worker", "staging", 0, "staging/app/worker-b", "repo.dev/koala/worker:1"),
 	}
-	resolveAppFamilies(rows, nil)
+	resolveAppFamilies(rows, nil, nil)
 	if rows[0].Family != nil {
 		t.Fatalf("single-env group formed: %+v", rows[0].Family)
 	}
@@ -125,7 +126,7 @@ func TestFamilies_ConflictingDeclaredStemsRefuse(t *testing.T) {
 	resolveAppFamilies(rows, map[string]string{
 		"shop-staging": "teamA/shop/overlays/staging",
 		"shop-dev":     "teamB/legacy-shop/overlays/dev",
-	})
+	}, nil)
 	if rows[0].Family != nil || rows[1].Family != nil {
 		t.Fatalf("conflicting declarations grouped: %+v / %+v", rows[0].Family, rows[1].Family)
 	}
@@ -138,7 +139,7 @@ func TestFamilies_GenericTokensNotNameEvidence(t *testing.T) {
 		famRow("load-test", "apps", 0, "", "repo.dev/koala/load:1"),
 		famRow("load", "dev", 0, "", "repo.dev/koala/load:1"),
 	}
-	resolveAppFamilies(rows, nil)
+	resolveAppFamilies(rows, nil, nil)
 	if rows[0].Family != nil {
 		t.Fatalf("'-test' suffix treated as env: %+v", rows[0].Family)
 	}
@@ -150,7 +151,7 @@ func TestFamilies_EnvSynonymsCanonicalize(t *testing.T) {
 		famRow("pay-production", "payments", 0, "", "repo.dev/koala/pay:1"),
 		famRow("pay-stage", "payments", 0, "", "repo.dev/koala/pay:2"),
 	}
-	resolveAppFamilies(rows, nil)
+	resolveAppFamilies(rows, nil, nil)
 	a, b := rows[0].Family, rows[1].Family
 	if a == nil || b == nil || a.Env != "prod" || b.Env != "staging" {
 		t.Fatalf("synonyms = %+v / %+v, want prod / staging", a, b)
@@ -167,7 +168,7 @@ func TestFamilies_ClassificationNotIdentity(t *testing.T) {
 		}
 	}
 	tagged := mk()
-	resolveAppFamilies(tagged, nil)
+	resolveAppFamilies(tagged, nil, nil)
 	for i := range tagged {
 		tagged[i].Family = nil
 	}
@@ -175,5 +176,137 @@ func TestFamilies_ClassificationNotIdentity(t *testing.T) {
 	got, _ := json.Marshal(tagged)
 	if string(want) != string(got) {
 		t.Fatalf("family tagging mutated row identity:\nwant %s\ngot  %s", want, got)
+	}
+}
+
+// DISCOVERY: a custom token ("loadtest" — in no vocabulary anywhere) becomes
+// an env when the cluster proves it: recurrence across ≥3 repo-corroborated
+// stems, OR a name affix corroborated by a namespace of the same name. This
+// is the point of dropping hardcoded token lists.
+func TestFamilies_CustomTokenDiscoveredByRecurrence(t *testing.T) {
+	rows := []appRow{
+		famRow("api", "dev", 0, "dev/app/api", "repo.dev/koala/api:1"),
+		famRow("api-loadtest", "team", 0, "", "repo.dev/koala/api:2"),
+		famRow("web", "dev", 0, "dev/app/web", "repo.dev/koala/web:1"),
+		famRow("web-loadtest", "team2", 0, "", "repo.dev/koala/web:2"),
+		famRow("cron", "dev", 0, "dev/app/cron", "repo.dev/koala/cron:1"),
+		famRow("cron-loadtest", "team3", 0, "", "repo.dev/koala/cron:2"),
+	}
+	resolveAppFamilies(rows, nil, nil)
+	a := famOf(t, rows, "api-loadtest")
+	if a == nil || a.Key != "api" || a.Env != "loadtest" {
+		t.Fatalf("api-loadtest family = %+v, want key=api env=loadtest (recurrence-discovered)", a)
+	}
+}
+
+// A name affix corroborated by a namespace of the same name qualifies even as
+// a one-off ("api-loadtest" + a loadtest namespace in the cluster).
+func TestFamilies_AffixCorroboratedByNamespace(t *testing.T) {
+	rows := []appRow{
+		famRow("api", "dev", 0, "dev/app/api", "repo.dev/koala/api:1"),
+		famRow("api-loadtest", "loadtest", 0, "", "repo.dev/koala/api:2"),
+	}
+	resolveAppFamilies(rows, nil, nil)
+	a := famOf(t, rows, "api-loadtest")
+	if a == nil || a.Env != "loadtest" {
+		t.Fatalf("affix+namespace corroboration failed: %+v", a)
+	}
+}
+
+// Parallel variant dimensions (-cos/-ubuntu nodepool images) recur across
+// only a couple of stems and have no namespace — they must NOT become envs.
+func TestFamilies_VariantSuffixesNotEnvs(t *testing.T) {
+	rows := []appRow{
+		famRow("nodepool-cos", "infra", 0, "", "repo.dev/koala/np:1"),
+		famRow("nodepool-ubuntu", "infra", 0, "", "repo.dev/koala/np:2"),
+		famRow("gpupool-cos", "infra", 0, "", "repo.dev/koala/gp:1"),
+		famRow("gpupool-ubuntu", "infra", 0, "", "repo.dev/koala/gp:2"),
+		famRow("mempool-cos", "infra", 0, "", "repo.dev/koala/mp:1"),
+		famRow("mempool-ubuntu", "infra", 0, "", "repo.dev/koala/mp:2"),
+	}
+	resolveAppFamilies(rows, nil, nil)
+	for i := range rows {
+		if rows[i].Family != nil {
+			t.Fatalf("variant suffix grouped as env: %s → %+v", rows[i].Name, rows[i].Family)
+		}
+	}
+}
+
+// A multi-segment namespace name is not an env token — only its segments may
+// qualify ("payments-staging" → staging; "skyhook-clients-frps" → nothing).
+func TestFamilies_MultiSegmentNamespaceNotAToken(t *testing.T) {
+	rows := []appRow{
+		famRow("frps-a", "skyhook-clients-frps", 0, "", "repo.dev/koala/frps:1"),
+		famRow("frps-a", "skyhook-clients-frps-staging", 0, "", "repo.dev/koala/frps:2"),
+	}
+	resolveAppFamilies(rows, nil, nil)
+	for i := range rows {
+		f := rows[i].Family
+		if f != nil && f.Env != "staging" {
+			t.Fatalf("namespace name leaked as env: %+v", f)
+		}
+	}
+}
+
+// A one-off token ("v2") never qualifies — no recurrence, no namespace,
+// no label. Version forks don't become fake environments.
+func TestFamilies_OneOffTokenNotDiscovered(t *testing.T) {
+	rows := []appRow{
+		famRow("api", "dev", 0, "dev/app/api", "repo.dev/koala/api:1"),
+		famRow("api-v2", "dev", 0, "", "repo.dev/koala/api:2"),
+	}
+	resolveAppFamilies(rows, nil, nil)
+	if f := famOf(t, rows, "api-v2"); f != nil {
+		t.Fatalf("api-v2 grouped as env instance: %+v", f)
+	}
+}
+
+// EXPLICIT LABELS: an environment label (workload or namespace) is the
+// strongest evidence — it qualifies any token, beats every heuristic reading,
+// and reports high confidence with the label as evidence.
+func TestFamilies_ExplicitEnvLabels(t *testing.T) {
+	a := famRow("payments", "team-a", 0, "team-a/app/payments", "repo.dev/koala/pay:1")
+	b := famRow("payments", "team-b", 0, "team-b/app/payments", "repo.dev/koala/pay:2")
+	a.Workloads[0].envLabel = "blue"
+	rows := []appRow{a, b}
+	resolveAppFamilies(rows, nil, map[string]string{"team-b": "green"})
+	fa, fb := rows[0].Family, rows[1].Family
+	if fa == nil || fa.Env != "blue" || fa.Confidence != "high" || !strings.Contains(fa.Evidence, `environment label "blue"`) {
+		t.Fatalf("workload-labeled instance = %+v, want env=blue high with label evidence", fa)
+	}
+	if fb == nil || fb.Env != "green" || fb.Confidence != "high" {
+		t.Fatalf("namespace-labeled instance = %+v, want env=green high", fb)
+	}
+	if fa.Key != fb.Key || fa.Key != "payments" {
+		t.Fatalf("label-only instances should share key payments: %q / %q", fa.Key, fb.Key)
+	}
+}
+
+// Disagreeing workload labels within one row refuse the explicit tier rather
+// than guessing.
+func TestFamilies_DisagreeingWorkloadLabelsIgnored(t *testing.T) {
+	a := famRow("api", "dev", 0, "dev/app/api", "repo.dev/koala/api:1")
+	a.Workloads = append(a.Workloads, appWorkload{Kind: "Deployment", Namespace: "dev", Name: "api-2", Image: "repo.dev/koala/api:1", Health: "healthy"})
+	a.Workloads[0].envLabel = "staging"
+	a.Workloads[1].envLabel = "prod"
+	b := famRow("api", "staging", 0, "staging/app/api", "repo.dev/koala/api:2")
+	rows := []appRow{a, b}
+	resolveAppFamilies(rows, nil, nil)
+	fa := rows[0].Family
+	// Falls back to the namespace reading (dev) instead of either label.
+	if fa == nil || fa.Env != "dev" {
+		t.Fatalf("disagreeing labels should fall back to ns reading: %+v", fa)
+	}
+}
+
+func TestEnvLabelOf(t *testing.T) {
+	if v := envLabelOf(map[string]string{"tags.datadoghq.com/env": "Prod"}); v != "prod" {
+		t.Fatalf("datadog key = %q, want prod (lowercased)", v)
+	}
+	if v := envLabelOf(map[string]string{"environment": "qa", "env": "ignored"}); v != "qa" {
+		t.Fatalf("priority = %q, want qa (environment beats env)", v)
+	}
+	if v := envLabelOf(map[string]string{"app.kubernetes.io/name": "x"}); v != "" {
+		t.Fatalf("no env keys = %q, want empty", v)
 	}
 }

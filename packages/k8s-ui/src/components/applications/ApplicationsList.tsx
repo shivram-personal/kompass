@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
-import { ChevronRight, ChevronUp, ChevronDown, Layers } from 'lucide-react'
+import { ChevronRight, ChevronUp, ChevronDown, Layers, Info } from 'lucide-react'
 import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
@@ -41,7 +41,7 @@ import {
 } from '../../utils/applications'
 import { ReadyBar } from './ReadyBar'
 import { ProvenanceBadge, ClassBadge, CategoryChip, VersionInfo } from './AppChips'
-import { FamilyTooltip } from './AppTooltips'
+import { FamilyTooltip, EnvHint } from './AppTooltips'
 
 // ApplicationsList — pure, single-cluster dense list of logical apps. Health
 // dot + name + provenance/add-on/mixed chips; a Namespace column; an env pill
@@ -70,7 +70,7 @@ interface AppEntry {
   source: AppSource
 }
 
-function buildEntry(row: AppRow): AppEntry {
+function buildEntry(row: AppRow, discoveredEnvs?: ReadonlySet<string>): AppEntry {
   const kinds: Record<string, number> = {}
   let ready = 0
   let desired = 0
@@ -80,7 +80,12 @@ function buildEntry(row: AppRow): AppEntry {
     desired += wl.desired ?? 0
   }
   const namespace = namespaceOf(row)
-  const { env, inferred } = resolveEnv(undefined, namespace)
+  // The server's family classification carries the authoritative env (label/
+  // declared/discovered); plain rows fall back to the trio + discovered-token
+  // namespace heuristic.
+  const resolved = resolveEnv(undefined, namespace, discoveredEnvs)
+  const env = row.family?.env ?? resolved.env
+  const inferred = row.family ? row.family.confidence !== 'high' : resolved.inferred
   return {
     row,
     health: healthOf(row.health),
@@ -123,12 +128,19 @@ function searchTextForEntry(e: AppEntry): string {
     .toLowerCase()
 }
 
-export function Facet<T extends string>({ title, options, selected, onToggle }: { title: string; options: { value: T; label: string; count: number; tone?: string; tooltip?: string }[]; selected: Set<T>; onToggle: (v: T) => void }) {
+export function Facet<T extends string>({ title, info, options, selected, onToggle }: { title: string; info?: React.ReactNode; options: { value: T; label: string; count: number; tone?: string; tooltip?: string }[]; selected: Set<T>; onToggle: (v: T) => void }) {
   const visible = options.filter((o) => o.count > 0)
   if (visible.length === 0) return null
   return (
     <div className="flex flex-col gap-1">
-      <div className="px-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{title}</div>
+      <div className="flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+        {title}
+        {info && (
+          <Tooltip content={info} delay={150} position="right">
+            <Info className="h-3 w-3 cursor-default text-theme-text-tertiary/70 hover:text-theme-text-secondary" aria-label={`About ${title}`} />
+          </Tooltip>
+        )}
+      </div>
       {visible.map((o) => {
         const on = selected.has(o.value)
         const button = (
@@ -203,7 +215,11 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
   const [showSystem, setShowSystem] = useState(false)
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir } | null>(null)
 
-  const allRaw = useMemo<AppEntry[]>(() => apps.map(buildEntry), [apps])
+  // Env tokens this CLUSTER proved (family classifications on the wire) feed
+  // the namespace heuristic, so sibling-less rows in e.g. an autopush
+  // namespace still label without any hardcoded vocabulary.
+  const discoveredEnvs = useMemo(() => new Set(apps.map((a) => a.family?.env).filter((e): e is string => !!e)), [apps])
+  const allRaw = useMemo<AppEntry[]>(() => apps.map((a) => buildEntry(a, discoveredEnvs)), [apps, discoveredEnvs])
   // System namespaces are filtered before facet counts so the counts reflect
   // what the user is actually looking at (consistent with the other facets).
   // An app counts as system only when EVERY workload namespace is system —
@@ -450,7 +466,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
           <Facet title="Availability" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_META[h].text }))} selected={fHealth} onToggle={(v) => toggle(fHealth, setFHealth, v)} />
           <Facet title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => toggle(fClass, setFClass, v)} />
           <Facet title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => toggle(fType, setFType, v)} />
-          <Facet title="Environment" options={envOptions} selected={fEnv} onToggle={(v) => toggle(fEnv, setFEnv, v)} />
+          <Facet title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => toggle(fEnv, setFEnv, v)} />
           <Facet title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => toggle(fSource, setFSource, v)} />
           {systemCount > 0 && (
             <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover">
@@ -590,14 +606,16 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                       <td className="px-2 py-2.5">
                         {e.env ? (
                           e.envInferred ? (
-                            <Tooltip content={`Inferred from namespace "${e.namespace || e.env}"`} delay={150}>
+                            <Tooltip content={`Inferred from namespace "${e.namespace || e.env}" — confirm with an environment label.`} delay={150}>
                               <span className={`${CHIP} italic ${CHIP_TONE.muted}`}>~{e.env}</span>
                             </Tooltip>
                           ) : (
                             <span className={`${CHIP} ${CHIP_TONE.neutral}`}>{e.env}</span>
                           )
                         ) : (
-                          <span className="text-theme-text-tertiary">—</span>
+                          <Tooltip content={<EnvHint unlabeled />} delay={300}>
+                            <span className="cursor-default text-theme-text-tertiary">—</span>
+                          </Tooltip>
                         )}
                       </td>
                       <td className="px-2 py-2.5"><ClassBadge workloadClass={e.workloadClass} composition={e.classComposition} /></td>

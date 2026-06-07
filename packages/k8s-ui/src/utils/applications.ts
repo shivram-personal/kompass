@@ -107,23 +107,28 @@ export function envRank(env: string | undefined): number | null {
 // Mirrors the server's env vocabulary (applications_family.go) — the family
 // resolver and this client heuristic must recognize the same tokens, or rows
 // the server families (env=autopush) sit "unlabeled" in the Env column.
+// Only the universal trio is hardcoded (mirrors applications_family.go) —
+// every other env token is DISCOVERED by the server's family resolver and
+// arrives on the wire as family.env; callers pass those through extraTokens,
+// so an "autopush"/"loadtest" namespace labels once the cluster itself proves
+// the token is an env. Zero local vocabulary beyond the trio.
 const ENV_NS_TOKENS: Record<string, string> = {
   dev: 'dev', devel: 'dev', develop: 'dev', development: 'dev',
   stg: 'staging', stage: 'staging', staging: 'staging',
   prd: 'prod', prod: 'prod', production: 'prod', live: 'prod',
-  qa: 'qa', uat: 'uat', preprod: 'preprod', preview: 'preview', canary: 'canary',
-  autopush: 'autopush',
-  sandbox: 'sandbox', sbx: 'sandbox', demo: 'demo', test: 'test', perf: 'perf', integration: 'integration',
 }
 
 /** Infer a canonical environment from a namespace name, or null when nothing
  *  recognizable is present (conservative — `kube-system`, `billing` → null). */
-export function envFromNamespace(namespace: string | undefined): string | null {
+export function envFromNamespace(namespace: string | undefined, extraTokens?: ReadonlySet<string>): string | null {
   if (!namespace) return null
   const lower = namespace.toLowerCase()
-  if (ENV_NS_TOKENS[lower]) return ENV_NS_TOKENS[lower]
+  const hit = (tok: string): string | null => ENV_NS_TOKENS[tok] ?? (extraTokens?.has(tok) ? tok : null)
+  const whole = hit(lower)
+  if (whole) return whole
   for (const seg of lower.split(/[-_]/).filter(Boolean)) {
-    if (ENV_NS_TOKENS[seg]) return ENV_NS_TOKENS[seg]
+    const h = hit(seg)
+    if (h) return h
   }
   return null
 }
@@ -137,10 +142,10 @@ export interface ResolvedAppEnv {
 
 /** Resolve an environment via the precedence cascade: an explicit env wins;
  *  otherwise the namespace heuristic (tagged inferred); otherwise unlabeled. */
-export function resolveEnv(explicitEnv: string | undefined, namespace: string | undefined): ResolvedAppEnv {
+export function resolveEnv(explicitEnv: string | undefined, namespace: string | undefined, extraTokens?: ReadonlySet<string>): ResolvedAppEnv {
   const explicit = (explicitEnv || '').trim()
   if (explicit) return { env: explicit.toLowerCase(), inferred: false }
-  const inferred = envFromNamespace(namespace)
+  const inferred = envFromNamespace(namespace, extraTokens)
   if (inferred) return { env: inferred, inferred: true }
   return { env: '', inferred: false }
 }

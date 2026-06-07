@@ -121,7 +121,9 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
   // apps get the count, never an arbitrary pick.
   const namespace = namespaceOf(app)
   const namespaces = namespacesOf(app)
-  const { env, inferred } = resolveEnv(undefined, namespace)
+  const resolvedEnv = resolveEnv(undefined, namespace)
+  const env = app.family?.env ?? resolvedEnv.env
+  const inferred = app.family ? app.family.confidence !== 'high' : resolvedEnv.inferred
 
   // The app graph is the landing for multi-workload apps when a topology was
   // injected. A single workload (or no topology) skips straight to runtime.
@@ -246,7 +248,7 @@ export function ApplicationDetail({ app, onBack, renderWorkload, topology, topol
         ) : env ? (
           <ContextFact label="Environment">
             {inferred ? (
-              <Tooltip content={`Inferred from namespace "${namespace || env}".`} delay={150}>
+              <Tooltip content={`Inferred from namespace "${namespace || env}" — confirm with an environment label.`} delay={150}>
                 <span className="italic">~{env}</span>
               </Tooltip>
             ) : (
