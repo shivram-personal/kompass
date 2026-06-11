@@ -3,6 +3,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"slices"
 	"sync"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -113,6 +114,12 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 			var crds []crdInfo
 			for _, res := range resources {
 				if !res.IsCRD {
+					continue
+				}
+				// Informer-backed counts only work for listable+watchable kinds.
+				// Create-only review resources (LocalSubjectAccessReview, etc.)
+				// never sync an informer and would log a permanent count error.
+				if !slices.Contains(res.Verbs, "list") || !slices.Contains(res.Verbs, "watch") {
 					continue
 				}
 				key := res.Group + "/" + res.Kind

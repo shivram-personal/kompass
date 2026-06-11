@@ -37,6 +37,43 @@ func TestAddAPIResourceRegistersGroupQualifiedCRD(t *testing.T) {
 	}
 }
 
+func TestGetGVRWithGroupPrefersMostStableVersion(t *testing.T) {
+	d := &ResourceDiscovery{
+		resourceMap: make(map[string]APIResource),
+		gvrMap:      make(map[string]schema.GroupVersionResource),
+	}
+
+	// Both versions served; deprecated v1beta1 discovered first. Informers are
+	// registered against the storage version (v1), so the count lookup must
+	// resolve to v1 — not the first-discovered v1beta1.
+	d.AddAPIResource(APIResource{
+		Group:      "gateway.networking.k8s.io",
+		Version:    "v1beta1",
+		Kind:       "Gateway",
+		Name:       "gateways",
+		Namespaced: true,
+		IsCRD:      true,
+		Verbs:      []string{"get", "list", "watch"},
+	})
+	d.AddAPIResource(APIResource{
+		Group:      "gateway.networking.k8s.io",
+		Version:    "v1",
+		Kind:       "Gateway",
+		Name:       "gateways",
+		Namespaced: true,
+		IsCRD:      true,
+		Verbs:      []string{"get", "list", "watch"},
+	})
+
+	gvr, ok := d.GetGVRWithGroup("Gateway", "gateway.networking.k8s.io")
+	if !ok {
+		t.Fatal("expected group-qualified Gateway lookup to resolve")
+	}
+	if gvr.Version != "v1" {
+		t.Fatalf("version = %q, want v1 (storage version, not first-discovered v1beta1)", gvr.Version)
+	}
+}
+
 func TestSupportsWatchGVRUsesExactGroupVersionResource(t *testing.T) {
 	d := &ResourceDiscovery{
 		resourceMap: make(map[string]APIResource),

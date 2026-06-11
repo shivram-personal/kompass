@@ -376,17 +376,26 @@ func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (sc
 	defer d.mu.RUnlock()
 
 	kindLower := strings.ToLower(kindOrName)
-	for _, res := range d.resources {
+	var best *APIResource
+	for i := range d.resources {
+		res := &d.resources[i]
 		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
-			return schema.GroupVersionResource{
-				Group:    res.Group,
-				Version:  res.Version,
-				Resource: res.Name,
-			}, true
+			// Multiple served versions can coexist (e.g. Gateway v1beta1 + v1).
+			// Informers are registered against the most stable version, so a
+			// first-match return would hand back a version no informer watches.
+			if best == nil || IsMoreStableVersion(res.Version, best.Version) {
+				best = res
+			}
 		}
 	}
-
-	return schema.GroupVersionResource{}, false
+	if best == nil {
+		return schema.GroupVersionResource{}, false
+	}
+	return schema.GroupVersionResource{
+		Group:    best.Group,
+		Version:  best.Version,
+		Resource: best.Name,
+	}, true
 }
 
 // GetResource returns the APIResource for a given kind or plural name.
