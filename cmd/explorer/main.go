@@ -107,6 +107,15 @@ func main() {
 	cloudURL := flag.String("cloud-url", os.Getenv("RADAR_CLOUD_URL"), "Radar Cloud WebSocket URL (e.g. wss://api.radarhq.io/agent) — empty = local-only. Env: RADAR_CLOUD_URL")
 	cloudToken := flag.String("cloud-token", os.Getenv("RADAR_CLOUD_TOKEN"), "Cluster token from the Radar Cloud install wizard (rhc_<random>). Env: RADAR_CLOUD_TOKEN")
 	cloudClusterName := flag.String("cluster-name", os.Getenv("RADAR_CLOUD_CLUSTER_NAME"), "Human-readable cluster name for Radar Cloud (required with --cloud-url). Env: RADAR_CLOUD_CLUSTER_NAME")
+	// Tunable deadlines for slow / high-latency / SSH-tunneled clusters.
+	// Defaults preserve the original behavior. Each flag falls back to an
+	// environment variable so Kubernetes deployments can source values from
+	// a ConfigMap without exposing them in `ps`. Precedence: CLI flag wins
+	// when explicitly set; otherwise env var; otherwise the default.
+	contextSwitchTimeout := flag.Duration("context-switch-timeout", k8s.EnvDurationOr("RADAR_CONTEXT_SWITCH_TIMEOUT", 30*time.Second), "Maximum time a kubeconfig context switch may take (default: 30s). Widen to 120s or more for clusters reached over high-latency tunnels. Env: RADAR_CONTEXT_SWITCH_TIMEOUT")
+	firstPaintBackstop := flag.Duration("first-paint-backstop", k8s.EnvDurationOr("RADAR_FIRST_PAINT_BACKSTOP", 5*time.Minute), "Hard upper bound on the initial critical-cache sync wait before Radar falls through to partial-data render (default: 5m). Env: RADAR_FIRST_PAINT_BACKSTOP")
+	namespaceListTimeout := flag.Duration("namespace-list-timeout", k8s.EnvDurationOr("RADAR_NAMESPACE_LIST_TIMEOUT", 5*time.Second), "Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted (default: 5s). Widen to 30s or more on slow control planes — a timeout here is misreported in the UI as 'Limited list — RBAC'. Env: RADAR_NAMESPACE_LIST_TIMEOUT")
+	maxScopeCandidates := flag.Int("max-scope-candidates", k8s.EnvIntOr("RADAR_MAX_SCOPE_CANDIDATES", 20), "Cap on the namespace-fallback probe fanout for users who can list namespaces cluster-wide but not list a specific kind cluster-wide (default: 20). Raise for clusters with more than 20 namespaces to avoid silently marking kinds as denied in dropped namespaces. Env: RADAR_MAX_SCOPE_CANDIDATES")
 	flag.Parse()
 
 	// Cloud-mode: Radar runs inside a customer cluster and fronts Radar
@@ -255,6 +264,18 @@ func main() {
 		defer rootCancel()
 		select {}
 	}
+
+	// Apply tunable k8s deadlines BEFORE any goroutine reads them. The
+	// setter is a no-op for zero values (preserves the default); each non-
+	// zero entry mutates the corresponding exported variable in the k8s
+	// package. Must run before InitializeK8s so the first connect attempt
+	// already observes the operator-chosen bounds.
+	k8s.ConfigureDeadlines(k8s.DeadlineOptions{
+		ContextSwitchTimeout: *contextSwitchTimeout,
+		FirstPaintBackstop:   *firstPaintBackstop,
+		NamespaceListTimeout: *namespaceListTimeout,
+		MaxScopeCandidates:   *maxScopeCandidates,
+	})
 
 	// Initialize K8s client (local only — parses kubeconfig, no network)
 	t := time.Now()

@@ -13,8 +13,9 @@ import (
 	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
-// ContextSwitchTimeout is the maximum time allowed for a context switch operation
-const ContextSwitchTimeout = 30 * time.Second
+// ContextSwitchTimeout is now defined in deadlines.go as a package variable
+// so operators can override it via flag/env without recompiling. The default
+// value (30 * time.Second) is preserved for backwards compatibility.
 
 // ConnectionTestTimeout is the maximum time allowed for initial connection test
 // This is a short timeout for quick fail detection

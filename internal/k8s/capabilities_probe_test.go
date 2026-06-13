@@ -218,8 +218,8 @@ func TestMergeScopeCandidates_NonAuthoritativeIgnoresAccessible(t *testing.T) {
 func TestMergeScopeCandidates_CountsAllDrops(t *testing.T) {
 	// 25 accessible namespaces, no overlap with context/flag — pure cap test.
 	out, dropped := mergeScopeCandidates("", "", genNamespaces("ns", 25), true)
-	if len(out) != maxScopeCandidates {
-		t.Errorf("len(out) = %d, want %d", len(out), maxScopeCandidates)
+	if len(out) != MaxScopeCandidates {
+		t.Errorf("len(out) = %d, want %d", len(out), MaxScopeCandidates)
 	}
 	if dropped != 5 {
 		t.Errorf("dropped = %d, want 5 (25 accessible - 20 cap)", dropped)
@@ -231,8 +231,8 @@ func TestMergeScopeCandidates_CountsAllDrops(t *testing.T) {
 // missed truncation.
 func TestMergeScopeCandidates_CountsDropsWithContextAndFlag(t *testing.T) {
 	out, dropped := mergeScopeCandidates("dev", "prod", genNamespaces("ns", 25), true)
-	if len(out) != maxScopeCandidates {
-		t.Errorf("len(out) = %d, want %d", len(out), maxScopeCandidates)
+	if len(out) != MaxScopeCandidates {
+		t.Errorf("len(out) = %d, want %d", len(out), MaxScopeCandidates)
 	}
 	if out[0] != "dev" || out[1] != "prod" {
 		t.Errorf("out[0..1] = %v, want [dev prod]", out[:2])

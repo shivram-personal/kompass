@@ -917,14 +917,9 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	return result
 }
 
-// maxScopeCandidates bounds the namespace-fallback probe fanout. It only
-// matters for a user who CAN list namespaces cluster-wide but CANNOT list
-// one of the probed kinds cluster-wide (e.g. a tenant operator with
-// namespace read but no cluster-wide secret read) — that path can return
-// hundreds of namespaces. Truly namespace-restricted users take the
-// non-authoritative branch in GetAccessibleNamespaces and never approach
-// this cap; their candidate list is at most 2 entries.
-const maxScopeCandidates = 20
+// MaxScopeCandidates was promoted to a package variable in deadlines.go
+// (default 20) so operators with clusters carrying more namespaces than the
+// original cap can widen the fanout via flag/env without recompiling.
 
 // buildScopeCandidates returns the namespace candidates for the fallback
 // probe when cluster-wide list is denied. Kubeconfig context (or
@@ -955,7 +950,7 @@ func buildScopeCandidates(ctx context.Context) []string {
 		// marked denied. Workaround: name the target with --namespace (or
 		// the kubeconfig context) so it sits ahead of the alphabetical
 		// accessible list and survives truncation.
-		log.Printf("RBAC: candidate namespaces truncated (cap=%d, %d dropped); kinds reachable only in dropped namespaces will be marked denied", maxScopeCandidates, dropped)
+		log.Printf("RBAC: candidate namespaces truncated (cap=%d, %d dropped); kinds reachable only in dropped namespaces will be marked denied", MaxScopeCandidates, dropped)
 	}
 	return out
 }
@@ -966,7 +961,7 @@ func buildScopeCandidates(ctx context.Context) []string {
 // already decided that list is not trustworthy as a probe target.
 func mergeScopeCandidates(ctxNs, flagNs string, accessible []string, authoritative bool) (out []string, dropped int) {
 	seen := map[string]bool{}
-	out = make([]string, 0, maxScopeCandidates)
+	out = make([]string, 0, MaxScopeCandidates)
 	atCap := false
 	add := func(ns string) {
 		if ns == "" || seen[ns] {
@@ -978,7 +973,7 @@ func mergeScopeCandidates(ctxNs, flagNs string, accessible []string, authoritati
 		}
 		seen[ns] = true
 		out = append(out, ns)
-		if len(out) >= maxScopeCandidates {
+		if len(out) >= MaxScopeCandidates {
 			atCap = true
 		}
 	}

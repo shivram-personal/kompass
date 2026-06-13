@@ -149,6 +149,10 @@ radar
 | `--disable-local-terminal` | `false` | Disable local terminal feature |
 | `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. Point at a mirror for air-gapped / private-registry clusters. |
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
+| `--context-switch-timeout` | `30s` | Maximum time a kubeconfig context switch may take. Widen on high-latency control planes — see [Tuning for slow clusters](#tuning-for-slow-or-high-latency-clusters). Env: `RADAR_CONTEXT_SWITCH_TIMEOUT`. |
+| `--first-paint-backstop` | `5m` | Hard upper bound on the initial critical-cache sync wait before Radar falls through to a partial-data render. Env: `RADAR_FIRST_PAINT_BACKSTOP`. |
+| `--namespace-list-timeout` | `5s` | Timeout for the cluster-wide namespace LIST used to decide if the user is RBAC-namespace-restricted. A timeout on a slow control plane is misreported in the UI as "Limited list — RBAC". Env: `RADAR_NAMESPACE_LIST_TIMEOUT`. |
+| `--max-scope-candidates` | `20` | Cap on the namespace-fallback probe fanout (used by accounts that can list namespaces cluster-wide but not list a specific kind cluster-wide). Raise above `20` for clusters with more than 20 namespaces. Env: `RADAR_MAX_SCOPE_CANDIDATES`. |
 | `--prometheus-url` | (auto-discover) | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. |
 | `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). |
@@ -158,6 +162,45 @@ radar
 | `--version` | | Show version and exit |
 
 See [Configuration Guide](docs/configuration.md) for details on cluster connection precedence, multiple kubeconfig files, and context switching.
+
+### Tuning for slow or high-latency clusters
+
+The default deadlines (30 s context switch, 5 m first-paint backstop, 5 s
+namespace LIST, 20 scope candidates) are tuned for healthy clusters reached
+over fast, low-latency connections. They are too tight for clusters reached
+over SSH tunnels, geographically distant control planes, or accounts subject
+to API-server throttling, where they surface as one of three symptoms:
+
+- "Context switch timed out" toasts when the cache eventually does sync
+- "Limited list — RBAC doesn't allow listing all namespaces" even though the
+  account has cluster-wide list permission (the LIST timed out, not RBAC)
+- Kinds silently marked denied because the namespace they live in fell past
+  the 20-entry candidate cap
+
+Widen the four flags via CLI or via the matching environment variables
+(`RADAR_CONTEXT_SWITCH_TIMEOUT`, `RADAR_FIRST_PAINT_BACKSTOP`,
+`RADAR_NAMESPACE_LIST_TIMEOUT`, `RADAR_MAX_SCOPE_CANDIDATES`) — env vars
+keep secrets out of `ps` and let in-cluster deployments source the values
+from a ConfigMap:
+
+```bash
+# CLI
+kubectl radar \
+  --context-switch-timeout=120s \
+  --first-paint-backstop=10m \
+  --namespace-list-timeout=30s \
+  --max-scope-candidates=200
+
+# Environment (e.g. in a Deployment manifest)
+RADAR_CONTEXT_SWITCH_TIMEOUT=120s \
+RADAR_FIRST_PAINT_BACKSTOP=10m \
+RADAR_NAMESPACE_LIST_TIMEOUT=30s \
+RADAR_MAX_SCOPE_CANDIDATES=200 \
+  kubectl radar
+```
+
+Defaults are preserved when neither the flag nor the env var is set, so
+existing deployments are unaffected.
 
 ---
 

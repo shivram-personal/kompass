@@ -707,7 +707,7 @@ func GetAccessibleNamespaces(ctx context.Context) ([]string, bool) {
 		return nil, false
 	}
 
-	listCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	listCtx, cancel := context.WithTimeout(ctx, NamespaceListTimeout)
 	defer cancel()
 
 	list, err := client.CoreV1().Namespaces().List(listCtx, metav1.ListOptions{})
