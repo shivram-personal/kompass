@@ -199,10 +199,13 @@ func podsConfig(pods []*corev1.Pod, svc *corev1.Service) *HopConfig {
 		if pod == nil {
 			continue
 		}
-		if isPodReadyForTrace(pod) && len(names) < maxPodIPsInConfig {
-			if pod.Status.PodIP != "" {
-				ips = append(ips, pod.Status.PodIP)
-			}
+		// Names and IPs must stay positionally aligned: the data path probes
+		// the first N IPs while the apiserver path probes the first N
+		// names, and divergence detection assumes those are the same pods.
+		// Appending names while IP is empty would shift the sequences, so
+		// pods without a PodIP yet are dropped from the sample entirely.
+		if isPodReadyForTrace(pod) && pod.Status.PodIP != "" && len(names) < maxPodIPsInConfig {
+			ips = append(ips, pod.Status.PodIP)
 			names = append(names, pod.Name)
 		}
 		for _, c := range pod.Spec.Containers {
