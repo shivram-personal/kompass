@@ -344,15 +344,41 @@ func TestPathDivergenceFinding_DataFailApiOK(t *testing.T) {
 		{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Path: probe.PathData, OK: false},
 		{Layer: probe.LayerHTTP, Target: "port 80", Path: probe.PathAPIServer, OK: true},
 	}
-	f, ok := pathDivergenceFinding(probes)
-	if !ok {
-		t.Fatalf("expected divergence finding, got none")
+	out := pathDivergenceFindings(probes)
+	if len(out) != 1 {
+		t.Fatalf("expected one divergence finding, got %d", len(out))
 	}
-	if f.Code != "probe:data-path-only-broken" {
-		t.Errorf("code = %q, want probe:data-path-only-broken", f.Code)
+	if out[0].Code != "probe:data-path-only-broken" {
+		t.Errorf("code = %q, want probe:data-path-only-broken", out[0].Code)
 	}
-	if f.Severity != SeverityWarning {
-		t.Errorf("severity = %q, want warning", f.Severity)
+	if out[0].Severity != SeverityWarning {
+		t.Errorf("severity = %q, want warning", out[0].Severity)
+	}
+}
+
+// TestPathDivergenceFindings_MultiPortDeterministic pins that when more
+// than one port diverges, every divergence is surfaced AND the output is
+// in deterministic sorted-port order. Map iteration would otherwise drop
+// some findings and randomise which one survived between requests.
+func TestPathDivergenceFindings_MultiPortDeterministic(t *testing.T) {
+	probes := []probe.Result{
+		// port 443 — apiserver-only broken (info)
+		{Layer: probe.LayerTCP, Target: "10.0.0.5:443", Path: probe.PathData, OK: true},
+		{Layer: probe.LayerHTTP, Target: "port 443", Path: probe.PathAPIServer, OK: false},
+		// port 80 — data-only broken (warning)
+		{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Path: probe.PathData, OK: false},
+		{Layer: probe.LayerHTTP, Target: "port 80", Path: probe.PathAPIServer, OK: true},
+	}
+	out := pathDivergenceFindings(probes)
+	if len(out) != 2 {
+		t.Fatalf("expected two divergence findings (port 80 + 443), got %d", len(out))
+	}
+	// Sorted port-key order: "443" < "80" lexicographically.
+	if out[0].Code != "probe:apiserver-path-only-broken" {
+		t.Errorf("first finding code = %q, want apiserver-path-only-broken (port 443)", out[0].Code)
+	}
+	if out[1].Code != "probe:data-path-only-broken" {
+		t.Errorf("second finding code = %q, want data-path-only-broken (port 80)", out[1].Code)
 	}
 }
 
@@ -365,15 +391,15 @@ func TestPathDivergenceFinding_DataOKApiFail(t *testing.T) {
 		{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Path: probe.PathData, OK: true},
 		{Layer: probe.LayerHTTP, Target: "port 80", Path: probe.PathAPIServer, OK: false},
 	}
-	f, ok := pathDivergenceFinding(probes)
-	if !ok {
-		t.Fatalf("expected divergence finding, got none")
+	out := pathDivergenceFindings(probes)
+	if len(out) != 1 {
+		t.Fatalf("expected one divergence finding, got %d", len(out))
 	}
-	if f.Code != "probe:apiserver-path-only-broken" {
-		t.Errorf("code = %q, want probe:apiserver-path-only-broken", f.Code)
+	if out[0].Code != "probe:apiserver-path-only-broken" {
+		t.Errorf("code = %q, want probe:apiserver-path-only-broken", out[0].Code)
 	}
-	if f.Severity != SeverityInfo {
-		t.Errorf("severity = %q, want info", f.Severity)
+	if out[0].Severity != SeverityInfo {
+		t.Errorf("severity = %q, want info", out[0].Severity)
 	}
 }
 
@@ -385,15 +411,15 @@ func TestPathDivergenceFinding_NoDivergence(t *testing.T) {
 		{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Path: probe.PathData, OK: true},
 		{Layer: probe.LayerHTTP, Target: "port 80", Path: probe.PathAPIServer, OK: true},
 	}
-	if _, ok := pathDivergenceFinding(bothOK); ok {
-		t.Errorf("both-OK should be silent")
+	if got := pathDivergenceFindings(bothOK); len(got) != 0 {
+		t.Errorf("both-OK should be silent, got %+v", got)
 	}
 	bothFail := []probe.Result{
 		{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Path: probe.PathData, OK: false},
 		{Layer: probe.LayerHTTP, Target: "port 80", Path: probe.PathAPIServer, OK: false},
 	}
-	if _, ok := pathDivergenceFinding(bothFail); ok {
-		t.Errorf("both-fail should be silent (real failure, not divergence)")
+	if got := pathDivergenceFindings(bothFail); len(got) != 0 {
+		t.Errorf("both-fail should be silent (real failure, not divergence), got %+v", got)
 	}
 }
 
@@ -408,8 +434,8 @@ func TestPathDivergenceFinding_PartialFleetIsSilent(t *testing.T) {
 		{Layer: probe.LayerTCP, Target: "10.0.0.6:80", Path: probe.PathData, OK: false},
 		{Layer: probe.LayerHTTP, Target: "port 80", Path: probe.PathAPIServer, OK: true},
 	}
-	if _, ok := pathDivergenceFinding(probes); ok {
-		t.Errorf("partial-fleet data failure must not fire divergence; per-row severities are the signal")
+	if got := pathDivergenceFindings(probes); len(got) != 0 {
+		t.Errorf("partial-fleet data failure must not fire divergence; got %+v", got)
 	}
 }
 
@@ -421,8 +447,8 @@ func TestPathDivergenceFinding_SkippedRowsIgnored(t *testing.T) {
 		{Layer: probe.LayerTCP, Target: "10.0.0.5:6379", Path: probe.PathData, OK: true},
 		{Layer: probe.LayerHTTP, Target: "port 6379", Path: probe.PathAPIServer, Skipped: true, Reason: "non-HTTP port"},
 	}
-	if _, ok := pathDivergenceFinding(probes); ok {
-		t.Errorf("skipped apiserver path against OK data path must not produce divergence")
+	if got := pathDivergenceFindings(probes); len(got) != 0 {
+		t.Errorf("skipped apiserver path against OK data path must not produce divergence; got %+v", got)
 	}
 }
 

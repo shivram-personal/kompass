@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -94,11 +95,11 @@ func runProbes(ctx context.Context, t *Trace, opts Options, client kubernetes.In
 func attachPathDivergenceFindings(t *Trace) {
 	visit := func(hops []Hop) {
 		for i := range hops {
-			f, ok := pathDivergenceFinding(hops[i].Probes)
-			if !ok {
+			extras := pathDivergenceFindings(hops[i].Probes)
+			if len(extras) == 0 {
 				continue
 			}
-			hops[i].Findings = append(hops[i].Findings, f)
+			hops[i].Findings = append(hops[i].Findings, extras...)
 			sortFindingsBySeverity(hops[i].Findings)
 		}
 	}
@@ -106,22 +107,26 @@ func attachPathDivergenceFindings(t *Trace) {
 	visit(t.Upstreams)
 }
 
-// pathDivergenceFinding inspects one hop's probe results and emits a Finding
-// when the data-path and apiserver-path verdicts disagree for the same port.
-// Same-port same-result rows are silent. Returns ok=false when there's no
-// divergence to flag.
+// pathDivergenceFindings inspects one hop's probe results and emits one
+// Finding per port where the data-path and apiserver-path verdicts
+// disagree. Same-port same-result rows are silent. Returns an empty slice
+// when there's no divergence to flag.
 //
 // Bucket key is the port — the two paths label their targets differently
 // ("10.0.0.5:80" vs "port 80"), but a hop is one logical resource, so the
 // trailing port number is enough to pair up data-path vs apiserver-path
 // results that refer to the same backend.
 //
+// Buckets are visited in sorted-key order so output is deterministic; map
+// iteration would otherwise hide some divergences and randomise which one
+// surfaces between requests.
+//
 // On a multi-replica Pods hop, several probes share a port key. Mixed
 // results on one side (one pod OK, one pod fail) are NOT divergence —
 // that's a partial-fleet failure the per-row severities already surface.
 // Divergence requires unanimous failure on one side and unanimous success
 // on the other for the same port; anything else stays silent.
-func pathDivergenceFinding(probes []probe.Result) (Finding, bool) {
+func pathDivergenceFindings(probes []probe.Result) []Finding {
 	type sides struct {
 		dataOK, dataFail int
 		apiOK, apiFail   int
@@ -155,31 +160,39 @@ func pathDivergenceFinding(probes []probe.Result) (Finding, bool) {
 			}
 		}
 	}
-	for _, s := range by {
+	keys := make([]string, 0, len(by))
+	for k := range by {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var out []Finding
+	for _, k := range keys {
+		s := by[k]
 		dataAllFail := s.dataFail > 0 && s.dataOK == 0
 		dataAllOK := s.dataOK > 0 && s.dataFail == 0
 		apiAllFail := s.apiFail > 0 && s.apiOK == 0
 		apiAllOK := s.apiOK > 0 && s.apiFail == 0
 		if dataAllFail && apiAllOK {
-			return Finding{
+			out = append(out, Finding{
 				Code:     "probe:data-path-only-broken",
 				Severity: SeverityWarning,
 				Message:  "Pod-to-pod path failed while the Kubernetes API reached the same target. Real workload traffic may be blocked even though the apiserver-side check succeeded.",
 				Cause:    "Data-path failure isolated to the in-cluster route. NetworkPolicy, kube-proxy, or service-mesh interception are the usual suspects.",
 				Action:   "Check NetworkPolicy in the namespace, kube-proxy health on the receiving node, and any sidecar that may be intercepting the port.",
-			}, true
+			})
+			continue
 		}
 		if dataAllOK && apiAllFail {
-			return Finding{
+			out = append(out, Finding{
 				Code:     "probe:apiserver-path-only-broken",
 				Severity: SeverityInfo,
 				Message:  "Pod-to-pod path succeeded but the Kubernetes API could not reach the same target. Workload traffic is probably fine; the apiserver path failure is likely not real-world impacting.",
 				Cause:    "Apiserver proxy refused or the port speaks a non-HTTP protocol the proxy can't relay.",
 				Action:   "Confirm the user identity holds get services/proxy or get pods/proxy in this namespace, and that the port serves HTTP if you expected the apiserver path to work.",
-			}, true
+			})
 		}
 	}
-	return Finding{}, false
+	return out
 }
 
 // probeHop dispatches by hop kind. The primitive used depends on what works
