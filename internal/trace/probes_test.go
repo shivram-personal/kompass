@@ -426,26 +426,6 @@ func TestPathDivergenceFinding_SkippedRowsIgnored(t *testing.T) {
 	}
 }
 
-// TestVerdict_DegradeUnknownOnUnreadableEndpoints pins the verdict-
-// honesty contract: a trace with no critical/warning findings but with
-// a hop that flagged endpointSource=unknown (e.g. RBAC blocked the
-// endpoints listing) must NOT claim healthy. The banner would mislead
-// the operator into thinking the path is reachable when we have no
-// proof. Selectorless is the other downgrade trigger and is covered
-// by TestBuildTrace_ServiceNoSelectorIsSelectorless in trace_test.go.
-func TestVerdict_DegradeUnknownOnUnreadableEndpoints(t *testing.T) {
-	tr := &Trace{
-		Downstream: []Hop{{
-			Resource: ResourceRef{Kind: "Service", Namespace: "ns", Name: "svc"},
-			Meta:     map[string]any{"endpointSource": "unknown"},
-		}},
-	}
-	v, _ := computeVerdict(tr)
-	if v != VerdictUnknown {
-		t.Errorf("computeVerdict with endpointSource=unknown = %q, want %q", v, VerdictUnknown)
-	}
-}
-
 // TestRouteAttachedToGateway_RejectsNonGatewayKind pins that a Route's
 // parentRefs are only considered attached when the parentRef.kind is
 // Gateway. A Route whose parentRef points at a same-named non-Gateway

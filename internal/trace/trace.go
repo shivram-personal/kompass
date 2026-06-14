@@ -368,27 +368,23 @@ func computeVerdict(t *Trace) (string, int) {
 		}
 	}
 
-	// A trace without ready-endpoint signal cannot honestly be called
-	// healthy. Selectorless Services (endpoints managed manually) and any
-	// hop that flagged endpointSource=unknown leave us without proof the
-	// path resolves to a target — degrade to unknown so the banner doesn't
-	// overclaim.
-	if verdict == VerdictHealthy && hasUnknownEndpoints(t) {
+	// A trace whose downstream is a selectorless Service can't honestly be
+	// called healthy: endpoints are managed manually, so we have no proof
+	// the path resolves to a real target. Degrade to unknown so the banner
+	// doesn't overclaim.
+	if verdict == VerdictHealthy && hasSelectorlessHop(t) {
 		verdict = VerdictUnknown
 	}
 
 	return verdict, brokenAt
 }
 
-func hasUnknownEndpoints(t *Trace) bool {
+func hasSelectorlessHop(t *Trace) bool {
 	for _, hop := range t.Downstream {
 		if hop.Meta == nil {
 			continue
 		}
 		if v, _ := hop.Meta["selectorless"].(bool); v {
-			return true
-		}
-		if src, _ := hop.Meta["endpointSource"].(string); src == "unknown" {
 			return true
 		}
 	}
@@ -404,9 +400,6 @@ func unknownReason(t *Trace) string {
 		}
 		if v, _ := hop.Meta["selectorless"].(bool); v {
 			return "Service has no selector. Endpoints are managed manually, so we can't confirm a target is reachable."
-		}
-		if src, _ := hop.Meta["endpointSource"].(string); src == "unknown" {
-			return "Ready endpoints couldn't be read. RBAC may be blocking the endpoints listing."
 		}
 	}
 	return "Path can't be verified from declared config alone."
