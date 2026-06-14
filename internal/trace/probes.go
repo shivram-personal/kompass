@@ -87,6 +87,10 @@ func runProbes(ctx context.Context, t *Trace, opts Options, client kubernetes.In
 // same target, attaches a Finding that names which path failed and points
 // at the likely subsystems to investigate. The finding flows through the
 // same Finding pipeline the rest of the UI already renders.
+//
+// Hop findings are re-sorted worst-first after the append: the UI treats
+// findings[0] as the hop's overall severity, so a freshly-appended warning
+// divergence row mustn't sit after a pre-existing info finding.
 func attachPathDivergenceFindings(t *Trace) {
 	visit := func(hops []Hop) {
 		for i := range hops {
@@ -95,6 +99,7 @@ func attachPathDivergenceFindings(t *Trace) {
 				continue
 			}
 			hops[i].Findings = append(hops[i].Findings, f)
+			sortFindingsBySeverity(hops[i].Findings)
 		}
 	}
 	visit(t.Downstream)
