@@ -161,8 +161,10 @@ const maxPodIPsInConfig = 10
 // probe summary. We dedupe on (container, name, port) so a 50-replica
 // Deployment doesn't produce 50 identical rows — every replica declares the
 // same ports. Probes from sidecars matter (multi-container readiness is
-// AND'ed) so they're listed per container. Pod IPs are captured up to
-// maxPodIPsInConfig (10) so the in-cluster probe has real targets.
+// AND'ed) so they're listed per container. Pod IPs/names are captured up
+// to maxPodIPsInConfig (10) so the in-cluster probe orchestrator can sample
+// from a real pool; the probe layer caps the actually-probed pods to
+// maxPodsToProbe (3) so total runtime stays inside the 3-second budget.
 //
 // Container ports are filtered to those the upstream Service actually
 // targets. Sidecar / admin / metrics ports (Envoy 15000, Prometheus 9090,

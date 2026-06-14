@@ -479,10 +479,9 @@ function probeFeasibility(hops: Hop[]): ProbeFeasibility {
     if (!cfg) continue
     switch (hop.resource.kind) {
       case 'Service':
-        if (cfg.clusterIP === 'None') {
-          reason = 'this is a headless Service. Reachable only via an upstream Ingress / Route or by hitting individual pods.'
-          continue
-        }
+        // Headless Services (clusterIP === 'None') still resolve probes via
+        // the apiserver proxy when a client is available. The backend runs
+        // the same ladder; the "headless" tag is informational, not a gate.
         if ((cfg.ports?.length ?? 0) > 0) return { probeable: true, reason: '' }
         break
       case 'Pods':

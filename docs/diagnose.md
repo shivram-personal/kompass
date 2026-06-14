@@ -71,7 +71,7 @@ The **Run test** button under the verdict fires one round of probes against the 
 |-----|-----------|
 | Ingress / Gateway hostname | DNS → TCP → TLS (if HTTPS) → HTTP |
 | Service | Direct TCP to ClusterIP:port (in-cluster), or HTTP via the K8s API server's `/services/{name}:{port}/proxy/` subresource (from a laptop) |
-| Pods | Direct TCP to PodIP:port for up to 10 ready pods (in-cluster), or HTTP via `/pods/{name}/proxy/` (from a laptop) |
+| Pods | Direct TCP to PodIP:port (in-cluster) or HTTP via `/pods/{name}/proxy/` (from a laptop) for up to 3 sampled ready pods; the remaining pods get a "sampled N of M" skip row |
 | HTTPRoute / GRPCRoute | Skipped — routes have no own routable address; reachability is the upstream Gateway + downstream Service |
 
 Each row reports outcome (`ok` / `fail` / `skipped`), latency, the path it traversed (`pod-to-pod path` or `via Kubernetes API`), and an HTTP status detail when available. The total budget is 3 seconds; per-hop runs in parallel within that envelope. Probes are an action, not a polling state; the button fires once, results land, the next static refetch replaces them.
