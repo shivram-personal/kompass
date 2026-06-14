@@ -110,10 +110,16 @@ func attachPathDivergenceFindings(t *Trace) {
 // ("10.0.0.5:80" vs "port 80"), but a hop is one logical resource, so the
 // trailing port number is enough to pair up data-path vs apiserver-path
 // results that refer to the same backend.
+//
+// On a multi-replica Pods hop, several probes share a port key. Mixed
+// results on one side (one pod OK, one pod fail) are NOT divergence —
+// that's a partial-fleet failure the per-row severities already surface.
+// Divergence requires unanimous failure on one side and unanimous success
+// on the other for the same port; anything else stays silent.
 func pathDivergenceFinding(probes []probe.Result) (Finding, bool) {
 	type sides struct {
-		dataOK, dataFail bool
-		apiOK, apiFail   bool
+		dataOK, dataFail int
+		apiOK, apiFail   int
 	}
 	by := map[string]*sides{}
 	for _, p := range probes {
@@ -132,20 +138,24 @@ func pathDivergenceFinding(probes []probe.Result) (Finding, bool) {
 		switch p.Path {
 		case probe.PathData:
 			if p.OK {
-				s.dataOK = true
+				s.dataOK++
 			} else {
-				s.dataFail = true
+				s.dataFail++
 			}
 		case probe.PathAPIServer:
 			if p.OK {
-				s.apiOK = true
+				s.apiOK++
 			} else {
-				s.apiFail = true
+				s.apiFail++
 			}
 		}
 	}
 	for _, s := range by {
-		if s.dataFail && s.apiOK {
+		dataAllFail := s.dataFail > 0 && s.dataOK == 0
+		dataAllOK := s.dataOK > 0 && s.dataFail == 0
+		apiAllFail := s.apiFail > 0 && s.apiOK == 0
+		apiAllOK := s.apiOK > 0 && s.apiFail == 0
+		if dataAllFail && apiAllOK {
 			return Finding{
 				Code:     "probe:data-path-only-broken",
 				Severity: SeverityWarning,
@@ -154,7 +164,7 @@ func pathDivergenceFinding(probes []probe.Result) (Finding, bool) {
 				Action:   "Check NetworkPolicy in the namespace, kube-proxy health on the receiving node, and any sidecar that may be intercepting the port.",
 			}, true
 		}
-		if s.dataOK && s.apiFail {
+		if dataAllOK && apiAllFail {
 			return Finding{
 				Code:     "probe:apiserver-path-only-broken",
 				Severity: SeverityInfo,

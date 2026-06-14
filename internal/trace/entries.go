@@ -1063,6 +1063,18 @@ func routeAttachedToGateway(route *unstructured.Unstructured, gwNS, gwName strin
 		if !ok {
 			continue
 		}
+		// parentRef.kind defaults to "Gateway" per the Gateway API spec.
+		// parentRef.group defaults to "gateway.networking.k8s.io". A Route
+		// that points at a same-named non-Gateway parent (e.g. another
+		// Route in a tree) must not appear on a Gateway trace.
+		kind, _ := pm["kind"].(string)
+		if kind != "" && kind != "Gateway" {
+			continue
+		}
+		group, _ := pm["group"].(string)
+		if group != "" && group != "gateway.networking.k8s.io" {
+			continue
+		}
 		name, _ := pm["name"].(string)
 		ns, _ := pm["namespace"].(string)
 		if ns == "" {

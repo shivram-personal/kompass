@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -396,6 +397,22 @@ func TestPathDivergenceFinding_NoDivergence(t *testing.T) {
 	}
 }
 
+// TestPathDivergenceFinding_PartialFleetIsSilent pins that mixed results
+// on the data side (one replica OK, one fails) do NOT fire divergence.
+// On a multi-replica Pods hop those collapse to the same port-key bucket;
+// without unanimity we'd emit data-path-only-broken even when most pods
+// are reachable, masking the real signal (a partial-fleet failure).
+func TestPathDivergenceFinding_PartialFleetIsSilent(t *testing.T) {
+	probes := []probe.Result{
+		{Layer: probe.LayerTCP, Target: "10.0.0.5:80", Path: probe.PathData, OK: true},
+		{Layer: probe.LayerTCP, Target: "10.0.0.6:80", Path: probe.PathData, OK: false},
+		{Layer: probe.LayerHTTP, Target: "port 80", Path: probe.PathAPIServer, OK: true},
+	}
+	if _, ok := pathDivergenceFinding(probes); ok {
+		t.Errorf("partial-fleet data failure must not fire divergence; per-row severities are the signal")
+	}
+}
+
 // TestPathDivergenceFinding_SkippedRowsIgnored pins that "skipped" rows
 // (the apiserver path being skipped because the port is non-HTTP) never
 // trigger divergence. A skip is a "didn't run", not a "failed".
@@ -426,6 +443,45 @@ func TestVerdict_DegradeUnknownOnUnreadableEndpoints(t *testing.T) {
 	v, _ := computeVerdict(tr)
 	if v != VerdictUnknown {
 		t.Errorf("computeVerdict with endpointSource=unknown = %q, want %q", v, VerdictUnknown)
+	}
+}
+
+// TestRouteAttachedToGateway_RejectsNonGatewayKind pins that a Route's
+// parentRefs are only considered attached when the parentRef.kind is
+// Gateway. A Route whose parentRef points at a same-named non-Gateway
+// resource (e.g. another Route in a tree) must not appear on the
+// Gateway trace; that would skew attached-route diagnosis.
+func TestRouteAttachedToGateway_RejectsNonGatewayKind(t *testing.T) {
+	route := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{"namespace": "ns", "name": "r1"},
+		"spec": map[string]any{
+			"parentRefs": []any{
+				map[string]any{"kind": "HTTPRoute", "name": "my-gateway", "namespace": "ns"},
+			},
+		},
+	}}
+	if routeAttachedToGateway(route, "ns", "my-gateway") {
+		t.Errorf("parentRef kind=HTTPRoute should not match Gateway 'my-gateway'")
+	}
+}
+
+// TestRouteAttachedToGateway_AllowsExplicitGatewayKind and the default
+// (empty kind) both attach to a same-named Gateway. The Gateway API
+// defaults parentRef.kind to "Gateway" when omitted.
+func TestRouteAttachedToGateway_AllowsExplicitGatewayKind(t *testing.T) {
+	cases := []map[string]any{
+		{"kind": "Gateway", "name": "my-gateway", "namespace": "ns"},
+		{"name": "my-gateway", "namespace": "ns"}, // kind omitted defaults to Gateway
+		{"kind": "Gateway", "group": "gateway.networking.k8s.io", "name": "my-gateway", "namespace": "ns"},
+	}
+	for i, pr := range cases {
+		route := &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"namespace": "ns", "name": "r1"},
+			"spec":     map[string]any{"parentRefs": []any{pr}},
+		}}
+		if !routeAttachedToGateway(route, "ns", "my-gateway") {
+			t.Errorf("case %d: parentRef %+v should attach", i, pr)
+		}
 	}
 }
 
