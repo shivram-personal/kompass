@@ -709,17 +709,23 @@ function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: 
 function SeverityChip({ severity, count, probes }: { severity: FindingSeverity | ''; count: number; probes?: ProbeResult[] }) {
   if (count === 0) {
     // "pass" overclaims when no probe ever ran or every probe was skipped.
-    // Split the chip three ways: a probe-confirmed hop reads "verified",
-    // a hop with at least one non-skipped probe failure reads "probe failed"
-    // (the rows below carry the detail), and a hop with no live probe
-    // signal stays as "config ok" — honest about what was actually tested.
+    // Split the chip four ways: a probe-confirmed hop reads "verified" only
+    // when every non-skipped probe was healthy; any unhealthy tone or `ok:
+    // false` row marks "probe failed"; a degraded tone (HTTP 3xx/4xx, which
+    // still set ok: true) marks "probe degraded"; a hop with no live signal
+    // stays "config ok". HTTP's tone field is load-bearing here: ignoring it
+    // and reading only `ok` would show "verified" on top of red error rows.
     const real = probes?.filter(p => !p.skipped) ?? []
     if (real.length > 0) {
-      const failed = real.filter(p => !p.ok).length
+      const failed = real.filter(p => !p.ok || p.tone === 'unhealthy').length
       if (failed > 0) {
         return <Badge severity="warning" size="sm" title={`${failed} of ${real.length} probes failed`}>{failed === real.length ? 'probe failed' : `${failed}/${real.length} probes failed`}</Badge>
       }
-      return <Badge severity="success" size="sm" title="At least one probe reached this hop">verified</Badge>
+      const degraded = real.filter(p => p.tone === 'degraded').length
+      if (degraded > 0) {
+        return <Badge severity="warning" size="sm" title={`${degraded} of ${real.length} probes responded with a degraded HTTP status`}>probe degraded</Badge>
+      }
+      return <Badge severity="success" size="sm" title="Every probe that ran for this hop succeeded">verified</Badge>
     }
     return <Badge severity="info" size="sm" title="Static configuration is consistent; no live probe reached this hop">config ok</Badge>
   }
