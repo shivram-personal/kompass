@@ -1827,7 +1827,14 @@ func probePortServiceMismatch(svc *corev1.Service, pods []*corev1.Pod) (string, 
 	if len(examples) == 1 {
 		return fmt.Sprintf("pod %q container %q probes :%d, but Service targets %s — kubelet readiness verdict may not reflect the routed port", first.pod, first.container, first.probePort, targetList), true
 	}
-	return fmt.Sprintf("%d selected pods have readiness probes on ports the Service does not target (e.g. pod %q container %q probes :%d; Service targets %s)", len(examples), first.pod, first.container, first.probePort, targetList), true
+	// Count distinct pods, not example rows: multiple containers in the
+	// same pod each contribute a row, so len(examples) over-counts pods
+	// when a single pod has several mismatching probes.
+	distinctPods := map[string]struct{}{}
+	for _, ex := range examples {
+		distinctPods[ex.pod] = struct{}{}
+	}
+	return fmt.Sprintf("%d selected pods have readiness probes on ports the Service does not target (e.g. pod %q container %q probes :%d; Service targets %s)", len(distinctPods), first.pod, first.container, first.probePort, targetList), true
 }
 
 func serviceTargetPortsForPod(svc *corev1.Service, pod *corev1.Pod) map[int32]struct{} {
