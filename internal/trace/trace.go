@@ -369,23 +369,27 @@ func computeVerdict(t *Trace) (string, int) {
 		}
 	}
 
-	// A trace whose downstream is a selectorless Service can't honestly be
-	// called healthy: endpoints are managed manually, so we have no proof
-	// the path resolves to a real target. Degrade to unknown so the banner
-	// doesn't overclaim.
-	if verdict == VerdictHealthy && hasSelectorlessHop(t) {
+	// A trace can't honestly be called healthy when endpoint resolution
+	// itself was unverifiable. Two emitters today: selectorless Services
+	// (manual endpoints, no proof a target is wired up) and any hop that
+	// flagged endpointSource=unknown (pod lister failed; RBAC or cache
+	// sync the likely cause).
+	if verdict == VerdictHealthy && hasUnverifiableEndpoints(t) {
 		verdict = VerdictUnknown
 	}
 
 	return verdict, brokenAt
 }
 
-func hasSelectorlessHop(t *Trace) bool {
+func hasUnverifiableEndpoints(t *Trace) bool {
 	for _, hop := range t.Downstream {
 		if hop.Meta == nil {
 			continue
 		}
 		if v, _ := hop.Meta["selectorless"].(bool); v {
+			return true
+		}
+		if src, _ := hop.Meta["endpointSource"].(string); src == "unknown" {
 			return true
 		}
 	}
@@ -401,6 +405,9 @@ func unknownReason(t *Trace) string {
 		}
 		if v, _ := hop.Meta["selectorless"].(bool); v {
 			return "Service has no selector. Endpoints are managed manually, so we can't confirm a target is reachable."
+		}
+		if src, _ := hop.Meta["endpointSource"].(string); src == "unknown" {
+			return "Pod state couldn't be read. RBAC may be blocking the pods listing, or the cache is still syncing."
 		}
 	}
 	return "Path can't be verified from declared config alone."

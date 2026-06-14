@@ -74,8 +74,8 @@ func traceServiceEntry(deps Deps, t *Trace) {
 		svcHop.Meta["headless"] = true
 	}
 
-	pods := selectedPods(deps, svc)
-	podsHop := buildPodsHop(deps, svc, pods)
+	pods, unreadable := selectedPods(deps, svc)
+	podsHop := buildPodsHop(deps, svc, pods, unreadable)
 
 	t.Downstream = []Hop{svcHop, podsHop}
 	t.Upstreams = serviceUpstreams(deps, svc)
@@ -128,18 +128,32 @@ func serviceConfig(svc *corev1.Service) *HopConfig {
 	return c
 }
 
-func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod) Hop {
+func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod, unreadable bool) Hop {
 	podsRef := ResourceRef{Kind: "Pods", Namespace: svc.Namespace}
 	meta := map[string]any{
-		"endpointSource": "pod-readiness",
-		"selected":       len(pods),
-		"ready":          readyCount(pods),
+		"selected": len(pods),
+		"ready":    readyCount(pods),
+	}
+	if unreadable {
+		// Pod lister errored: don't pretend the empty selection means "no
+		// backends". Mark endpointSource=unknown so computeVerdict degrades
+		// to unknown and the banner says we couldn't read pod state.
+		meta["endpointSource"] = "unknown"
+	} else {
+		meta["endpointSource"] = "pod-readiness"
 	}
 	hop := Hop{
 		Resource: podsRef,
 		Edge:     "Service->Pods",
 		Meta:     meta,
 		Config:   podsConfig(pods, svc),
+	}
+	if unreadable {
+		hop.Findings = append(hop.Findings, Finding{
+			Code:     "pods:lister-error",
+			Severity: SeverityInfo,
+			Message:  "Couldn't list pods matching the Service selector. RBAC may be blocking the pods listing, or the cache is still syncing. Treat the trace as unverifiable until this clears.",
+		})
 	}
 	hop.Findings = append(hop.Findings, podFanoutFindings(deps, pods)...)
 	if cmd := selectorReproducer(podsRef, svc.Spec.Selector); cmd != "" {
@@ -397,15 +411,19 @@ func severityRank(s string) int {
 	return 0
 }
 
-func selectedPods(deps Deps, svc *corev1.Service) []*corev1.Pod {
+// selectedPods returns the pods matching svc.Spec.Selector in svc.Namespace.
+// The second return value is true when the lister errored: callers must mark
+// the Pods hop as having unreadable state instead of treating an empty slice
+// as "no backends", which would mislead the operator about path health.
+func selectedPods(deps Deps, svc *corev1.Service) (pods []*corev1.Pod, unreadable bool) {
 	if deps.Cache == nil || deps.Cache.Pods() == nil || svc == nil || len(svc.Spec.Selector) == 0 {
-		return nil
+		return nil, false
 	}
-	pods, err := deps.Cache.Pods().Pods(svc.Namespace).List(labels.SelectorFromSet(labels.Set(svc.Spec.Selector)))
+	got, err := deps.Cache.Pods().Pods(svc.Namespace).List(labels.SelectorFromSet(labels.Set(svc.Spec.Selector)))
 	if err != nil {
-		return nil
+		return nil, true
 	}
-	return pods
+	return got, false
 }
 
 func readyCount(pods []*corev1.Pod) int {
@@ -485,11 +503,17 @@ func routeUpstreamsForService(deps Deps, svc *corev1.Service, kind, resourceName
 	}
 	routes, err := deps.Dynamic.ListWatched(gvr)
 	if err != nil || len(routes) == 0 {
-		// Some clusters only have the GVR namespaced; fall back to the
-		// service's namespace before giving up so common configurations
-		// still produce upstream hops.
-		routes2, _ := deps.Dynamic.List(gvr, svc.Namespace)
-		routes = routes2
+		// Some clusters only have the GVR namespaced. Try cluster-wide first
+		// — backendRefs in HTTPRoute / GRPCRoute can be cross-namespace
+		// (with ReferenceGrant), so a Service-namespace-only fallback would
+		// silently miss routes attaching from other namespaces. Fall back to
+		// the Service's namespace only when cluster-wide fails too.
+		if routes2, err2 := deps.Dynamic.List(gvr, ""); err2 == nil && len(routes2) > 0 {
+			routes = routes2
+		} else {
+			routes3, _ := deps.Dynamic.List(gvr, svc.Namespace)
+			routes = routes3
+		}
 	}
 	var out []Hop
 	for _, route := range routes {
@@ -593,7 +617,8 @@ func traceIngressEntry(deps Deps, t *Trace) {
 		}
 		hops = append(hops, svcHop)
 		if svcErr == nil && len(svc.Spec.Selector) > 0 {
-			hops = append(hops, buildPodsHop(deps, svc, selectedPods(deps, svc)))
+			selPods, unreadable := selectedPods(deps, svc)
+			hops = append(hops, buildPodsHop(deps, svc, selPods, unreadable))
 		}
 	}
 	t.Downstream = hops
@@ -752,7 +777,8 @@ func traceRouteEntry(deps Deps, t *Trace, kind string) {
 		}
 		hops = append(hops, svcHop)
 		if svcErr == nil && len(svc.Spec.Selector) > 0 {
-			hops = append(hops, buildPodsHop(deps, svc, selectedPods(deps, svc)))
+			selPods, unreadable := selectedPods(deps, svc)
+			hops = append(hops, buildPodsHop(deps, svc, selPods, unreadable))
 		}
 	}
 	t.Downstream = hops

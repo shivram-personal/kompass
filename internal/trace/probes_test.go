@@ -452,6 +452,24 @@ func TestPathDivergenceFinding_SkippedRowsIgnored(t *testing.T) {
 	}
 }
 
+// TestVerdict_DegradeUnknownOnUnreadablePods pins the verdict-honesty
+// contract for unreadable pod state: a hop flagged endpointSource=unknown
+// (selectedPods returned an error and buildPodsHop marked the hop) must
+// downgrade a clean trace to unknown. The banner would otherwise read
+// healthy on top of a 0/0-ready Pods hop that is just unreadable.
+func TestVerdict_DegradeUnknownOnUnreadablePods(t *testing.T) {
+	tr := &Trace{
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service"}, Meta: map[string]any{}},
+			{Resource: ResourceRef{Kind: "Pods"}, Meta: map[string]any{"endpointSource": "unknown"}},
+		},
+	}
+	v, _ := computeVerdict(tr)
+	if v != VerdictUnknown {
+		t.Errorf("computeVerdict with unreadable Pods hop = %q, want %q", v, VerdictUnknown)
+	}
+}
+
 // TestIsEntryKind_CaseInsensitive pins that normalizeKind accepts every
 // casing the apiserver and MCP layer might hand it. REST handlers see
 // whatever the URL carried; MCP normalises via strings.ToLower. Without
