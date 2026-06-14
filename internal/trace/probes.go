@@ -3,7 +3,9 @@ package trace
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -240,7 +242,7 @@ func probeService(ctx context.Context, h *Hop, vantage probe.Vantage, client kub
 		dataReachable := !headless && vantage == probe.VantageInCluster
 		if dataReachable {
 			pctx, cancel := context.WithTimeout(ctx, tcpTimeout)
-			r := probe.TCP(pctx, fmt.Sprintf("%s:%d", h.Config.ClusterIP, p.Port), vantage)
+			r := probe.TCP(pctx, net.JoinHostPort(h.Config.ClusterIP, strconv.Itoa(int(p.Port))), vantage)
 			r.Path = probe.PathData
 			out = append(out, r)
 			cancel()
@@ -450,7 +452,7 @@ func probePodsByIP(ctx context.Context, h *Hop, vantage probe.Vantage) []probe.R
 				break
 			}
 			pctx, cancel := context.WithTimeout(ctx, tcpTimeout)
-			r := probe.TCP(pctx, fmt.Sprintf("%s:%d", ip, cp.Port), vantage)
+			r := probe.TCP(pctx, net.JoinHostPort(ip, strconv.Itoa(int(cp.Port))), vantage)
 			r.Path = probe.PathData
 			out = append(out, r)
 			cancel()
@@ -525,7 +527,7 @@ func probeIngress(ctx context.Context, h *Hop, vantage probe.Vantage) []probe.Re
 			if ctx.Err() != nil {
 				break
 			}
-			addr := fmt.Sprintf("%s:%d", host, port)
+			addr := net.JoinHostPort(host, strconv.Itoa(port))
 			tctx, tcancel := context.WithTimeout(ctx, tcpTimeout)
 			tcpRes := probe.TCP(tctx, addr, vantage)
 			tcancel()
@@ -571,7 +573,7 @@ func probeGateway(ctx context.Context, h *Hop, vantage probe.Vantage) []probe.Re
 			if ctx.Err() != nil {
 				break
 			}
-			target := fmt.Sprintf("%s:%d", addr, l.Port)
+			target := net.JoinHostPort(addr, strconv.Itoa(int(l.Port)))
 			tctx, tcancel := context.WithTimeout(ctx, tcpTimeout)
 			tcpRes := probe.TCP(tctx, target, vantage)
 			tcancel()

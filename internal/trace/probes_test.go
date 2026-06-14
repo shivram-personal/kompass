@@ -452,6 +452,26 @@ func TestPathDivergenceFinding_SkippedRowsIgnored(t *testing.T) {
 	}
 }
 
+// TestIsEntryKind_CaseInsensitive pins that normalizeKind accepts every
+// casing the apiserver and MCP layer might hand it. REST handlers see
+// whatever the URL carried; MCP normalises via strings.ToLower. Without
+// this, a same-resource call could 400 over REST while succeeding over
+// MCP.
+func TestIsEntryKind_CaseInsensitive(t *testing.T) {
+	cases := []string{
+		"SERVICE", "Service", "service", "Services",
+		"INGRESS", "ingress", "Ingresses",
+		"HTTPROUTE", "HTTPRoute", "httproute", "HTTPRoutes",
+		"GRPCROUTE", "GRPCRoute", "grpcroute",
+		"GATEWAY", "Gateway", "gateways",
+	}
+	for _, c := range cases {
+		if !IsEntryKind(c) {
+			t.Errorf("IsEntryKind(%q) = false, want true (case-insensitive contract)", c)
+		}
+	}
+}
+
 // TestRouteAttachedToGateway_RejectsNonGatewayKind pins that a Route's
 // parentRefs are only considered attached when the parentRef.kind is
 // Gateway. A Route whose parentRef points at a same-named non-Gateway

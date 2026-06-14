@@ -23,6 +23,7 @@ package trace
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"k8s.io/client-go/kubernetes"
@@ -448,16 +449,16 @@ func IsEntryKind(kind string) bool {
 }
 
 func normalizeKind(k string) string {
-	switch k {
-	case "service", "Service", "services":
+	switch strings.ToLower(k) {
+	case "service", "services":
 		return "Service"
-	case "ingress", "Ingress", "ingresses":
+	case "ingress", "ingresses":
 		return "Ingress"
-	case "httproute", "HTTPRoute", "httproutes":
+	case "httproute", "httproutes":
 		return "HTTPRoute"
-	case "grpcroute", "GRPCRoute", "grpcroutes":
+	case "grpcroute", "grpcroutes":
 		return "GRPCRoute"
-	case "gateway", "Gateway", "gateways":
+	case "gateway", "gateways":
 		return "Gateway"
 	}
 	return k
