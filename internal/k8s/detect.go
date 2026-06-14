@@ -638,6 +638,26 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					DurationSeconds: int64(ageDur.Seconds()),
 				})
 			}
+			if msg, ok := probePortServiceMismatch(svc, selected); ok {
+				// Distinct from svc:unresolved-targetport (probe can't be
+				// resolved at all): here every probe resolves but the kubelet
+				// is gating readiness on a port the Service does not route
+				// to. That's why a Service may show "no ready endpoints"
+				// even though processes are listening on the targeted ports.
+				problems = append(problems, Detection{
+					Kind:            "Service",
+					Namespace:       svc.Namespace,
+					Name:            svc.Name,
+					Severity:        "warning",
+					Reason:          "Readiness probe port differs from Service target port",
+					Message:         msg,
+					Fingerprint:     "svc:probe-port-mismatch",
+					Age:             FormatAge(ageDur),
+					AgeSeconds:      int64(ageDur.Seconds()),
+					Duration:        FormatAge(ageDur),
+					DurationSeconds: int64(ageDur.Seconds()),
+				})
+			}
 		}
 	}
 
@@ -1762,6 +1782,155 @@ func addNamedContainerPorts(dst map[string]bool, ports []corev1.ContainerPort) {
 			dst[port.Name] = true
 		}
 	}
+}
+
+// probePortServiceMismatch returns a summary message if any selected pod has a
+// readiness probe whose resolved port is not among the ports the Service
+// targets on that pod. Skips probes whose port can't be resolved at all —
+// that's caught upstream by missingNamedProbePort and is a different fix.
+func probePortServiceMismatch(svc *corev1.Service, pods []*corev1.Pod) (string, bool) {
+	if svc == nil || len(svc.Spec.Ports) == 0 || len(pods) == 0 {
+		return "", false
+	}
+	type mismatch struct {
+		pod, container string
+		probePort      int32
+	}
+	var examples []mismatch
+	for _, pod := range pods {
+		if pod == nil {
+			continue
+		}
+		targets := serviceTargetPortsForPod(svc, pod)
+		if len(targets) == 0 {
+			continue
+		}
+		for _, container := range pod.Spec.Containers {
+			if container.ReadinessProbe == nil {
+				continue
+			}
+			port, ok := resolveProbePort(container.ReadinessProbe, container.Ports)
+			if !ok {
+				continue
+			}
+			if _, hit := targets[port]; hit {
+				continue
+			}
+			examples = append(examples, mismatch{pod: pod.Name, container: container.Name, probePort: port})
+		}
+	}
+	if len(examples) == 0 {
+		return "", false
+	}
+	first := examples[0]
+	targetList := describeServiceTargets(svc)
+	if len(examples) == 1 {
+		return fmt.Sprintf("pod %q container %q probes :%d, but Service targets %s — kubelet readiness verdict may not reflect the routed port", first.pod, first.container, first.probePort, targetList), true
+	}
+	return fmt.Sprintf("%d selected pods have readiness probes on ports the Service does not target (e.g. pod %q container %q probes :%d; Service targets %s)", len(examples), first.pod, first.container, first.probePort, targetList), true
+}
+
+func serviceTargetPortsForPod(svc *corev1.Service, pod *corev1.Pod) map[int32]struct{} {
+	if svc == nil || pod == nil {
+		return nil
+	}
+	out := make(map[int32]struct{}, len(svc.Spec.Ports))
+	for _, sp := range svc.Spec.Ports {
+		switch sp.TargetPort.Type {
+		case intstr.Int:
+			if sp.TargetPort.IntVal > 0 {
+				out[sp.TargetPort.IntVal] = struct{}{}
+			} else if sp.Port > 0 {
+				out[sp.Port] = struct{}{}
+			}
+		case intstr.String:
+			if p, ok := containerPortByName(pod, sp.TargetPort.StrVal); ok {
+				out[p] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func resolveProbePort(probe *corev1.Probe, ports []corev1.ContainerPort) (int32, bool) {
+	if probe == nil {
+		return 0, false
+	}
+	var port intstr.IntOrString
+	switch {
+	case probe.HTTPGet != nil:
+		port = probe.HTTPGet.Port
+	case probe.TCPSocket != nil:
+		port = probe.TCPSocket.Port
+	case probe.GRPC != nil:
+		if probe.GRPC.Port > 0 {
+			return probe.GRPC.Port, true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+	switch port.Type {
+	case intstr.Int:
+		if port.IntVal > 0 {
+			return port.IntVal, true
+		}
+	case intstr.String:
+		for _, p := range ports {
+			if p.Name == port.StrVal && p.ContainerPort > 0 {
+				return p.ContainerPort, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func containerPortByName(pod *corev1.Pod, name string) (int32, bool) {
+	for _, c := range pod.Spec.Containers {
+		for _, p := range c.Ports {
+			if p.Name == name && p.ContainerPort > 0 {
+				return p.ContainerPort, true
+			}
+		}
+	}
+	for _, c := range pod.Spec.InitContainers {
+		for _, p := range c.Ports {
+			if p.Name == name && p.ContainerPort > 0 {
+				return p.ContainerPort, true
+			}
+		}
+	}
+	return 0, false
+}
+
+func describeServiceTargets(svc *corev1.Service) string {
+	if svc == nil || len(svc.Spec.Ports) == 0 {
+		return "no ports"
+	}
+	seen := make(map[string]bool, len(svc.Spec.Ports))
+	parts := make([]string, 0, len(svc.Spec.Ports))
+	for _, sp := range svc.Spec.Ports {
+		var label string
+		switch sp.TargetPort.Type {
+		case intstr.Int:
+			if sp.TargetPort.IntVal > 0 {
+				label = fmt.Sprintf(":%d", sp.TargetPort.IntVal)
+			} else if sp.Port > 0 {
+				label = fmt.Sprintf(":%d", sp.Port)
+			}
+		case intstr.String:
+			label = sp.TargetPort.StrVal
+		}
+		if label == "" || seen[label] {
+			continue
+		}
+		seen[label] = true
+		parts = append(parts, label)
+	}
+	if len(parts) == 0 {
+		return "no ports"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func selectorMessage(selector map[string]string) string {

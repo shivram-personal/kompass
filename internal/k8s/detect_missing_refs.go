@@ -765,7 +765,7 @@ func detectGatewayRouteMissingBackends(svcLister corev1listers.ServiceLister, ge
 			if !serviceHasPort(svc, port) {
 				out = append(out, missingRefProblem(kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(),
 					"Missing Gateway backend Service port",
-					fmt.Sprintf("%s targets Service %q in namespace %q port %q which does not exist on the Service (route backend cannot receive traffic)", source, name, svcNS, port),
+					fmt.Sprintf("%s targets Service %q in namespace %q port %q which does not exist on the Service (route backend cannot receive traffic; Service exposes %s)", source, name, svcNS, port, describeServicePorts(svc)),
 					age))
 			}
 			if svcNS != route.GetNamespace() && getReferenceGrants != nil {
@@ -812,6 +812,21 @@ func serviceHasPort(svc *corev1.Service, port string) bool {
 		}
 	}
 	return false
+}
+
+func describeServicePorts(svc *corev1.Service) string {
+	if svc == nil || len(svc.Spec.Ports) == 0 {
+		return "no ports"
+	}
+	parts := make([]string, 0, len(svc.Spec.Ports))
+	for _, sp := range svc.Spec.Ports {
+		if sp.Name != "" {
+			parts = append(parts, fmt.Sprintf("%s/%d", sp.Name, sp.Port))
+		} else {
+			parts = append(parts, fmt.Sprintf("%d", sp.Port))
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func gatewayReferenceGranted(grants []*unstructured.Unstructured, routeKind, routeNS, svcName string) bool {

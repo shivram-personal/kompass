@@ -109,14 +109,15 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'diagnose',
-    desc: 'One-call root-cause bundle. Workloads get spec + resourceContext + current AND previous logs across pods + warning events + startup blockers; GitOps reconcilers get status summary + parsed related issues.',
+    desc: 'One-call root-cause bundle. Workloads get spec + resourceContext + current AND previous logs across pods + warning events + startup blockers; GitOps reconcilers get status summary + parsed related issues; network entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway) get a path-shaped trace naming the first broken hop, with an optional one-shot reachability test.',
     params: [
-      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, application, kustomization, or helmrelease' },
+      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, application, kustomization, helmrelease, service, ingress, httproute, grpcroute, or gateway' },
       { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
-      { arg: 'container', desc: 'specific container (defaults to all)' },
-      { arg: 'tail_lines', desc: 'lines per pod/stream (default 100)' },
-      { arg: 'since', desc: 'only logs newer than this duration' },
+      { arg: 'probe', desc: 'network kinds only: add active DNS/TCP/TLS/HTTP probes against the declared path (0-3s wall time)' },
+      { arg: 'container', desc: 'workload kinds: specific container (defaults to all)' },
+      { arg: 'tail_lines', desc: 'workload kinds: lines per pod/stream (default 100)' },
+      { arg: 'since', desc: 'workload kinds: only logs newer than this duration' },
     ],
   },
   {

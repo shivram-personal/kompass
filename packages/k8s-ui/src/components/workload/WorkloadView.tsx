@@ -21,6 +21,7 @@ import {
   X,
   BarChart3,
   Network,
+  Stethoscope,
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
@@ -55,7 +56,7 @@ import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/M
 import { getKindColorOutline, displayKindName } from '../ui/drawer-components'
 import { midTruncate } from '../../utils/format'
 
-export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'yaml'
+export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'diagnose' | 'yaml'
 type TabType = WorkloadTabType
 
 // ============================================================================
@@ -201,6 +202,11 @@ interface WorkloadViewProps {
   }) => ReactNode
   /** Render the metrics tab content */
   renderMetricsTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** Render the Diagnose tab content — a path-shaped trace for network
+   *  entry kinds (Service / Ingress / HTTPRoute / GRPCRoute / Gateway). The
+   *  tab is hidden when this callback is not provided OR when the focused
+   *  kind is not a network entry kind. */
+  renderDiagnoseTab?: (props: { kind: string; namespace: string; name: string }) => ReactNode
   /** Render a read-only YAML view for a related object from the workload's
    *  neighborhood. Providing this turns the YAML tab into an object explorer
    *  (rail of the workload + its Services/config/policies/pods); omitting it
@@ -209,8 +215,12 @@ interface WorkloadViewProps {
   renderRelatedYaml?: (ref: { kind: string; namespace: string; name: string; group?: string }) => ReactNode
   /** Whether metrics are available for this resource kind */
   isMetricsAvailable?: (kind: string, resource: any) => boolean
-  /** Render extra content at the bottom of the overview tab (e.g. audit findings) */
-  renderOverviewExtra?: (props: { kind: string; namespace: string; name: string }) => ReactNode
+  /** Render extra content at the bottom of the overview tab (e.g. audit
+   *  findings). `context` lets the host suppress sections that are already
+   *  surfaced by a dedicated tab in expanded mode — e.g. the Diagnose card
+   *  belongs inline when there are no tabs (drawer) but would duplicate the
+   *  Diagnose tab when it is. */
+  renderOverviewExtra?: (props: { kind: string; namespace: string; name: string; context: 'drawer' | 'expanded' }) => ReactNode
 
   // ── Duplicate ────────────────────────────────────────────────────────────
   /** Duplicate handler — opens create dialog with this resource's YAML */
@@ -275,6 +285,7 @@ export function WorkloadView({
   onTabChange,
   // Render props
   renderLogsTab,
+  renderDiagnoseTab,
   renderRelatedYaml,
   renderMetricsTab,
   isMetricsAvailable,
@@ -549,6 +560,7 @@ export function WorkloadView({
     },
     { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" />, hidden: !(allPods.length > 0 && renderLogsTab) },
     { id: 'metrics', label: 'Metrics', icon: <BarChart3 className="w-4 h-4" />, hidden: !(showMetricsTab && renderMetricsTab) },
+    { id: 'diagnose', label: 'Diagnose', icon: <Stethoscope className="w-4 h-4" />, hidden: !(renderDiagnoseTab && isDiagnoseKind(apiKind)) },
     { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
   ]
 
@@ -676,7 +688,7 @@ export function WorkloadView({
               />
               {renderOverviewExtra && (
                 <div className="px-4 pb-4">
-                  {renderOverviewExtra({ kind, namespace, name })}
+                  {renderOverviewExtra({ kind, namespace, name, context: 'drawer' })}
                 </div>
               )}
             </>
@@ -801,7 +813,7 @@ export function WorkloadView({
               updates={resourceFocusedUpdates}
               eventsError={overviewEventsError}
               updatesError={resourceFocusedUpdatesError}
-              extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
+              extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name, context: 'expanded' })}
             />
         )}
         {effectiveTab === 'topology' && (
@@ -851,6 +863,11 @@ export function WorkloadView({
         {effectiveTab === 'metrics' && renderMetricsTab && (
           <div className="h-full overflow-auto p-4">
             {renderMetricsTab({ kind: resource?.kind || kind, namespace, name })}
+          </div>
+        )}
+        {effectiveTab === 'diagnose' && renderDiagnoseTab && (
+          <div className="h-full overflow-auto">
+            {renderDiagnoseTab({ kind: resource?.kind || kind, namespace, name })}
           </div>
         )}
         {effectiveTab === 'yaml' && (
@@ -907,6 +924,23 @@ export function WorkloadView({
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
+
+// Diagnose tab is only meaningful for the five network entry kinds. The
+// canonical predicate is internal/trace.IsEntryKind in Go; we mirror the
+// allowlist here so TypeScript callers don't need a fetch to decide whether
+// to render the tab. The two MUST stay in sync — when a kind is added on
+// either side, update both. Exported so the web wrapper can reuse the same
+// predicate for the inline drawer section.
+export function isDiagnoseKind(kind: string): boolean {
+  const k = kind.toLowerCase()
+  return (
+    k === 'service' || k === 'services' ||
+    k === 'ingress' || k === 'ingresses' ||
+    k === 'httproute' || k === 'httproutes' ||
+    k === 'grpcroute' || k === 'grpcroutes' ||
+    k === 'gateway' || k === 'gateways'
+  )
+}
 
 function extractMetadata(kind: string, resource: any): { label: string; value: string }[] {
   if (!resource) return []

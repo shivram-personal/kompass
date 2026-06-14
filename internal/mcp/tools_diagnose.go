@@ -19,6 +19,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/trace"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -28,7 +29,8 @@ import (
 // diagnoseInput is the one-shot debug bundle request. Workloads resolve to a
 // pod set for log fan-out; GitOps reconcilers take a no-pods status path.
 type diagnoseInput struct {
-	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, or a GitOps reconciler (application, kustomization, helmrelease) for sync/health summary + parsed failure cause"`
+	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, helmrelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
+	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes against the declared path. Uses direct TCP when radar is in-cluster, K8s API server proxy from a laptop — the same call works either way. Probes never override the static verdict; they add evidence. Costs 0-3s wall time. No effect for non-network kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
@@ -81,6 +83,10 @@ type diagnoseResponse struct {
 	// GitOpsDiagnosis is set only for GitOps reconcilers (Argo Application /
 	// Flux Kustomization / HelmRelease), which have no pods — see gitopsDiagnosis.
 	GitOpsDiagnosis *gitopsDiagnosis `json:"gitopsDiagnosis,omitempty"`
+	// Trace is set only for network entry kinds (Service / Ingress /
+	// HTTPRoute / GRPCRoute / Gateway) — a path-shaped diagnosis ordered
+	// along the traffic path. See internal/trace.
+	Trace *trace.Trace `json:"trace,omitempty"`
 }
 
 // gitopsDiagnosis is the status summary for a GitOps reconciler. The actionable
@@ -173,6 +179,13 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	// the parsed failure issue (via RelatedIssues), no log/pod fan-out.
 	if gk, group, resource, tool, ok := gitopsDiagnoseTarget(input.Kind); ok {
 		return handleGitOpsDiagnose(ctx, input, gk, group, resource, tool)
+	}
+	// Network entry kinds get a path-shaped trace instead of pod-log fan-out
+	// — "this Service is broken because the upstream Route's parent Gateway
+	// is not Accepted" is a different shape of answer than logs+events. See
+	// internal/trace.
+	if traceKind, ok := networkTraceKind(input.Kind); ok {
+		return handleNetworkTraceDiagnose(ctx, input, traceKind)
 	}
 	kindNorm := normalizeDiagnoseKind(input.Kind)
 	if kindNorm == "" {
@@ -650,6 +663,63 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, namespace, name stri
 // reading as "things worth diagnosing" when they're just lifecycle
 // breadcrumbs.
 //
+// networkTraceKind returns the canonical entry-kind name for trace
+// diagnostics, accepting plural and lowercase forms the way agents tend to
+// write them. Empty string + false means "not a network entry kind" — the
+// caller falls through to the workload/pod branch.
+func networkTraceKind(kind string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "service", "services":
+		return "Service", true
+	case "ingress", "ingresses":
+		return "Ingress", true
+	case "httproute", "httproutes":
+		return "HTTPRoute", true
+	case "grpcroute", "grpcroutes":
+		return "GRPCRoute", true
+	case "gateway", "gateways":
+		return "Gateway", true
+	}
+	return "", false
+}
+
+// handleNetworkTraceDiagnose is the diagnose tool's response for a network
+// entry kind. It deliberately skips the pod-log fan-out path — the trace IS
+// the diagnosis. RelatedIssues is still populated so an agent has the raw
+// issues to expand on individual hop findings.
+func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind string) (*mcp.CallToolResult, any, error) {
+	if !checkNamespaceAccess(ctx, input.Namespace) {
+		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+	deps := trace.Deps{
+		Cache:     cache,
+		Dynamic:   k8s.GetDynamicResourceCache(),
+		Discovery: k8s.GetResourceDiscovery(),
+		Issues:    issues.NewCacheProvider(),
+		Client:    k8s.GetClient(),
+	}
+	tr, err := trace.BuildTraceWithOptions(ctx, deps, kind, input.Namespace, input.Name, trace.Options{Probe: input.Probe})
+	if err != nil {
+		return nil, nil, fmt.Errorf("trace failed: %w", err)
+	}
+	group := ""
+	switch kind {
+	case "Ingress":
+		group = "networking.k8s.io"
+	case "HTTPRoute", "GRPCRoute", "Gateway":
+		group = "gateway.networking.k8s.io"
+	}
+	resp := diagnoseResponse{
+		Trace:         tr,
+		RelatedIssues: issues.RelatedIssues(issues.NewCacheProvider(), []string{input.Namespace}, group, kind, input.Namespace, input.Name),
+	}
+	return toJSONResult(resp)
+}
+
 // Shared between diagnose (passes resolved pod names for full workload
 // coverage) and attachResourceExtras / get_resource include=events
 // (passes nil — supplemental fetch; callers wanting pod-level events should

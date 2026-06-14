@@ -304,6 +304,10 @@ func (s *Server) setupRoutes() {
 			r.Get("/audit", s.handleAudit)
 			r.Get("/audit/resource/{kind}/{namespace}/{name}", s.handleAuditResource)
 
+			// Network path trace — path-shaped diagnosis for Service /
+			// Ingress / HTTPRoute / GRPCRoute / Gateway. See internal/trace.
+			r.Get("/trace/{kind}/{namespace}/{name}", s.handleTrace)
+
 			// Packages — merged "what's installed" view across Helm
 			// releases, workload labels, CRD registrations, and GitOps
 			// declarations. See pkg/packages for merge semantics.

@@ -1661,6 +1661,125 @@ func TestDetectProblems_TerminatingNamespaceClusterScoped(t *testing.T) {
 	}
 }
 
+func TestDetectProblems_ProbePortServiceMismatch(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	matchLabels := map[string]string{"app": "api"}
+
+	readyPod := func(name string, probePort intstr.IntOrString) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "prod", CreationTimestamp: old,
+				Labels: matchLabels,
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name: "main",
+					Ports: []corev1.ContainerPort{
+						{Name: "http", ContainerPort: 8080},
+						{Name: "admin", ContainerPort: 9999},
+					},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							HTTPGet: &corev1.HTTPGetAction{Port: probePort},
+						},
+					},
+				}},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:               corev1.PodReady,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: old,
+				}},
+			},
+		}
+	}
+
+	client := fake.NewClientset(
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "mismatch", Namespace: "prod", CreationTimestamp: old},
+			Spec: corev1.ServiceSpec{
+				Selector: matchLabels,
+				Ports: []corev1.ServicePort{
+					{Name: "http", Port: 80, TargetPort: intstr.FromString("http")},
+				},
+			},
+		},
+		readyPod("mismatch-pod", intstr.FromString("admin")),
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "aligned", Namespace: "prod", CreationTimestamp: old},
+			Spec: corev1.ServiceSpec{
+				Selector: map[string]string{"app": "aligned"},
+				Ports: []corev1.ServicePort{
+					{Name: "http", Port: 80, TargetPort: intstr.FromString("http")},
+				},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "aligned-pod", Namespace: "prod", CreationTimestamp: old,
+				Labels: map[string]string{"app": "aligned"},
+			},
+			Spec: corev1.PodSpec{
+				Containers: []corev1.Container{{
+					Name:  "main",
+					Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromString("http")},
+						},
+					},
+				}},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:               corev1.PodReady,
+					Status:             corev1.ConditionTrue,
+					LastTransitionTime: old,
+				}},
+			},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "")
+		if hasProblem(problems, "Service", "mismatch", "Readiness probe port differs from Service target port") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Service", "mismatch", "Readiness probe port differs from Service target port", "warning")
+	mismatchDetection, _ := lookupProblem(problems, "Service", "mismatch", "Readiness probe port differs from Service target port")
+	if !strings.Contains(mismatchDetection.Message, "9999") {
+		t.Errorf("message should name the probe's resolved port for actionability, got %q", mismatchDetection.Message)
+	}
+	if !strings.Contains(mismatchDetection.Message, "http") {
+		t.Errorf("message should name the Service's actual target(s), got %q", mismatchDetection.Message)
+	}
+	if mismatchDetection.Fingerprint != "svc:probe-port-mismatch" {
+		t.Errorf("fingerprint = %q, want svc:probe-port-mismatch", mismatchDetection.Fingerprint)
+	}
+
+	if hasProblem(problems, "Service", "aligned", "Readiness probe port differs from Service target port") {
+		t.Fatalf("aligned Service should not flag probe-port mismatch: %+v", problems)
+	}
+}
+
 func hasProblem(problems []Detection, kind, name, reason string) bool {
 	for _, p := range problems {
 		if p.Kind == kind && p.Name == name && p.Reason == reason {

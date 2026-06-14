@@ -377,6 +377,29 @@ export function useResourceAudit(kind: string, namespace: string, name: string) 
   })
 }
 
+import type { Trace as NetworkTrace } from '@skyhook-io/k8s-ui'
+
+// useTrace polls the static path-shaped diagnosis for one network entry
+// kind. 5s refetch + 15s staleTime keeps the drawer feeling live without
+// burning request budget; probes are deliberately excluded — they run via
+// fetchTraceWithProbes on operator click.
+export function useTrace(kind: string, namespace: string, name: string, enabled = true) {
+  return useQuery<NetworkTrace>({
+    queryKey: ['trace', kind, namespace, name, 'static'],
+    queryFn: () => fetchJSON(`/trace/${kind}/${namespace}/${name}`),
+    staleTime: 15000,
+    refetchInterval: enabled ? 5000 : false,
+    enabled: enabled && Boolean(kind) && Boolean(namespace) && Boolean(name),
+  })
+}
+
+// fetchTraceWithProbes is one-shot rather than polled: probes generate
+// real network traffic that observability systems can see, so they run
+// only when the operator clicks.
+export function fetchTraceWithProbes(kind: string, namespace: string, name: string): Promise<NetworkTrace> {
+  return fetchJSON(`/trace/${kind}/${namespace}/${name}?probe=true`)
+}
+
 // Audit settings
 export interface AuditSettings {
   ignoredNamespaces: string[]

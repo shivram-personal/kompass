@@ -182,7 +182,15 @@ func registerTools(server *mcp.Server) {
 			"flaps, scheduling failures, error-spewing services, GitOps sync/health failures, or any workload " +
 			"root-causing where you would otherwise call get_resource → events → " +
 			"get_pod_logs → get_pod_logs(previous=true) in sequence — this returns the " +
-			"same data in one round-trip. If you only need ONE facet (e.g. just spec, " +
+			"same data in one round-trip. " +
+			"For network entry kinds (Service/Ingress/HTTPRoute/GRPCRoute/Gateway), " +
+			"returns a path-shaped trace instead of pod-log fan-out: hop-ordered " +
+			"diagnosis along the traffic path (Gateway/Ingress → Route → Service → Pods), " +
+			"naming the first broken hop and the existing detections attached to it. Use " +
+			"for 'traffic is not reaching this service / route / ingress', backend port " +
+			"mismatches, route not Accepted by parent gateway, no-ready-endpoints, " +
+			"readiness probe targeting the wrong port. " +
+			"If you only need ONE facet (e.g. just spec, " +
 			"just logs), prefer the targeted tool. For other CRDs or non-workload kinds, " +
 			"use get_resource (with optional include=events).",
 		Annotations: readOnly,

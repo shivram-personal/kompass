@@ -1,4 +1,4 @@
-import { useMemo, useEffect, useCallback, useState } from 'react'
+import { useMemo, useEffect, useCallback, useRef, useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
@@ -7,6 +7,7 @@ import {
   WorkloadView as BaseWorkloadView,
   EditableYamlView,
   FetchResult,
+  Section,
   type WorkloadTabType,
   type RendererOverrides,
   type GitOpsOwnerRef,
@@ -16,6 +17,7 @@ import {
   gitOpsOwnerFromRelationships,
   getGitOpsResourceStatus,
   resolvedEnvFromKey,
+  isDiagnoseKind,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource, ResourceRef, Relationships, ResolvedEnvFrom } from '../../types'
 import { kindToPlural, buildWorkloadPath, type NavigateToResource } from '../../utils/navigation'
@@ -35,8 +37,8 @@ import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusC
 import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingStrip } from '../resource/RightsizingStrip'
-import { useResourceAudit, useResources } from '../../api/client'
-import { AuditAlerts } from '@skyhook-io/k8s-ui'
+import { useResourceAudit, useResources, useTrace, fetchTraceWithProbes } from '../../api/client'
+import { AuditAlerts, TracePanel, type Trace as NetworkTrace } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
 import { useCanUpdateSecrets, useCanNodeWrite, useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
@@ -507,6 +509,9 @@ export function WorkloadView({
       renderMetricsTab={({ kind, namespace: ns, name: n }) => (
         <MetricsTabContent kind={kind} namespace={ns} name={n} resource={resource} expanded={expanded} />
       )}
+      renderDiagnoseTab={({ kind, namespace: ns, name: n }) => (
+        <DiagnoseTabContent kind={kind} namespace={ns} name={n} onNavigate={rest.onNavigateToResource} />
+      )}
       isMetricsAvailable={(kind, res) =>
         isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending')
       }
@@ -515,10 +520,11 @@ export function WorkloadView({
       actionsBarProps={actionsBarProps}
       rendererOverrides={rendererOverrides}
       resolvedEnvFrom={resolvedEnvFrom}
-      renderOverviewExtra={({ kind: k, namespace: ns, name: n }) => (
+      renderOverviewExtra={({ kind: k, namespace: ns, name: n, context }) => (
         <>
           <AuditSection kind={k} namespace={ns} name={n} />
           <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
+          {context === 'drawer' && <DiagnoseInlineSection kind={k} namespace={ns} name={n} onNavigate={rest.onNavigateToResource} />}
         </>
       )}
       onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
@@ -814,6 +820,89 @@ function AuditSection({ kind, namespace, name }: { kind: string; namespace: stri
   const { data: findings } = useResourceAudit(kind, namespace, name)
   if (!findings || findings.length === 0) return null
   return <AuditAlerts findings={findings} onViewAll={() => navigate('/checks')} />
+}
+
+// DiagnoseTabContent binds the static-trace polling hook + the one-shot
+// probe fetch to the presentational TracePanel. Probe results are held in
+// local state so the panel keeps showing them until the resource changes;
+// the static trace remains the source of truth.
+function DiagnoseTabContent({ kind, namespace, name, onNavigate }: { kind: string; namespace: string; name: string; onNavigate?: NavigateToResource }) {
+  const { data: staticTrace, isLoading, error, refetch } = useTrace(kind, namespace, name)
+  const [probeTrace, setProbeTrace] = useState<NetworkTrace | undefined>(undefined)
+  const [running, setRunning] = useState(false)
+  const aliveRef = useRef(true)
+  useEffect(() => () => { aliveRef.current = false }, [])
+  // Probe overlay belongs to the currently-focused resource. Clearing on
+  // every static poll would race the in-flight probe request (poll at t=5s
+  // wipes probe results that arrived at t=2s); clearing on resource change
+  // is the durable invariant we actually want.
+  useEffect(() => {
+    setProbeTrace(undefined)
+  }, [kind, namespace, name])
+  const runProbes = useCallback(() => {
+    if (running) return
+    setRunning(true)
+    fetchTraceWithProbes(kind, namespace, name)
+      .then((result) => { if (aliveRef.current) setProbeTrace(result) })
+      .finally(() => { if (aliveRef.current) setRunning(false) })
+  }, [kind, namespace, name, running])
+  const displayTrace = probeTrace ?? staticTrace
+  // Full-view Diagnose tab owns the page padding (the drawer variant wraps
+  // in Section, which handles its own indentation).
+  return (
+    <div className="p-4">
+      <TracePanel
+        trace={displayTrace}
+        isLoading={isLoading || running}
+        error={error as Error | null}
+        onRefresh={() => void refetch()}
+        probeRequested={running}
+        onRunProbes={runProbes}
+        onNavigateToResource={onNavigate ? (ref) => onNavigate({ kind: kindToPlural(ref.kind), namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '' }) : undefined}
+      />
+    </div>
+  )
+}
+
+// DiagnoseInlineSection is the drawer-mode counterpart to DiagnoseTabContent
+// for surfaces that have no tab bar. The useTrace hook is gated on enabled
+// so non-traceable kinds short-circuit before issuing any network request.
+function DiagnoseInlineSection({ kind, namespace, name, onNavigate }: { kind: string; namespace: string; name: string; onNavigate?: NavigateToResource }) {
+  const enabled = isDiagnoseKind(kind)
+  const { data: staticTrace, isLoading, error, refetch } = useTrace(kind, namespace, name, enabled)
+  const [probeTrace, setProbeTrace] = useState<NetworkTrace | undefined>(undefined)
+  const [running, setRunning] = useState(false)
+  const aliveRef = useRef(true)
+  useEffect(() => () => { aliveRef.current = false }, [])
+  useEffect(() => {
+    setProbeTrace(undefined)
+  }, [kind, namespace, name])
+  const runProbes = useCallback(() => {
+    if (running) return
+    setRunning(true)
+    fetchTraceWithProbes(kind, namespace, name)
+      .then((result) => { if (aliveRef.current) setProbeTrace(result) })
+      .finally(() => { if (aliveRef.current) setRunning(false) })
+  }, [kind, namespace, name, running])
+  if (!enabled) return null
+  const displayTrace = probeTrace ?? staticTrace
+  // Wrap in Section so the drawer's diagnose surface matches the rest of
+  // the drawer (Ports / Selector / Related Resources / Metadata) — chevron,
+  // title, divider, collapsible. Without it the diagnose content reads as
+  // loose floating content under Metadata.
+  return (
+    <Section title="Diagnose · Network Path">
+      <TracePanel
+        trace={displayTrace}
+        isLoading={isLoading || running}
+        error={error as Error | null}
+        onRefresh={() => void refetch()}
+        probeRequested={running}
+        onRunProbes={runProbes}
+        onNavigateToResource={onNavigate ? (ref) => onNavigate({ kind: kindToPlural(ref.kind), namespace: ref.namespace ?? '', name: ref.name, group: ref.group ?? '' }) : undefined}
+      />
+    </Section>
+  )
 }
 
 // FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)
