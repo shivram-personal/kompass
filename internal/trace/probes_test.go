@@ -429,6 +429,37 @@ func TestVerdict_DegradeUnknownOnUnreadableEndpoints(t *testing.T) {
 	}
 }
 
+// TestPortIsServiceTargeted pins the Pods-hop port filter that prevents
+// non-Service ports (sidecar metrics, kubelet liveness/readiness ports)
+// from being probed. kube-proxy doesn't route to them, so a "probe failed"
+// row on those ports would mislead the operator about real reachability.
+func TestPortIsServiceTargeted(t *testing.T) {
+	t.Run("no service known keeps every port", func(t *testing.T) {
+		empty := servicePortTargets{}
+		if !portIsServiceTargeted(empty, "metrics", 9090) {
+			t.Errorf("with no Service context every container port should pass")
+		}
+	})
+	t.Run("matches int targetPort", func(t *testing.T) {
+		st := servicePortTargets{known: true, intSet: map[int32]struct{}{80: {}}, nameSet: map[string]struct{}{}}
+		if !portIsServiceTargeted(st, "http", 80) {
+			t.Errorf("port 80 should match int target")
+		}
+		if portIsServiceTargeted(st, "metrics", 9090) {
+			t.Errorf("port 9090 should NOT match when Service targets only 80")
+		}
+	})
+	t.Run("matches named targetPort", func(t *testing.T) {
+		st := servicePortTargets{known: true, intSet: map[int32]struct{}{}, nameSet: map[string]struct{}{"web": {}}}
+		if !portIsServiceTargeted(st, "web", 8080) {
+			t.Errorf("named container port should match named target")
+		}
+		if portIsServiceTargeted(st, "metrics", 9090) {
+			t.Errorf("non-matching named port should not match")
+		}
+	})
+}
+
 // TestUniqueHosts verifies the host de-dup that drives Ingress probing:
 // blanks dropped, dupes collapsed, rule-level hosts merged.
 func TestUniqueHosts(t *testing.T) {

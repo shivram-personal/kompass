@@ -356,6 +356,13 @@ func computeVerdict(t *Trace) (string, int) {
 		}
 		if brokenUp == len(t.Upstreams) && verdict != VerdictBroken {
 			verdict = VerdictBroken
+			// All upstream entries are broken: traffic can't reach the
+			// subject at all. Anchor brokenAt on the subject row (index 0)
+			// so the UI's downstream highlight isn't blank while the banner
+			// reads "broken". The subject row IS the unreachable target.
+			if brokenAt < 0 && len(t.Downstream) > 0 {
+				brokenAt = 0
+			}
 		} else if (brokenUp > 0 || warnUp > 0) && verdict == VerdictHealthy {
 			verdict = VerdictDegraded
 		}

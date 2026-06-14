@@ -51,7 +51,7 @@ func traceServiceEntry(deps Deps, t *Trace) {
 		t.Downstream = []Hop{{
 			Resource: svcRef,
 			Edge:     "entry:Service",
-			Meta:     map[string]any{"endpointSource": "unknown", "selectorless": true},
+			Meta:     map[string]any{"selectorless": true},
 			Findings: append(hopFindings(deps.Issues, svcRef), Finding{
 				Code:     "svc:selectorless",
 				Severity: SeverityInfo,
@@ -139,7 +139,7 @@ func buildPodsHop(deps Deps, svc *corev1.Service, pods []*corev1.Pod) Hop {
 		Resource: podsRef,
 		Edge:     "Service->Pods",
 		Meta:     meta,
-		Config:   podsConfig(pods),
+		Config:   podsConfig(pods, svc),
 	}
 	hop.Findings = append(hop.Findings, podFanoutFindings(deps, pods)...)
 	if cmd := selectorReproducer(podsRef, svc.Spec.Selector); cmd != "" {
@@ -163,10 +163,18 @@ const maxPodIPsInConfig = 10
 // same ports. Probes from sidecars matter (multi-container readiness is
 // AND'ed) so they're listed per container. Pod IPs are captured up to
 // maxPodIPsInConfig (10) so the in-cluster probe has real targets.
-func podsConfig(pods []*corev1.Pod) *HopConfig {
+//
+// Container ports are filtered to those the upstream Service actually
+// targets. Sidecar / admin / metrics ports (Envoy 15000, Prometheus 9090,
+// kubelet probe ports) aren't reachable via kube-proxy, so probing them
+// would emit false "probe failed" rows that mislead the operator about
+// the actual data-path. When svc has no ports declared, every container
+// port stays so we don't blank-screen the hop.
+func podsConfig(pods []*corev1.Pod, svc *corev1.Service) *HopConfig {
 	if len(pods) == 0 {
 		return nil
 	}
+	targeted := serviceTargetedPorts(svc)
 	cp := map[string]ContainerPortRef{}
 	pr := map[string]ProbeRef{}
 	var ips []string
@@ -183,6 +191,9 @@ func podsConfig(pods []*corev1.Pod) *HopConfig {
 		}
 		for _, c := range pod.Spec.Containers {
 			for _, port := range c.Ports {
+				if !portIsServiceTargeted(targeted, port.Name, port.ContainerPort) {
+					continue
+				}
 				key := c.Name + "/" + port.Name + "/" + fmt.Sprintf("%d", port.ContainerPort)
 				if _, ok := cp[key]; ok {
 					continue
@@ -227,6 +238,61 @@ func podsConfig(pods []*corev1.Pod) *HopConfig {
 		return c.Probes[i].Type < c.Probes[j].Type
 	})
 	return c
+}
+
+// servicePortTargets captures the union of ports a Service routes to. The
+// apiserver treats targetPort as int OR named-string; pods carry both
+// (containerPort and Name). We surface both so portIsServiceTargeted can
+// match against either. Empty == no Service known, in which case we
+// keep all ports (Pods hops attached to non-Service entries).
+type servicePortTargets struct {
+	known   bool
+	intSet  map[int32]struct{}
+	nameSet map[string]struct{}
+}
+
+func serviceTargetedPorts(svc *corev1.Service) servicePortTargets {
+	if svc == nil || len(svc.Spec.Ports) == 0 {
+		return servicePortTargets{}
+	}
+	t := servicePortTargets{
+		known:   true,
+		intSet:  map[int32]struct{}{},
+		nameSet: map[string]struct{}{},
+	}
+	for _, sp := range svc.Spec.Ports {
+		switch sp.TargetPort.Type {
+		case intstr.Int:
+			if sp.TargetPort.IntVal > 0 {
+				t.intSet[sp.TargetPort.IntVal] = struct{}{}
+			} else {
+				// Unset TargetPort defaults to Port (apiserver behavior).
+				t.intSet[sp.Port] = struct{}{}
+			}
+		case intstr.String:
+			if sp.TargetPort.StrVal != "" {
+				t.nameSet[sp.TargetPort.StrVal] = struct{}{}
+			} else {
+				t.intSet[sp.Port] = struct{}{}
+			}
+		}
+	}
+	return t
+}
+
+func portIsServiceTargeted(t servicePortTargets, name string, port int32) bool {
+	if !t.known {
+		return true
+	}
+	if _, ok := t.intSet[port]; ok {
+		return true
+	}
+	if name != "" {
+		if _, ok := t.nameSet[name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // isPodReadyForTrace returns true if the pod's Ready condition is True.
