@@ -259,6 +259,42 @@ func podsConfig(pods []*corev1.Pod, svc *corev1.Service) *HopConfig {
 	return c
 }
 
+// annotateServiceTerminal applies the same terminal-case meta+finding the
+// Service-entry path attaches, when a backend Service is reached from an
+// Ingress / Route fan-out. ExternalName and selectorless backends are
+// terminal — there's no Pods hop to add and the verdict downgrade in
+// hasUnverifiableEndpoints needs the selectorless flag to fire. Without
+// this, an Ingress backed by a selectorless Service would silently report
+// `healthy` while a direct Service trace of the same backend would
+// honestly read `unknown`. Returns true when terminal (caller skips Pods).
+func annotateServiceTerminal(hop *Hop, svc *corev1.Service) bool {
+	if svc == nil {
+		return false
+	}
+	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+		hop.Findings = append(hop.Findings, Finding{
+			Code:     "svc:external-name",
+			Severity: SeverityInfo,
+			Message:  fmt.Sprintf("Service resolves to %q outside the cluster; downstream is not traced", svc.Spec.ExternalName),
+		})
+		return true
+	}
+	if len(svc.Spec.Selector) == 0 {
+		if hop.Meta == nil {
+			hop.Meta = map[string]any{}
+		}
+		hop.Meta["selectorless"] = true
+		hop.Findings = append(hop.Findings, Finding{
+			Code:     "svc:selectorless",
+			Severity: SeverityInfo,
+			Message:  "Service has no selector; endpoints are managed manually and pod health is not derivable",
+			Command:  fmt.Sprintf("kubectl get endpoints %s -n %s", svc.Name, svc.Namespace),
+		})
+		return true
+	}
+	return false
+}
+
 // servicePortTargets captures the union of ports a Service routes to. The
 // apiserver treats targetPort as int OR named-string; pods carry both
 // (containerPort and Name). We surface both so portIsServiceTargeted can
@@ -623,8 +659,9 @@ func traceIngressEntry(deps Deps, t *Trace) {
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
 		}
+		terminal := svcErr == nil && annotateServiceTerminal(&svcHop, svc)
 		hops = append(hops, svcHop)
-		if svcErr == nil && len(svc.Spec.Selector) > 0 {
+		if svcErr == nil && !terminal && len(svc.Spec.Selector) > 0 {
 			selPods, unreadable := selectedPods(deps, svc)
 			hops = append(hops, buildPodsHop(deps, svc, selPods, unreadable))
 		}
@@ -783,8 +820,9 @@ func traceRouteEntry(deps Deps, t *Trace, kind string) {
 		if svcErr == nil {
 			svcHop.Config = serviceConfig(svc)
 		}
+		terminal := svcErr == nil && annotateServiceTerminal(&svcHop, svc)
 		hops = append(hops, svcHop)
-		if svcErr == nil && len(svc.Spec.Selector) > 0 {
+		if svcErr == nil && !terminal && len(svc.Spec.Selector) > 0 {
 			selPods, unreadable := selectedPods(deps, svc)
 			hops = append(hops, buildPodsHop(deps, svc, selPods, unreadable))
 		}
