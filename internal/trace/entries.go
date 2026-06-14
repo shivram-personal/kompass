@@ -1005,6 +1005,10 @@ func gatewayConfig(gw *unstructured.Unstructured) *HopConfig {
 		switch v := lm["port"].(type) {
 		case int64:
 			gl.Port = int32(v)
+		case int32:
+			gl.Port = v
+		case int:
+			gl.Port = int32(v)
 		case float64:
 			gl.Port = int32(v)
 		}

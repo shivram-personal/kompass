@@ -325,12 +325,18 @@ func nonHTTPSkipReason(portName, appProtocol string, port int32, vantage probe.V
 	if vantage == probe.VantageLocal {
 		return base + " Run Radar from in-cluster to verify TCP reachability."
 	}
+	// In-cluster, direct TCP probes ran in parallel; the gRPC case can
+	// truthfully say so. From a laptop the caller has appended the
+	// "run in-cluster" hint instead.
+	if isGRPCLike(portName, appProtocol) {
+		return base + " Reachability still checked at the TCP level."
+	}
 	return base
 }
 
 func nonHTTPBaseReason(portName, appProtocol string, port int32) string {
 	if isGRPCLike(portName, appProtocol) {
-		return "Port speaks gRPC or HTTP/2; the probe only knows HTTP/1.1. Reachability still checked at the TCP level."
+		return "Port speaks gRPC or HTTP/2; the probe only knows HTTP/1.1."
 	}
 	if appProtocol != "" {
 		return fmt.Sprintf("Port is declared as %q, not HTTP. The Kubernetes API path only carries HTTP traffic.", appProtocol)
