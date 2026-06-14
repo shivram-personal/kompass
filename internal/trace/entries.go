@@ -474,6 +474,11 @@ func ingressUpstreamsForService(deps Deps, svc *corev1.Service) []Hop {
 			Resource: ref,
 			Edge:     "Ingress->Service",
 			Findings: hopFindings(deps.Issues, ref),
+			// Config is what probeIngress reads to decide which hostnames
+			// to DNS / TCP / TLS / HTTP probe. Omitting it left upstream
+			// Ingress hops out of the active layer entirely even though
+			// ?probe=true walks them.
+			Config: ingressConfig(ing),
 		})
 	}
 	return out
@@ -956,11 +961,18 @@ func routeParentGateways(deps Deps, route *unstructured.Unstructured) []Hop {
 				Command:  fmt.Sprintf("kubectl get gateway.gateway.networking.k8s.io -n %s", ns),
 			})
 		}
-		out = append(out, Hop{
+		hop := Hop{
 			Resource: ref,
 			Edge:     "Gateway->Route",
 			Findings: findings,
-		})
+		}
+		// Config drives probeGateway (listeners + addresses → TCP / TLS).
+		// Omitting it left upstream Gateway hops outside the active layer
+		// even though ?probe=true walks them.
+		if gw != nil {
+			hop.Config = gatewayConfig(gw)
+		}
+		out = append(out, hop)
 	}
 	return out
 }
