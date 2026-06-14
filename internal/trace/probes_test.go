@@ -452,6 +452,50 @@ func TestPathDivergenceFinding_SkippedRowsIgnored(t *testing.T) {
 	}
 }
 
+// TestVerdict_DegradedPromotesToUnknownOnUnverifiable pins that a
+// degraded verdict (driven by a warning finding elsewhere on the path)
+// still promotes to unknown when the path itself was unverifiable. The
+// warning may or may not describe the whole story; without endpoint
+// proof the only honest answer is unknown. Broken stays broken because
+// a critical finding is actionable regardless of endpoint visibility.
+func TestVerdict_DegradedPromotesToUnknownOnUnverifiable(t *testing.T) {
+	tr := &Trace{
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Service"},
+				Findings: []Finding{{Severity: SeverityWarning}},
+			},
+			{
+				Resource: ResourceRef{Kind: "Pods"},
+				Meta:     map[string]any{"endpointSource": "unknown"},
+			},
+		},
+	}
+	v, _ := computeVerdict(tr)
+	if v != VerdictUnknown {
+		t.Errorf("computeVerdict(degraded + unverifiable) = %q, want %q", v, VerdictUnknown)
+	}
+}
+
+// TestVerdict_BrokenSurvivesUnverifiable pins that a critical finding
+// stays broken even on an unverifiable path. Operators need the actionable
+// signal; downgrading a known critical to unknown would hide work to do.
+func TestVerdict_BrokenSurvivesUnverifiable(t *testing.T) {
+	tr := &Trace{
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Service"},
+				Findings: []Finding{{Severity: SeverityCritical}},
+				Meta:     map[string]any{"selectorless": true},
+			},
+		},
+	}
+	v, _ := computeVerdict(tr)
+	if v != VerdictBroken {
+		t.Errorf("computeVerdict(broken + unverifiable) = %q, want %q", v, VerdictBroken)
+	}
+}
+
 // TestVerdict_DegradeUnknownOnUnreadablePods pins the verdict-honesty
 // contract for unreadable pod state: a hop flagged endpointSource=unknown
 // (selectedPods returned an error and buildPodsHop marked the hop) must

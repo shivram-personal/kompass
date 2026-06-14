@@ -369,12 +369,15 @@ func computeVerdict(t *Trace) (string, int) {
 		}
 	}
 
-	// A trace can't honestly be called healthy when endpoint resolution
-	// itself was unverifiable. Two emitters today: selectorless Services
-	// (manual endpoints, no proof a target is wired up) and any hop that
-	// flagged endpointSource=unknown (pod lister failed; RBAC or cache
-	// sync the likely cause).
-	if verdict == VerdictHealthy && hasUnverifiableEndpoints(t) {
+	// A trace can't honestly be called healthy *or* degraded when endpoint
+	// resolution itself was unverifiable. Selectorless Services (manual
+	// endpoints, no proof a target is wired up) and any hop that flagged
+	// endpointSource=unknown (pod lister failed; RBAC or cache sync the
+	// likely cause) downgrade to unknown — including over a degraded
+	// verdict, since we can't be confident the warning describes the
+	// whole story. Broken stays broken: a critical finding is a known
+	// problem the operator can act on regardless of endpoint visibility.
+	if verdict != VerdictBroken && hasUnverifiableEndpoints(t) {
 		verdict = VerdictUnknown
 	}
 
