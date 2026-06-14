@@ -1068,9 +1068,19 @@ func attachedRoutes(deps Deps, gw *unstructured.Unstructured) ([]ResourceRef, in
 		if !ok {
 			continue
 		}
+		// Same fallback ladder as routeUpstreamsForService: ListWatched is
+		// the union of every running informer (best case); if it's empty or
+		// the watch cache isn't ready, try cluster-wide then the Gateway's
+		// namespace. A Gateway can have cross-namespace Routes attach to
+		// it, so the namespace-only fallback alone would silently miss them.
 		routes, err := deps.Dynamic.ListWatched(gvr)
-		if err != nil {
-			continue
+		if err != nil || len(routes) == 0 {
+			if routes2, err2 := deps.Dynamic.List(gvr, ""); err2 == nil && len(routes2) > 0 {
+				routes = routes2
+			} else {
+				routes3, _ := deps.Dynamic.List(gvr, gw.GetNamespace())
+				routes = routes3
+			}
 		}
 		for _, r := range routes {
 			if routeAttachedToGateway(r, gw.GetNamespace(), gw.GetName()) {
