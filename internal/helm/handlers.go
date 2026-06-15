@@ -33,11 +33,30 @@ func userCreds(r *http.Request) (string, []string) {
 }
 
 // Handlers provides HTTP handlers for Helm endpoints
-type Handlers struct{}
+type Handlers struct {
+	// resolveNamespaces maps a request to the namespaces a Helm list should
+	// query. It returns (nil, true) for cluster-wide access, (namespaces, true)
+	// to list those namespaces and merge, and (_, false) when the identity has
+	// no namespace access. Injected by the server so the helm package doesn't
+	// depend on its per-user RBAC plumbing. May be nil in tests that don't
+	// exercise the list endpoints.
+	resolveNamespaces func(r *http.Request) ([]string, bool)
+}
 
-// NewHandlers creates a new Handlers instance
-func NewHandlers() *Handlers {
-	return &Handlers{}
+// NewHandlers creates a new Handlers instance. resolveNamespaces lets the list
+// endpoints degrade gracefully for namespace-restricted identities (see
+// handleListReleases); pass nil only in tests that don't hit those routes.
+func NewHandlers(resolveNamespaces func(r *http.Request) ([]string, bool)) *Handlers {
+	return &Handlers{resolveNamespaces: resolveNamespaces}
+}
+
+// listNamespaces resolves which namespaces a Helm list should query. Falls back
+// to cluster-wide (nil, true) when no resolver is wired.
+func (h *Handlers) listNamespaces(r *http.Request) ([]string, bool) {
+	if h.resolveNamespaces == nil {
+		return nil, true
+	}
+	return h.resolveNamespaces(r)
 }
 
 // RegisterRoutes registers Helm routes on the given router
@@ -84,10 +103,18 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	namespace := r.URL.Query().Get("namespace")
+	// Resolve which namespaces to list. An explicit ?namespace= is honored by
+	// the resolver (via the request query); when none is given, a
+	// namespace-restricted identity resolves to its accessible namespaces
+	// instead of a cluster-wide `list secrets` that would 403.
+	namespaces, ok := h.listNamespaces(r)
+	if !ok {
+		writeJSON(w, []HelmRelease{})
+		return
+	}
 
 	username, groups := userCreds(r)
-	releases, err := client.ListReleasesAsUser(namespace, username, groups)
+	releases, err := client.ListReleasesAcrossNamespaces(namespaces, username, groups)
 	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to list Helm releases")
@@ -262,10 +289,14 @@ func (h *Handlers) handleBatchUpgradeCheck(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	namespace := r.URL.Query().Get("namespace")
+	namespaces, ok := h.listNamespaces(r)
+	if !ok {
+		writeJSON(w, &BatchUpgradeInfo{Releases: map[string]*UpgradeInfo{}})
+		return
+	}
 
 	username, groups := userCreds(r)
-	info, err := client.BatchCheckUpgradesAsUser(namespace, username, groups)
+	info, err := client.BatchCheckUpgradesAcrossNamespaces(namespaces, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

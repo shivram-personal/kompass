@@ -484,14 +484,16 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
+	namespaces, ok := s.resolveHelmNamespaces(r)
+	if !ok {
 		s.writeJSON(w, DashboardHelmSummary{})
 		return
 	}
 
-	// Iterate per allowed namespace and aggregate. Cluster-admin / no-auth
-	// (namespaces == nil) collapses to a single "" call (cluster-wide).
+	// Iterate per allowed namespace and aggregate. Cluster-wide access
+	// (namespaces == nil) collapses to a single "" call; a namespace-restricted
+	// identity gets its accessible namespaces from resolveHelmNamespaces so the
+	// summary doesn't 403 into a "Restricted" card.
 	var summary DashboardHelmSummary
 	if namespaces == nil {
 		summary = s.getDashboardHelmSummary(r, "")

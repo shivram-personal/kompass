@@ -279,6 +279,50 @@ func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
 	return listReleasesWith(actionConfig, namespace, "", nil)
 }
 
+// ListReleasesAcrossNamespaces lists releases for an explicit set of namespaces
+// and merges the results. A nil slice means "cluster-wide" (a single
+// AllNamespaces list). Callers pass the identity's accessible namespaces instead
+// of nil when it can't list secrets cluster-wide, so namespace-restricted users
+// and ServiceAccounts read Helm without a cluster-scoped `list secrets` (403).
+// Per-namespace lists are disjoint, so the merge can't duplicate a release.
+//
+// The accessible-namespace set is discovered from pod/deployment access, which
+// doesn't imply secrets access (Helm storage is Secrets) — a namespace where the
+// caller is bound to e.g. `view` denies the read. Those forbidden namespaces are
+// skipped so one of them doesn't blank releases the caller CAN see. Only when
+// every namespace is forbidden is the 403 surfaced, so the UI still shows
+// "Access Restricted" rather than a misleading empty list.
+func (c *Client) ListReleasesAcrossNamespaces(namespaces []string, username string, groups []string) ([]HelmRelease, error) {
+	if namespaces == nil {
+		return c.ListReleasesAsUser("", username, groups)
+	}
+	var all []HelmRelease
+	var lastForbidden error
+	authorized := false
+	for _, ns := range namespaces {
+		rels, err := c.ListReleasesAsUser(ns, username, groups)
+		if err != nil {
+			if IsForbiddenError(err) {
+				lastForbidden = err
+				continue
+			}
+			return nil, err
+		}
+		authorized = true
+		all = append(all, rels...)
+	}
+	if !authorized && lastForbidden != nil {
+		return nil, lastForbidden
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if all[i].Namespace != all[j].Namespace {
+			return all[i].Namespace < all[j].Namespace
+		}
+		return all[i].Name < all[j].Name
+	})
+	return all, nil
+}
+
 func listReleasesWith(actionConfig *action.Configuration, namespace, username string, groups []string) ([]HelmRelease, error) {
 	listAction := action.NewList(actionConfig)
 	listAction.All = true
@@ -1667,6 +1711,36 @@ func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error)
 // touch K8s).
 func (c *Client) BatchCheckUpgradesAsUser(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
 	return c.batchCheckUpgrades(namespace, username, groups)
+}
+
+// BatchCheckUpgradesAcrossNamespaces is BatchCheckUpgradesAsUser over an explicit
+// set of namespaces, merging the per-namespace maps. A nil slice means
+// "cluster-wide". Mirrors ListReleasesAcrossNamespaces so the Helm view's
+// upgrade checks degrade the same way for namespace-restricted identities. Keys
+// are "storageNamespace/name" and namespaces are queried once each, so the merge
+// can't collide.
+//
+// Upgrade info is best-effort enrichment layered on top of the release list, so
+// forbidden namespaces are skipped and an all-forbidden result returns an empty
+// map rather than an error — the release list itself is what surfaces the 403.
+func (c *Client) BatchCheckUpgradesAcrossNamespaces(namespaces []string, username string, groups []string) (*BatchUpgradeInfo, error) {
+	if namespaces == nil {
+		return c.BatchCheckUpgradesAsUser("", username, groups)
+	}
+	merged := &BatchUpgradeInfo{Releases: make(map[string]*UpgradeInfo)}
+	for _, ns := range namespaces {
+		info, err := c.BatchCheckUpgradesAsUser(ns, username, groups)
+		if err != nil {
+			if IsForbiddenError(err) {
+				continue
+			}
+			return nil, err
+		}
+		for k, v := range info.Releases {
+			merged.Releases[k] = v
+		}
+	}
+	return merged, nil
 }
 
 func (c *Client) batchCheckUpgrades(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {

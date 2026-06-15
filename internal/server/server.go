@@ -379,7 +379,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/workloads/{kind}/{namespace}/{name}/pods", s.handleWorkloadPods)
 
 			// Helm routes
-			helmHandlers := helm.NewHandlers()
+			helmHandlers := helm.NewHandlers(s.resolveHelmNamespaces)
 			helmHandlers.RegisterRoutes(r)
 
 			// Image inspection routes
@@ -826,6 +826,48 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 		filtered = s.getUserNamespaces(r, nil)
 	}
 	return filtered
+}
+
+// resolveHelmNamespaces decides which namespaces a Helm list (releases, upgrade
+// checks, dashboard summary) should query for this request. Helm releases are
+// always namespaced (stored as Secrets/ConfigMaps in a namespace), so unlike
+// cluster-scoped kinds it is always safe to narrow an "all namespaces" request
+// to the identity's accessible namespaces — which is what lets a
+// namespace-restricted user or ServiceAccount read Helm without a cluster-wide
+// `list secrets` (the 403 in issue #925).
+//
+// Returns:
+//   - (nil, true)        cluster-wide: a single AllNamespaces list
+//   - (namespaces, true) list each and merge
+//   - (nil, false)       no namespace access — caller returns an empty result
+func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
+	// An explicit ?namespace=/?namespaces= request is honored as-is. Helm reads
+	// run as the caller (user impersonation, or the SA when auth is off), so the
+	// apiserver authorizes the secrets read directly — routing this through
+	// parseNamespacesForUser would intersect it with the pod/deployment-based
+	// namespace discovery and wrongly drop a namespace where the caller has
+	// secrets but no pod access. A denied namespace surfaces as a 403 from the
+	// per-namespace list rather than a silent empty result.
+	if explicit := parseNamespaces(r.URL.Query()); explicit != nil {
+		return explicit, true
+	}
+
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		return nil, false
+	}
+	if namespaces == nil {
+		// "All namespaces". A namespace-restricted identity can't list
+		// cluster-wide; resolve to the namespaces it can actually see so the
+		// Helm list degrades gracefully instead of 403-ing.
+		// GetAccessibleNamespaces is authoritative only when cluster-wide `list
+		// namespaces` succeeds — keep nil in that case for a single cluster-wide
+		// list.
+		if accessible, authoritative := k8s.GetAccessibleNamespaces(r.Context()); !authoritative && len(accessible) > 0 {
+			return accessible, true
+		}
+	}
+	return namespaces, true
 }
 
 // noNamespaceAccess returns true when a namespace filter explicitly grants no access
