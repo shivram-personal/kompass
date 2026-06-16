@@ -848,7 +848,12 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 	// namespace discovery and wrongly drop a namespace where the caller has
 	// secrets but no pod access. A denied namespace surfaces as a 403 from the
 	// per-namespace list rather than a silent empty result.
-	if explicit := parseNamespaces(r.URL.Query()); explicit != nil {
+	//
+	// Guard on len > 0, not != nil: parseNamespaces returns an empty non-nil
+	// slice for a degenerate query like ?namespaces=,, — treat that as "no
+	// explicit filter" and fall through, rather than short-circuiting to a
+	// zero-namespace (empty) result.
+	if explicit := parseNamespaces(r.URL.Query()); len(explicit) > 0 {
 		return explicit, true
 	}
 
