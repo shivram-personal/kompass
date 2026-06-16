@@ -1253,7 +1253,19 @@ func TestDynamicResourceCache_ListEmptyNamespaceUnionsWhenNamespaceScoped(t *tes
 		t.Errorf("List(gvr, \"\") = %d objects, want 2 (union of per-namespace informers in namespace-scoped mode)", len(got))
 	}
 
-	n, err := d.Count(gvr, nil)
+	// Count gates on the cache's own per-informer `synced` flag, which a
+	// background goroutine sets shortly AFTER informer.HasSynced() (what
+	// ListBlocking waited on) — so poll briefly rather than racing that
+	// propagation.
+	var n int
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		n, err = d.Count(gvr, nil)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatalf("Count(gvr, nil) failed: %v", err)
 	}
