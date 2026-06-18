@@ -51,7 +51,7 @@ export type ProbePath = 'data' | 'apiserver'
  * at the expected route, or redirected without follow) and 5xx (unhealthy).
  * Empty falls back to (skipped → unknown, !ok → unhealthy, ok → healthy).
  */
-export type ProbeTone = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+export type ProbeTone = 'healthy' | 'degraded' | 'unhealthy'
 
 export interface ProbeResult {
   layer: ProbeLayer

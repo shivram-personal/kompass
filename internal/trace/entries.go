@@ -1,6 +1,7 @@
 package trace
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
+
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 type networkingIngress = networkingv1.Ingress
@@ -190,12 +193,27 @@ func podsConfig(pods []*corev1.Pod, svc *corev1.Service) *HopConfig {
 	if len(pods) == 0 {
 		return nil
 	}
+	// The Pods lister returns slice order from a map-backed store, so the
+	// "first N" we sample for the IP/name pool can differ across Radar
+	// instances — two operators viewing the same Service would probe
+	// different replicas. Sort by Name first so the sample is stable.
+	sorted := make([]*corev1.Pod, len(pods))
+	copy(sorted, pods)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i] == nil {
+			return false
+		}
+		if sorted[j] == nil {
+			return true
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
 	targeted := serviceTargetedPorts(svc)
 	cp := map[string]ContainerPortRef{}
 	pr := map[string]ProbeRef{}
 	var ips []string
 	var names []string
-	for _, pod := range pods {
+	for _, pod := range sorted {
 		if pod == nil {
 			continue
 		}
@@ -487,8 +505,9 @@ func readyCount(pods []*corev1.Pod) int {
 func serviceUpstreams(deps Deps, svc *corev1.Service) []Hop {
 	var out []Hop
 	out = append(out, ingressUpstreamsForService(deps, svc)...)
-	out = append(out, routeUpstreamsForService(deps, svc, "HTTPRoute", "httproutes")...)
-	out = append(out, routeUpstreamsForService(deps, svc, "GRPCRoute", "grpcroutes")...)
+	out = append(out, routeUpstreamsForService(deps, svc, "HTTPRoute")...)
+	out = append(out, routeUpstreamsForService(deps, svc, "GRPCRoute")...)
+	sortHopsByResource(out)
 	return out
 }
 
@@ -540,7 +559,7 @@ func ingressReferencesService(ing *networkingIngress, svcName string) bool {
 	return false
 }
 
-func routeUpstreamsForService(deps Deps, svc *corev1.Service, kind, resourceName string) []Hop {
+func routeUpstreamsForService(deps Deps, svc *corev1.Service, kind string) []Hop {
 	gvr, ok := deps.Discovery.GetGVRWithGroup(kind, "gateway.networking.k8s.io")
 	if !ok {
 		return nil
@@ -643,10 +662,21 @@ func traceIngressEntry(deps Deps, t *Trace) {
 		Config:   ingressConfig(ing),
 	}}
 
-	backends := ingressBackendNames(ing)
+	allBackends := ingressBackendNames(ing)
+	backends := allBackends
 	if len(backends) > maxBackendsTraced {
 		backends = backends[:maxBackendsTraced]
 		t.Truncated = true
+		// Verdict computation only walks the kept backends, so a broken
+		// backend beyond the cap would otherwise leave the trace looking
+		// healthy. The info-severity finding on the entry hop surfaces
+		// the truncation explicitly, matching the Gateway routes-
+		// truncated pattern.
+		hops[0].Findings = append(hops[0].Findings, Finding{
+			Code:     "ingress:backends-truncated",
+			Severity: SeverityInfo,
+			Message:  fmt.Sprintf("Tracing %d of %d backends; remaining backends were skipped to bound the trace response", maxBackendsTraced, len(allBackends)),
+		})
 	}
 	for _, name := range backends {
 		svcRef := ResourceRef{Kind: "Service", Namespace: ing.Namespace, Name: name}
@@ -804,10 +834,16 @@ func traceRouteEntry(deps Deps, t *Trace, kind string) {
 		Config:   routeConfig(route),
 	}}
 
-	backends := routeBackends(route)
+	allBackends := routeBackends(route)
+	backends := allBackends
 	if len(backends) > maxBackendsTraced {
 		backends = backends[:maxBackendsTraced]
 		t.Truncated = true
+		hops[0].Findings = append(hops[0].Findings, Finding{
+			Code:     "route:backends-truncated",
+			Severity: SeverityInfo,
+			Message:  fmt.Sprintf("Tracing %d of %d backends; remaining backends were skipped to bound the trace response", maxBackendsTraced, len(allBackends)),
+		})
 	}
 	for _, b := range backends {
 		svcRef := ResourceRef{Kind: "Service", Namespace: b.Namespace, Name: b.Name}
@@ -988,21 +1024,39 @@ func routeParentGateways(deps Deps, route *unstructured.Unstructured) []Hop {
 			continue
 		}
 		seen[key] = true
-		gw, _ := deps.Dynamic.Get(gvr, ns, name)
+		gw, gwErr := deps.Dynamic.Get(gvr, ns, name)
 		ref := ResourceRef{Group: "gateway.networking.k8s.io", Kind: "Gateway", Namespace: ns, Name: name}
 		findings := hopFindings(deps.Issues, ref)
-		if gw == nil {
+		// Only escalate to "missing-parent" on a confirmed NotFound. The
+		// dynamic cache wraps its own sentinel rather than apimachinery's
+		// StatusError, so check both: apierrors.IsNotFound for the direct
+		// apiserver path, errors.Is(k8score.ErrResourceNotFound) for the
+		// cache-miss path. Any other error (RBAC denial, transient
+		// failure) marks the hop unverifiable instead so the verdict
+		// layer surfaces uncertainty rather than reporting the parent
+		// as missing.
+		meta := map[string]any{}
+		switch {
+		case errors.Is(gwErr, k8score.ErrResourceNotFound), apierrors.IsNotFound(gwErr):
 			findings = append(findings, Finding{
 				Code:     "gateway:missing-parent",
 				Severity: SeverityCritical,
 				Message:  fmt.Sprintf("parentRef points at Gateway %q in namespace %q which does not exist", name, ns),
 				Command:  fmt.Sprintf("kubectl get gateway.gateway.networking.k8s.io -n %s", ns),
 			})
+		case gw == nil && gwErr != nil:
+			// Existence of the Gateway is undetermined. Mark the hop
+			// unverifiable so the verdict reads "can't be verified"
+			// rather than implying a clean state.
+			meta["endpointSource"] = "unknown"
 		}
 		hop := Hop{
 			Resource: ref,
 			Edge:     "Gateway->Route",
 			Findings: findings,
+		}
+		if len(meta) > 0 {
+			hop.Meta = meta
 		}
 		// Config drives probeGateway (listeners + addresses → TCP / TLS).
 		// Omitting it left upstream Gateway hops outside the active layer
@@ -1196,6 +1250,40 @@ func serviceLookupReason(err error, subject ResourceRef) string {
 	return strings.TrimSpace(fmt.Sprintf("lookup failed: %v", err))
 }
 
+
+// sortHopsByResource orders a slice of Hop deterministically while
+// preserving the "external entry first" convention for Service upstream
+// sections (Ingress before Gateway-API routes, then alphabetical within
+// a kind). Upstream collection walks listers whose iteration order is
+// map-backed, so re-runs would otherwise reorder the rendered Upstreams
+// section. Alphabetic Kind ordering would invert the convention
+// (GRPCRoute < HTTPRoute < Ingress), so use explicit precedence.
+func sortHopsByResource(hops []Hop) {
+	sort.Slice(hops, func(i, j int) bool {
+		a, b := hops[i].Resource, hops[j].Resource
+		if a.Kind != b.Kind {
+			return hopKindPrecedence(a.Kind) < hopKindPrecedence(b.Kind)
+		}
+		if a.Namespace != b.Namespace {
+			return a.Namespace < b.Namespace
+		}
+		return a.Name < b.Name
+	})
+}
+
+func hopKindPrecedence(kind string) int {
+	switch kind {
+	case "Ingress":
+		return 0
+	case "HTTPRoute":
+		return 1
+	case "GRPCRoute":
+		return 2
+	case "Gateway":
+		return 3
+	}
+	return 100
+}
 
 // sortRefs orders a slice of ResourceRef by (Kind, Namespace, Name) so the
 // trace's attached-routes / upstream lists are stable across polls — without

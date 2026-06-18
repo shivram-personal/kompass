@@ -700,7 +700,12 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 		Dynamic:   k8s.GetDynamicResourceCache(),
 		Discovery: k8s.GetResourceDiscovery(),
 		Issues:    issues.NewCacheProvider(),
-		Client:    k8s.GetClient(),
+		// Probes call services/proxy + pods/proxy on this client. Use the
+		// per-request impersonated identity (or the SA when auth is disabled)
+		// so the apiserver enforces the caller's RBAC on the proxy verbs.
+		// ClientFromContext returns nil on impersonation failure; the probe
+		// layer treats nil as "skip the apiserver path."
+		Client: k8s.ClientFromContext(ctx),
 	}
 	tr, err := trace.BuildTraceWithOptions(ctx, deps, kind, input.Namespace, input.Name, trace.Options{Probe: input.Probe})
 	if err != nil {

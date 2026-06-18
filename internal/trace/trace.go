@@ -249,7 +249,7 @@ func BuildTraceWithOptions(ctx context.Context, deps Deps, kind, namespace, name
 			Upstreams:  []Hop{},
 			Verdict:    VerdictUnknown,
 			BrokenAt:   -1,
-			Reason:     "cache syncing — initial informer sync has not completed yet",
+			Reason:     "cache syncing - initial informer sync has not completed yet",
 		}, nil
 	}
 
@@ -292,15 +292,120 @@ func BuildTraceWithOptions(ctx context.Context, deps Deps, kind, namespace, name
 	}
 
 	// Probes augment the static verdict, never override it: a successful
-	// probe against a static-broken trace could be an external bystander;
-	// a failed probe against a static-healthy trace could be the vantage
-	// rather than the path. Both belong as informational rows under each
-	// hop. UI decides whether to surface the action button by inspecting
-	// each HopConfig directly.
+	// probe against a statically broken trace could be an external
+	// bystander. A hop whose every non-skipped probe failed is evidence
+	// of a real break on that hop, so fold probe state into the verdict
+	// after probes attach. Escalation only — broken stays broken (a
+	// critical static finding outranks probe state) and unknown stays
+	// unknown (an unverifiable path can't be honestly resolved by probe
+	// outcomes).
 	if opts.Probe {
 		runProbes(ctx, t, opts, deps.Client)
+		t.Verdict, t.BrokenAt = reviseVerdictWithProbes(t)
 	}
 	return t, nil
+}
+
+// reviseVerdictWithProbes folds attached probe outcomes into the verdict.
+// A hop whose every non-skipped probe failed escalates to broken (same
+// weight as a critical static finding); a hop with at least one failed or
+// degraded non-skipped probe escalates to degraded. Broken and unknown
+// verdicts are left alone — a critical static finding outranks probe state,
+// and unknown means we can't honestly read the path either way.
+func reviseVerdictWithProbes(t *Trace) (string, int) {
+	if t.Verdict == VerdictBroken || t.Verdict == VerdictUnknown {
+		return t.Verdict, t.BrokenAt
+	}
+	verdict := t.Verdict
+	brokenAt := t.BrokenAt
+	for i, hop := range t.Downstream {
+		failed, degraded, real := classifyHopProbes(hop)
+		if real == 0 {
+			continue
+		}
+		if failed == real {
+			if brokenAt < 0 {
+				brokenAt = i
+			}
+			verdict = VerdictBroken
+		} else if hopVotesDegraded(failed, degraded, real) && verdict == VerdictHealthy {
+			verdict = VerdictDegraded
+		}
+	}
+	if verdict != VerdictBroken {
+		// Skip-only upstreams (e.g. Route hops that emit only a
+		// "no probe target" skip) carry no evidence either way and
+		// must not vote in the all-broken tally. Count only upstreams
+		// that produced real probe results, and escalate to broken
+		// when at least one real probe set ran AND every real-probe
+		// upstream failed unanimously.
+		realUpstreams := 0
+		allRealUpstreamBroken := true
+		anyUpstreamProbeIssue := false
+		for _, hop := range t.Upstreams {
+			failed, degraded, real := classifyHopProbes(hop)
+			if real == 0 {
+				continue
+			}
+			realUpstreams++
+			if failed != real {
+				allRealUpstreamBroken = false
+			}
+			if hopVotesDegraded(failed, degraded, real) {
+				anyUpstreamProbeIssue = true
+			}
+		}
+		if realUpstreams > 0 && allRealUpstreamBroken {
+			verdict = VerdictBroken
+			if brokenAt < 0 && len(t.Downstream) > 0 {
+				brokenAt = 0
+			}
+		} else if anyUpstreamProbeIssue && verdict == VerdictHealthy {
+			verdict = VerdictDegraded
+		}
+	}
+	return verdict, brokenAt
+}
+
+// hopVotesDegraded decides whether a hop's probe outcomes carry enough
+// evidence to escalate the whole-trace verdict from healthy to degraded.
+// A single failure on one replica of a many-replica hop is usually
+// transient and shouldn't move the whole-path verdict; the per-hop chip
+// still reflects the failure for follow-up. The threshold is
+// "weighted failures >= real count," where each full failure counts as
+// 2 and each degraded-tone response (HTTP 3xx/4xx) counts as 1, so:
+//
+//	1 of 1 failed → escalates (single-probe hop, unambiguous)
+//	1 of 3 failed → no escalation (likely transient)
+//	2 of 3 failed → escalates (majority)
+//	every probe responded with a degraded tone → escalates
+func hopVotesDegraded(failed, degraded, real int) bool {
+	if real == 0 {
+		return false
+	}
+	weighted := 2*failed + degraded
+	return weighted >= real
+}
+
+// classifyHopProbes counts probe outcomes on a single hop, ignoring skipped
+// rows (which are not evidence of failure). Returns (failed, degraded,
+// totalNonSkipped). Tone field is load-bearing: HTTP 3xx/4xx carry
+// tone=degraded with ok:true and would otherwise read as success.
+func classifyHopProbes(hop Hop) (failed, degraded, real int) {
+	for _, p := range hop.Probes {
+		if p.Skipped {
+			continue
+		}
+		real++
+		if !p.OK || p.Tone == probe.ToneUnhealthy {
+			failed++
+			continue
+		}
+		if p.Tone == probe.ToneDegraded {
+			degraded++
+		}
+	}
+	return
 }
 
 // normalizeHopFindings enforces two wire-format invariants before the trace

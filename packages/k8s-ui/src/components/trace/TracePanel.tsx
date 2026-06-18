@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronRight,
-  CircleHelp,
   Copy,
   Check,
   ShieldAlert,
@@ -74,9 +73,12 @@ export function TracePanel({ trace, isLoading, error, onRefresh, probeRequested,
   // Layout is padding-free; the consumer (Diagnose tab or drawer Section)
   // owns the outer spacing so we don't double-pad when nested inside a
   // Radar Section component.
+  const brokenHop = trace.brokenAt >= 0 && trace.brokenAt < downstream.length
+    ? downstream[trace.brokenAt]
+    : undefined
   return (
     <div className="flex flex-col gap-3">
-      <VerdictBanner verdict={trace.verdict} reason={trace.reason} onRefresh={onRefresh} />
+      <VerdictBanner verdict={trace.verdict} reason={trace.reason} brokenHop={brokenHop} onRefresh={onRefresh} />
       {onRunProbes && hasPath && (
         <ReachabilitySection
           feasibility={feasibility}
@@ -127,22 +129,39 @@ const VERDICT_VARIANT: Record<Verdict, 'success' | 'warning' | 'error' | 'info'>
   healthy: 'success',
   degraded: 'warning',
   broken: 'error',
-  unknown: 'info',
+  // Unknown is an investigate state, not an informational one — operators
+  // opening the panel mid-incident need a visual cue that something needs
+  // attention. The warning variant matches that intent.
+  unknown: 'warning',
 }
 
 const VERDICT_ICON: Record<Verdict, React.ComponentType<{ className?: string }>> = {
   healthy: CheckCircle2,
   degraded: AlertTriangle,
   broken: ShieldAlert,
-  unknown: CircleHelp,
+  unknown: AlertTriangle,
 }
 
-function VerdictBanner({ verdict, reason, onRefresh }: { verdict: Verdict; reason?: string; onRefresh?: () => void }) {
+function VerdictBanner({ verdict, reason, brokenHop, onRefresh }: { verdict: Verdict; reason?: string; brokenHop?: Hop; onRefresh?: () => void }) {
+  // When a single hop is the locus of the break/degrade, name it in the
+  // banner title — a generic "Traffic path is degraded" leaves the
+  // operator without a starting point. Synthetic collection hops (Pods,
+  // Routes) carry an empty Resource.Name; skip the rewrite for those
+  // since "Pods is broken" is grammatically off and the row below
+  // already carries the same identity.
+  let title = VERDICT_TITLE[verdict]
+  if (brokenHop && brokenHop.resource.name && (verdict === 'broken' || verdict === 'degraded')) {
+    const ref = brokenHop.resource
+    const label = `${ref.kind} ${ref.name}`
+    title = verdict === 'broken'
+      ? `${label} is broken - traffic can't pass`
+      : `${label} is degraded`
+  }
   return (
     <AlertBanner
       variant={VERDICT_VARIANT[verdict]}
       icon={VERDICT_ICON[verdict]}
-      title={VERDICT_TITLE[verdict]}
+      title={title}
       message={reason}
     >
       {onRefresh && verdict === 'unknown' && (
@@ -438,7 +457,7 @@ function ReachabilitySection({
           ? 'Results shown beneath each hop.'
           : running
             ? 'Running…'
-            : 'Send live requests through the declared path and report what came back.'}
+            : ''}
       </span>
       <button
         type="button"
@@ -706,31 +725,58 @@ function SectionHeader({ title, subtitle, action }: { title: string; subtitle?: 
   )
 }
 
+// sampledFraction reads the "sampled N of M ready pods" skip row that the
+// probe layer emits when the pod sample is truncated below the captured
+// pool, returning (N, M) so the chip can label coverage honestly. The
+// regex anchors on the full "ready pods" suffix so an unrelated skip
+// such as "sampled 1 of 3 listeners" can't feed pod counts into a chip
+// whose tooltip names pods.
+function sampledFraction(probes?: ProbeResult[]): { sampled: number; total: number } | null {
+  for (const p of probes ?? []) {
+    if (!p.skipped || !p.reason) continue
+    const m = /^sampled (\d+) of (\d+) ready pods/.exec(p.reason)
+    if (m) return { sampled: Number(m[1]), total: Number(m[2]) }
+  }
+  return null
+}
+
 function SeverityChip({ severity, count, probes }: { severity: FindingSeverity | ''; count: number; probes?: ProbeResult[] }) {
+  // Probe state is computed first so it can outrank an info-only
+  // static finding: a hop with one info finding AND a failed probe
+  // would otherwise render "1 info" while the probe row below carries
+  // the live failure. Critical and warning static findings still
+  // outrank probe state.
+  const real = probes?.filter(p => !p.skipped) ?? []
+  const probeFailed = real.filter(p => !p.ok || p.tone === 'unhealthy').length
+  const probeDegraded = real.filter(p => p.tone === 'degraded').length
+  const sample = sampledFraction(probes)
   if (count === 0) {
-    // "pass" overclaims when no probe ever ran or every probe was skipped.
-    // Split the chip four ways: a probe-confirmed hop reads "verified" only
-    // when every non-skipped probe was healthy; any unhealthy tone or `ok:
-    // false` row marks "probe failed"; a degraded tone (HTTP 3xx/4xx, which
-    // still set ok: true) marks "probe degraded"; a hop with no live signal
-    // stays "config ok". HTTP's tone field is load-bearing here: ignoring it
-    // and reading only `ok` would show "verified" on top of red error rows.
-    const real = probes?.filter(p => !p.skipped) ?? []
     if (real.length > 0) {
-      const failed = real.filter(p => !p.ok || p.tone === 'unhealthy').length
-      if (failed > 0) {
-        return <Badge severity="warning" size="sm" title={`${failed} of ${real.length} probes failed`}>{failed === real.length ? 'probe failed' : `${failed}/${real.length} probes failed`}</Badge>
+      if (probeFailed > 0) {
+        return <Badge severity="warning" size="sm" title={`${probeFailed} of ${real.length} probes failed`}>{probeFailed === real.length ? 'probe failed' : `${probeFailed}/${real.length} probes failed`}</Badge>
       }
-      const degraded = real.filter(p => p.tone === 'degraded').length
-      if (degraded > 0) {
-        return <Badge severity="warning" size="sm" title={`${degraded} of ${real.length} probes responded with a degraded HTTP status`}>probe degraded</Badge>
+      if (probeDegraded > 0) {
+        return <Badge severity="warning" size="sm" title={`${probeDegraded} of ${real.length} probes responded with a degraded HTTP status`}>probe degraded</Badge>
+      }
+      if (sample && sample.sampled < sample.total) {
+        // "verified" on a 3-of-10 sample overclaims since the 7
+        // unprobed pods could be in any state. The label mirrors the
+        // underlying skip-row text and signals coverage, not failure.
+        return <Badge severity="info" size="sm" title={`Probes passed on ${sample.sampled} of ${sample.total} pods. The other ${sample.total - sample.sampled} were not sampled.`}>sampled ({sample.sampled}/{sample.total})</Badge>
       }
       return <Badge severity="success" size="sm" title="Every probe that ran for this hop succeeded">verified</Badge>
     }
-    return <Badge severity="info" size="sm" title="Static configuration is consistent; no live probe reached this hop">config ok</Badge>
+    return <Badge severity="info" size="sm" title="Static configuration is consistent; no live probe reached this hop">not probed</Badge>
   }
   if (severity === 'critical') return <Badge severity="error" size="sm">{count} critical</Badge>
   if (severity === 'warning') return <Badge severity="warning" size="sm">{count} warning{count > 1 ? 's' : ''}</Badge>
+  // info-only findings: a live probe failure outranks them.
+  if (probeFailed > 0) {
+    return <Badge severity="warning" size="sm" title={`${probeFailed} of ${real.length} probes failed`}>{probeFailed === real.length ? 'probe failed' : `${probeFailed}/${real.length} probes failed`}</Badge>
+  }
+  if (probeDegraded > 0) {
+    return <Badge severity="warning" size="sm" title={`${probeDegraded} of ${real.length} probes responded with a degraded HTTP status`}>probe degraded</Badge>
+  }
   return <Badge severity="info" size="sm">{count} info</Badge>
 }
 
@@ -758,7 +804,7 @@ function PanelMessage({ tone, message, onAction, actionLabel }: { tone: 'muted' 
 function ZeroConfigDisclaimer() {
   return (
     <p className="text-[10px] text-theme-text-tertiary border-t border-theme-border pt-2 mt-1">
-      Built from declared config and live probes. NetworkPolicy enforcement isn't simulated; only the CNI knows for sure.
+      Built from declared config and live probes. NetworkPolicy enforcement isn't tested - a policy could still drop traffic that probes can't see.
     </p>
   )
 }
@@ -815,13 +861,13 @@ function hopMetaSummary(hop: Hop): string | null {
     parts.push(`${selected} selected`)
   }
   if (hop.meta['endpointSource'] === 'unknown') {
-    parts.push('endpoints unknown')
+    parts.push("couldn't read backing pods")
   }
   if (hop.meta['headless'] === true) {
-    parts.push('headless')
+    parts.push('headless (no virtual IP)')
   }
   if (hop.meta['selectorless'] === true) {
-    parts.push('selectorless')
+    parts.push('manually-managed endpoints')
   }
   return parts.length ? parts.join(' · ') : null
 }

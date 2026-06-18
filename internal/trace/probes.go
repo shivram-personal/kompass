@@ -262,8 +262,18 @@ func probeService(ctx context.Context, h *Hop, vantage probe.Vantage, client kub
 			continue
 		}
 		if !dataReachable {
-			skip := probe.Skipped(probe.LayerHTTP, fmt.Sprintf("port %d", p.Port), vantage,
-				"Kubernetes API isn't reachable from here, so the apiserver path can't be tested.")
+			// A nil client here has two distinct causes that the probe
+			// layer can't otherwise distinguish: from laptop vantage
+			// it means no kubeconfig is wired up for proxying; from
+			// in-cluster vantage it means the per-request impersonated
+			// identity could not be constructed (an auth/RBAC failure).
+			// Use vantage to pick the message so the operator
+			// investigates the right layer.
+			reason := "Kubernetes API isn't reachable from here, so the apiserver path can't be tested."
+			if vantage == probe.VantageInCluster {
+				reason = "Apiserver path couldn't be tested for this request - your identity may lack permission to proxy."
+			}
+			skip := probe.Skipped(probe.LayerHTTP, fmt.Sprintf("port %d", p.Port), vantage, reason)
 			skip.Path = probe.PathAPIServer
 			out = append(out, skip)
 		}
@@ -578,10 +588,34 @@ func probeGateway(ctx context.Context, h *Hop, vantage probe.Vantage) []probe.Re
 			tcpRes := probe.TCP(tctx, target, vantage)
 			tcancel()
 			out = append(out, tcpRes)
-			if tcpRes.OK && (strings.EqualFold(l.Protocol, "HTTPS") || strings.EqualFold(l.Protocol, "TLS")) {
+			if !tcpRes.OK {
+				continue
+			}
+			isHTTPS := strings.EqualFold(l.Protocol, "HTTPS")
+			if isHTTPS || strings.EqualFold(l.Protocol, "TLS") {
 				lctx, lcancel := context.WithTimeout(ctx, tlsTimeout)
 				out = append(out, probe.TLS(lctx, target, l.Hostname, vantage))
 				lcancel()
+			}
+			// HTTP-level probe for HTTP/HTTPS listeners — TCP success
+			// alone would let a Gateway whose controller returns 5xx
+			// read as verified at the chip level, while probeIngress
+			// on the same shape surfaces the failure. Dial the
+			// Gateway's programmed address (the IP the TCP probe just
+			// succeeded against) and pass the listener Hostname as the
+			// Host header. Using the hostname in the URL would let
+			// split-horizon DNS resolve to a different IP (e.g. a CDN
+			// in front of the Gateway), masking cluster-side
+			// misconfigurations.
+			if isHTTPS || strings.EqualFold(l.Protocol, "HTTP") {
+				scheme := "http"
+				if isHTTPS {
+					scheme = "https"
+				}
+				hctx, hcancel := context.WithTimeout(ctx, httpTimeout)
+				url := fmt.Sprintf("%s://%s/", scheme, target)
+				out = append(out, probe.HTTP(hctx, url, l.Hostname, vantage))
+				hcancel()
 			}
 		}
 	}

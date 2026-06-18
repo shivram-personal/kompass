@@ -53,7 +53,7 @@ func issueToFinding(iss issues.Issue, ref ResourceRef) Finding {
 	msg := iss.Reason
 	if iss.Message != "" {
 		if msg != "" {
-			msg = msg + " — " + iss.Message
+			msg = msg + " - " + iss.Message
 		} else {
 			msg = iss.Message
 		}
@@ -165,9 +165,14 @@ func selectorReproducer(ref ResourceRef, selector map[string]string) string {
 	if len(selector) == 0 || ref.Namespace == "" {
 		return ""
 	}
-	parts := make([]string, 0, len(selector))
-	for k, v := range selector {
-		parts = append(parts, k+"="+v)
+	keys := make([]string, 0, len(selector))
+	for k := range selector {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+selector[k])
 	}
 	return "kubectl get pods -n " + ref.Namespace + " -l " + strings.Join(parts, ",")
 }

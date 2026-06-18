@@ -520,13 +520,28 @@ export function WorkloadView({
       actionsBarProps={actionsBarProps}
       rendererOverrides={rendererOverrides}
       resolvedEnvFrom={resolvedEnvFrom}
-      renderOverviewExtra={({ kind: k, namespace: ns, name: n, context }) => (
-        <>
-          <AuditSection kind={k} namespace={ns} name={n} />
-          <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
-          {context === 'drawer' && <DiagnoseInlineSection kind={k} namespace={ns} name={n} onNavigate={rest.onNavigateToResource} />}
-        </>
-      )}
+      renderOverviewExtra={({ kind: k, namespace: ns, name: n, context }) => {
+        // Diagnose renders first only for network entry kinds (Service,
+        // Ingress, Route, Gateway) — drawer opens on those kinds are
+        // typically driven by a diagnosis intent, so Diagnose belongs
+        // above Audit/Flux. For other kinds the drawer is opened for
+        // Audit/Flux reasons; Diagnose renders below to preserve the
+        // expected reading order. The kind list matches isDiagnoseKind,
+        // so DiagnoseInlineSection only produces content where it is
+        // applicable.
+        const diagnoseFirst = context === 'drawer' && isDiagnoseKind(k)
+        const diagnose = context === 'drawer' ? (
+          <DiagnoseInlineSection kind={k} namespace={ns} name={n} onNavigate={rest.onNavigateToResource} />
+        ) : null
+        return (
+          <>
+            {diagnoseFirst && diagnose}
+            <AuditSection kind={k} namespace={ns} name={n} />
+            <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
+            {!diagnoseFirst && diagnose}
+          </>
+        )
+      }}
       onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
       resolvedGitOpsOwner={gitopsOwner}
       gitOpsOwnerVerified={gitOpsOwnerVerified}

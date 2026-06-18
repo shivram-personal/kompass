@@ -514,6 +514,208 @@ func TestVerdict_DegradeUnknownOnUnreadablePods(t *testing.T) {
 	}
 }
 
+// TestReviseVerdictWithProbes_HealthyEscalatesOnAllFailed pins that a hop
+// whose every non-skipped probe failed promotes the verdict from healthy to
+// broken — the panel was previously rendering "looks healthy" above red
+// probe-failed rows because verdict was computed before probes attached.
+func TestReviseVerdictWithProbes_HealthyEscalatesOnAllFailed(t *testing.T) {
+	tr := &Trace{
+		Verdict:  VerdictHealthy,
+		BrokenAt: -1,
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service"}},
+			{
+				Resource: ResourceRef{Kind: "Pods"},
+				Probes: []probe.Result{
+					{OK: false, Tone: probe.ToneUnhealthy},
+					{OK: false, Tone: probe.ToneUnhealthy},
+				},
+			},
+		},
+	}
+	v, brokenAt := reviseVerdictWithProbes(tr)
+	if v != VerdictBroken {
+		t.Errorf("reviseVerdictWithProbes(healthy + all-probes-failed) = %q, want %q", v, VerdictBroken)
+	}
+	if brokenAt != 1 {
+		t.Errorf("brokenAt = %d, want 1 (the Pods hop)", brokenAt)
+	}
+}
+
+// TestReviseVerdictWithProbes_PartialFailureDegrades pins that mixed probe
+// results escalate healthy → degraded (not broken) — some replicas reachable
+// means traffic isn't fully dropped.
+func TestReviseVerdictWithProbes_PartialFailureDegrades(t *testing.T) {
+	tr := &Trace{
+		Verdict:  VerdictHealthy,
+		BrokenAt: -1,
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Pods"},
+				Probes: []probe.Result{
+					{OK: true, Tone: probe.ToneHealthy},
+					{OK: false, Tone: probe.ToneUnhealthy},
+				},
+			},
+		},
+	}
+	v, _ := reviseVerdictWithProbes(tr)
+	if v != VerdictDegraded {
+		t.Errorf("reviseVerdictWithProbes(healthy + mixed probes) = %q, want %q", v, VerdictDegraded)
+	}
+}
+
+// TestReviseVerdictWithProbes_SingleTransientDoesNotEscalate pins the
+// per-hop threshold: 1 of 7 failed probes on one hop does NOT escalate
+// the whole-path verdict, since a single failure on a many-replica hop
+// is likely transient. The per-hop chip still reads "probe failed" so
+// the operator can investigate, but the top-of-panel verdict stays
+// healthy.
+func TestReviseVerdictWithProbes_SingleTransientDoesNotEscalate(t *testing.T) {
+	probes := []probe.Result{{OK: false, Tone: probe.ToneUnhealthy}}
+	for i := 0; i < 6; i++ {
+		probes = append(probes, probe.Result{OK: true, Tone: probe.ToneHealthy})
+	}
+	tr := &Trace{
+		Verdict:  VerdictHealthy,
+		BrokenAt: -1,
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service"}},
+			{Resource: ResourceRef{Kind: "Pods"}, Probes: probes},
+		},
+	}
+	v, _ := reviseVerdictWithProbes(tr)
+	if v != VerdictHealthy {
+		t.Errorf("reviseVerdictWithProbes(healthy + 1-of-7 transient failure) = %q, want %q (single failure on many-probe hop should not escalate)", v, VerdictHealthy)
+	}
+}
+
+// TestReviseVerdictWithProbes_MajorityFailureEscalates pins the
+// other side of the threshold: when over half the probes on a hop
+// failed, the whole-path verdict DOES degrade. The threshold catches
+// genuine per-hop failure while still ignoring single transients.
+func TestReviseVerdictWithProbes_MajorityFailureEscalates(t *testing.T) {
+	tr := &Trace{
+		Verdict:  VerdictHealthy,
+		BrokenAt: -1,
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Pods"},
+				Probes: []probe.Result{
+					{OK: false, Tone: probe.ToneUnhealthy},
+					{OK: false, Tone: probe.ToneUnhealthy},
+					{OK: true, Tone: probe.ToneHealthy},
+				},
+			},
+		},
+	}
+	v, _ := reviseVerdictWithProbes(tr)
+	if v != VerdictDegraded {
+		t.Errorf("reviseVerdictWithProbes(healthy + 2-of-3 failure) = %q, want %q (majority failed should escalate)", v, VerdictDegraded)
+	}
+}
+
+// TestReviseVerdictWithProbes_SkipOnlyUpstreamDoesNotPoisonAllBroken
+// pins that an upstream returning only skipped probes (Route hops
+// parented by a Gateway have no directly reachable surface, so they
+// emit a single skip row) does not defeat the all-broken escalation
+// when the one real-probe upstream is fully broken. The revise loop
+// must count only upstreams that produced real probe results toward
+// the all-broken tally.
+func TestReviseVerdictWithProbes_SkipOnlyUpstreamDoesNotPoisonAllBroken(t *testing.T) {
+	tr := &Trace{
+		Verdict:    VerdictHealthy,
+		BrokenAt:   -1,
+		Downstream: []Hop{{Resource: ResourceRef{Kind: "Service", Name: "api"}}},
+		Upstreams: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Ingress", Name: "edge"},
+				Probes:   []probe.Result{{OK: false, Tone: probe.ToneUnhealthy}},
+			},
+			{
+				Resource: ResourceRef{Kind: "HTTPRoute", Name: "r"},
+				Probes:   []probe.Result{{Skipped: true, Reason: "no own routable address"}},
+			},
+		},
+	}
+	v, brokenAt := reviseVerdictWithProbes(tr)
+	if v != VerdictBroken {
+		t.Errorf("reviseVerdictWithProbes(all real upstreams broken + 1 skip-only) = %q, want %q", v, VerdictBroken)
+	}
+	if brokenAt != 0 {
+		t.Errorf("brokenAt = %d, want 0 (anchored on subject row)", brokenAt)
+	}
+}
+
+// TestReviseVerdictWithProbes_DegradedTonePromotesFromHealthy pins that an
+// HTTP 3xx/4xx (tone=degraded, ok:true) is a real signal — it shouldn't
+// leave the verdict reading "healthy" while the chip below says "probe
+// degraded".
+func TestReviseVerdictWithProbes_DegradedTonePromotesFromHealthy(t *testing.T) {
+	tr := &Trace{
+		Verdict:  VerdictHealthy,
+		BrokenAt: -1,
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Service"},
+				Probes:   []probe.Result{{OK: true, Tone: probe.ToneDegraded}},
+			},
+		},
+	}
+	v, _ := reviseVerdictWithProbes(tr)
+	if v != VerdictDegraded {
+		t.Errorf("reviseVerdictWithProbes(healthy + degraded tone) = %q, want %q", v, VerdictDegraded)
+	}
+}
+
+// TestReviseVerdictWithProbes_BrokenStaysBroken pins that a critical static
+// finding outranks any probe outcome — a successful probe against a
+// statically-broken trace could be an external bystander, and downgrading
+// would lose the actionable signal.
+func TestReviseVerdictWithProbes_BrokenStaysBroken(t *testing.T) {
+	tr := &Trace{
+		Verdict:  VerdictBroken,
+		BrokenAt: 0,
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Service"},
+				Findings: []Finding{{Severity: SeverityCritical}},
+				Probes:   []probe.Result{{OK: true, Tone: probe.ToneHealthy}},
+			},
+		},
+	}
+	v, brokenAt := reviseVerdictWithProbes(tr)
+	if v != VerdictBroken {
+		t.Errorf("reviseVerdictWithProbes(broken + ok probe) = %q, want %q", v, VerdictBroken)
+	}
+	if brokenAt != 0 {
+		t.Errorf("brokenAt = %d, want 0 (preserved)", brokenAt)
+	}
+}
+
+// TestReviseVerdictWithProbes_SkippedRowsIgnored pins that probe rows with
+// Skipped: true don't count toward failure tallies — a port that couldn't be
+// reached for a documented reason isn't evidence the path is broken.
+func TestReviseVerdictWithProbes_SkippedRowsIgnored(t *testing.T) {
+	tr := &Trace{
+		Verdict:  VerdictHealthy,
+		BrokenAt: -1,
+		Downstream: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Service"},
+				Probes: []probe.Result{
+					{Skipped: true, Reason: "non-HTTP port"},
+					{Skipped: true, Reason: "sampled 3 of 10 ready pods"},
+				},
+			},
+		},
+	}
+	v, _ := reviseVerdictWithProbes(tr)
+	if v != VerdictHealthy {
+		t.Errorf("reviseVerdictWithProbes(healthy + all-skipped) = %q, want %q (skips are not failure evidence)", v, VerdictHealthy)
+	}
+}
+
 // TestIsEntryKind_CaseInsensitive pins that normalizeKind accepts every
 // casing the apiserver and MCP layer might hand it. REST handlers see
 // whatever the URL carried; MCP normalises via strings.ToLower. Without

@@ -88,7 +88,6 @@ const (
 	ToneHealthy   Tone = "healthy"
 	ToneDegraded  Tone = "degraded"
 	ToneUnhealthy Tone = "unhealthy"
-	ToneUnknown   Tone = "unknown"
 )
 
 // Result is one probe outcome. Skipped is true when the vantage routing
@@ -277,14 +276,9 @@ func ServiceProxy(ctx context.Context, client kubernetes.Interface, namespace, n
 		r.Error = "couldn't reach cluster API"
 		return r
 	}
-	rest := client.CoreV1().RESTClient()
-	if rest == nil {
-		r.Error = "couldn't reach cluster API"
-		return r
-	}
 	portName := fmt.Sprintf("%d", port)
 	start := time.Now()
-	_, err := rest.Get().
+	_, err := client.CoreV1().RESTClient().Get().
 		Namespace(namespace).
 		Resource("services").
 		Name(name + ":" + portName).
@@ -310,14 +304,9 @@ func PodProxy(ctx context.Context, client kubernetes.Interface, namespace, name 
 		r.Error = "couldn't reach cluster API"
 		return r
 	}
-	rest := client.CoreV1().RESTClient()
-	if rest == nil {
-		r.Error = "couldn't reach cluster API"
-		return r
-	}
 	portName := fmt.Sprintf("%d", port)
 	start := time.Now()
-	_, err := rest.Get().
+	_, err := client.CoreV1().RESTClient().Get().
 		Namespace(namespace).
 		Resource("pods").
 		Name(name + ":" + portName).
@@ -375,7 +364,7 @@ func translateAPIError(err error) string {
 		return "Timed out. Port accepted no connection within the probe budget."
 	case strings.Contains(low, "eof"):
 		return "Connection closed before response. Backend likely doesn't speak HTTP/1.1 on this port."
-	case strings.Contains(low, "tls"):
+	case strings.Contains(low, "tls:"), strings.Contains(low, "x509:"):
 		return "TLS handshake failed. Port may require HTTPS or a specific cipher."
 	case strings.Contains(low, "bad request"), strings.Contains(low, "503"), strings.Contains(low, "service unavailable"):
 		return "Kubernetes API rejected the proxy request. Backend may have crashed mid-response."
