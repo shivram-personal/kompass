@@ -26,6 +26,8 @@ import { ToastProvider, showApiError, showApiSuccess } from './components/ui/Toa
 import { setApiBase, setBasename } from './api/config';
 import { NavCustomizationProvider } from './context/NavCustomization';
 import type { NavCustomization } from './context/NavCustomization';
+import { DiagnoseCustomizationProvider } from './context/DiagnoseCustomization';
+import type { RenderDiagnoseAction } from './context/DiagnoseCustomization';
 
 // Declare the shape of mutation meta here — inlined rather than in a
 // separate side-effect-only module so consumers that tree-shake aggressively
@@ -70,6 +72,14 @@ export interface RadarAppProps {
    * See ./context/NavCustomization for the slot shape.
    */
   navSlots?: NavCustomization;
+  /**
+   * Injects a resource-level "Diagnose" action (e.g. a "Diagnose with AI"
+   * button) into every resource detail action bar's right-aligned universal
+   * actions. The host returns the node to render given the resource context.
+   * Standalone Radar omits this and renders no Diagnose button — OSS stays
+   * agent-free. See ./context/DiagnoseCustomization for the render-prop shape.
+   */
+  renderDiagnoseAction?: RenderDiagnoseAction;
   /**
    * Initial route for `router: 'memory'` (ignored for 'browser'). Lets a host
    * deep-link a specific view (e.g. '/topology') without owning the URL bar —
@@ -116,6 +126,7 @@ export function RadarApp({
   router = 'browser',
   queryClient,
   navSlots,
+  renderDiagnoseAction,
   initialPath,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config during render so module-level singletons are set
@@ -136,7 +147,9 @@ export function RadarApp({
       <QueryClientProvider client={client}>
         <ToastProvider>
           <NavCustomizationProvider value={navSlots}>
-            <App />
+            <DiagnoseCustomizationProvider value={renderDiagnoseAction}>
+              <App />
+            </DiagnoseCustomizationProvider>
           </NavCustomizationProvider>
         </ToastProvider>
       </QueryClientProvider>
