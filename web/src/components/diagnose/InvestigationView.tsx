@@ -4,6 +4,7 @@
 // the shell (dock/resize/maximize) lives in DiagnoseSurface, the controller in
 // DiagnoseContext.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Send, AlertTriangle } from "lucide-react";
 import {
   streamDiagnose,
@@ -81,6 +82,24 @@ export function InvestigationView({
 }) {
   const { kind, namespace, name } = target;
   const { close } = useDiagnose();
+  const queryClient = useQueryClient();
+  // After a successful apply, refresh the cluster-state views so the fix shows
+  // in the surrounding UI (Issues, the resource, topology, …) — not just in the
+  // agent's word. Prefix-match invalidation covers the namespace-keyed variants.
+  const refreshClusterState = useCallback(() => {
+    for (const key of [
+      ["issues"],
+      ["dashboard"],
+      ["topology"],
+      ["applications"],
+      ["audit"],
+      ["gitops-insights"],
+      ["gitops-tree"],
+      ["resource", kind, namespace, name],
+    ]) {
+      queryClient.invalidateQueries({ queryKey: key });
+    }
+  }, [queryClient, kind, namespace, name]);
   const [consented, setConsented] = useState(readConsent() || !!seed);
   // Cluster-mismatch guard for Apply. baselineCtx = the kube-context this
   // investigation is ABOUT (a seed's saved ctx, or the live cluster captured
@@ -160,6 +179,9 @@ export function InvestigationView({
                 diagnosis: ev.diagnosis as Diagnosis,
                 status: "done",
               }));
+              // An apply turn just mutated the cluster — refresh the views that
+              // should now reflect it.
+              if (apply) refreshClusterState();
             } else if (ev.type === "error") {
               updateLast((t) => ({
                 ...t,
@@ -171,7 +193,7 @@ export function InvestigationView({
         },
       );
     },
-    [kind, namespace, name],
+    [kind, namespace, name, refreshClusterState],
   );
 
   // Kick off the first turn once consented. startedRef guards against React
@@ -311,6 +333,19 @@ export function InvestigationView({
   const ctxMismatch =
     baselineCtx !== "" && currentCtx !== "" && baselineCtx !== currentCtx;
 
+  // The diagnosis to apply from = the latest turn that produced remediation.
+  // Asking a follow-up (which has no remediation) must NOT strip Apply from the
+  // diagnosis above it — so Apply tracks this turn, not merely the last one.
+  let lastRemediationIdx = -1;
+  turns.forEach((t, i) => {
+    if (
+      t.status === "done" &&
+      !t.apply &&
+      (t.diagnosis?.remediation?.length ?? 0) > 0
+    )
+      lastRemediationIdx = i;
+  });
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
@@ -345,14 +380,9 @@ export function InvestigationView({
               )}
               {turns.map((t, i) => {
                 const isLast = i === turns.length - 1;
-                // Apply (any remediation step) is offered on the latest result,
-                // as long as we're still pointed at the cluster it was about.
-                const canApply =
-                  isLast &&
-                  t.status === "done" &&
-                  !t.apply &&
-                  ctxConfirmed &&
-                  (t.diagnosis?.remediation?.length ?? 0) > 0;
+                // Apply (any remediation step) stays on the diagnosis turn even
+                // after follow-ups, as long as we're still on its cluster.
+                const canApply = i === lastRemediationIdx && ctxConfirmed;
                 // After an apply, offer a one-tap verification follow-up.
                 const canCheck = isLast && t.status === "done" && !!t.apply;
                 return (

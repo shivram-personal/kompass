@@ -91,6 +91,10 @@ export function TurnView({
   onApply?: (fix: string) => void;
   onCheckStatus?: () => void;
 }) {
+  // A follow-up (a turn the user asked a question on) is a conversational reply,
+  // not a fresh diagnosis — render it as a plain answer, never the root-cause
+  // anchor or a remediation card.
+  const followup = !!turn.question && !turn.apply;
   return (
     <div className="space-y-2">
       {turn.question && (
@@ -104,6 +108,7 @@ export function TurnView({
         items={turn.timeline}
         running={turn.status === "running"}
         applyMode={turn.apply}
+        followup={followup}
       />
       {turn.status === "running" && turn.answer && (
         <div className="whitespace-pre-wrap rounded-md border border-theme-border bg-theme-base/50 p-2 text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
@@ -115,6 +120,7 @@ export function TurnView({
           diagnosis={turn.diagnosis}
           onApply={onApply}
           apply={turn.apply}
+          followup={followup}
           onCheckStatus={onCheckStatus}
         />
       )}
@@ -229,9 +235,11 @@ export function ApplyDialog({
         <div className="flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-theme-text-secondary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <span>
-            {agentLabel} will change your cluster using your kubeconfig
-            credentials. For GitOps/Helm-managed resources a direct change may be
-            reverted — the agent will flag that and prefer the managed path.
+            Review the change above before applying. {agentLabel} will change
+            your cluster using your kubeconfig credentials; if you&apos;re not
+            sure, ask a follow-up first. For GitOps/Helm-managed resources a
+            direct change may be reverted — the agent will flag that and prefer
+            the managed path.
           </span>
         </div>
       </div>
@@ -259,16 +267,30 @@ export function Timeline({
   items,
   running,
   applyMode,
+  followup,
 }: {
   items: TimelineItem[];
   running: boolean;
   applyMode?: boolean;
+  followup?: boolean;
 }) {
+  const heading = applyMode
+    ? "Applying fix"
+    : followup
+      ? "Working"
+      : "Investigation";
+  const runningLabel = applyMode
+    ? "Applying the fix…"
+    : items.length > 0
+      ? "Working…"
+      : followup
+        ? "Thinking…"
+        : "Starting investigation…";
   return (
     <div className="space-y-1.5">
       {items.length > 0 && (
         <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-          {applyMode ? "Applying fix" : "Investigation"}
+          {heading}
         </div>
       )}
       {items.map((it, i) =>
@@ -286,11 +308,7 @@ export function Timeline({
       {running && (
         <div className="flex items-center gap-2 pt-1 text-xs text-theme-text-tertiary">
           <Loader2 className="h-3 w-3 animate-spin" />
-          {applyMode
-            ? "Applying the fix…"
-            : items.length === 0
-              ? "Starting investigation…"
-              : "Working…"}
+          {runningLabel}
         </div>
       )}
     </div>
@@ -432,11 +450,13 @@ function ResultCard({
   diagnosis,
   onApply,
   apply,
+  followup,
   onCheckStatus,
 }: {
   diagnosis: Diagnosis;
   onApply?: (fix: string) => void;
   apply?: boolean;
+  followup?: boolean;
   onCheckStatus?: () => void;
 }) {
   // Apply turns report what changed — an outcome, not a diagnosis. Frame as a
@@ -445,7 +465,21 @@ function ResultCard({
     return (
       <ApplyOutcomeCard diagnosis={diagnosis} onCheckStatus={onCheckStatus} />
     );
+  // Follow-ups are conversational replies, not fresh diagnoses — plain answer.
+  if (followup) return <FollowupAnswer diagnosis={diagnosis} />;
 
+  return <DiagnosisResult diagnosis={diagnosis} onApply={onApply} />;
+}
+
+// The diagnosis result: root cause + remediation (any step applyable) + the
+// agent's full analysis on demand.
+function DiagnosisResult({
+  diagnosis,
+  onApply,
+}: {
+  diagnosis: Diagnosis;
+  onApply?: (fix: string) => void;
+}) {
   const [showAnalysis, setShowAnalysis] = useState(false);
   const rootCause = diagnosis.rootCause || diagnosis.report;
   const remediation = diagnosis.remediation || [];
@@ -529,6 +563,10 @@ function ResultCard({
                     </div>
                     <CopyButton text={r} />
                   </div>
+                  {/* Apply lives inside its step so the association is clear.
+                      The ellipsis signals a confirmation dialog follows (it
+                      doesn't apply immediately). Recommended = filled primary;
+                      the rest = accent-outlined buttons, clearly clickable. */}
                   {canApply &&
                     (isRec ? (
                       <button
@@ -536,15 +574,15 @@ function ResultCard({
                         className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg btn-brand py-2 text-sm font-medium"
                       >
                         <Wand2 className="h-4 w-4" />
-                        Apply recommended fix
+                        Apply recommended fix…
                       </button>
                     ) : (
                       <button
                         onClick={() => onApply!(r)}
-                        className="mt-2 inline-flex items-center gap-1 rounded-md border border-theme-border px-2.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                        className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/5 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent/10"
                       >
-                        <Wand2 className="h-3 w-3" />
-                        Apply this step
+                        <Wand2 className="h-3.5 w-3.5" />
+                        Apply…
                       </button>
                     ))}
                 </li>
@@ -580,6 +618,27 @@ function ResultCard({
         <ShieldCheck className="h-3 w-3 shrink-0" />
         <span className="truncate">AI-generated — review before applying</span>
       </div>
+    </div>
+  );
+}
+
+// A follow-up reply: the agent answering a question, not re-diagnosing. Plain
+// neutral block — no root-cause anchor, no remediation/apply.
+function FollowupAnswer({ diagnosis }: { diagnosis: Diagnosis }) {
+  const text = diagnosis.report || diagnosis.rootCause;
+  if (!text) return null;
+  return (
+    <div className="mt-1 rounded-lg border border-theme-border bg-theme-elevated p-3">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
+          <Sparkles className="h-3.5 w-3.5 text-accent" />
+          Answer
+        </div>
+        <CopyButton text={text} />
+      </div>
+      <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_code]:font-normal [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary [&_p:first-child]:mt-0">
+        {text}
+      </AIMarkdown>
     </div>
   );
 }
