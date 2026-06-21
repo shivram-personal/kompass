@@ -37,6 +37,7 @@ import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { UserMenu } from './components/UserMenu'
+import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
@@ -1405,6 +1406,9 @@ function AppInner() {
               <GitHubStarButton />
             </div>
           )}
+
+          {/* AI investigations (self-hides when no agent CLI is present) */}
+          <GlobalDiagnoseButton />
 
           {/* Local terminal */}
           {capabilities.localTerminal && (

@@ -58,6 +58,7 @@ import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
+import { useDiagnoseCustomization } from '../../context/DiagnoseCustomization'
 import { apiVersionToGroup } from '../../utils/navigation'
 
 type TabType = WorkloadTabType
@@ -185,6 +186,8 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
   const uncordonMutation = useUncordonNode()
   const drainMutation = useDrainNode()
 
+  const renderDiagnose = useDiagnoseCustomization()
+
   return {
     canExec,
     canViewLogs,
@@ -197,6 +200,7 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
     renderPortForward: ({ type, namespace: ns, name: n, className }: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => (
       <PortForwardButton type={type} namespace={ns} name={n} className={className} />
     ),
+    renderDiagnose,
     onDelete: (params: any, callbacks?: any) => deleteMutation.mutate(params, { onSuccess: callbacks?.onSuccess }),
     isDeleting: deleteMutation.isPending,
     cascadeDependents: cascadePreview?.dependents,

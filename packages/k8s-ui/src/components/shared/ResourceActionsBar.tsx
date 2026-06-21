@@ -64,6 +64,11 @@ interface ResourceActionsBarProps {
   // Port forward render prop (injected by platform)
   renderPortForward?: (props: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => React.ReactNode
 
+  // Diagnose render prop (injected by an embedding host, e.g. Radar Hub's
+  // "Diagnose with AI" button). Standalone Radar leaves this undefined and
+  // nothing renders — OSS stays agent-free.
+  renderDiagnose?: (ctx: { kind: string; namespace: string; name: string }) => React.ReactNode
+
   // Delete
   onDelete?: (params: { kind: string; group?: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isDeleting?: boolean
@@ -129,6 +134,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
+  renderDiagnose,
   onDelete, isDeleting, cascadeDependents, cascadeLoading,
   onRestart, isRestarting,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
@@ -492,6 +498,14 @@ export function ResourceActionsBar({
       <div className="flex-1" />
 
       {/* Universal actions (right-aligned) */}
+      {renderDiagnose && resource.namespace && resource.name && (
+        renderDiagnose({
+          kind,
+          namespace: resource.namespace,
+          name: resource.name,
+        })
+      )}
+
       {onToggleYaml && (
         <button
           onClick={onToggleYaml}
