@@ -64,6 +64,9 @@ type Diagnosis struct {
 	Confidence  *float64 `json:"confidence"`
 	CostUSD     *float64 `json:"costUsd"`
 	Turns       int      `json:"turns"`
+	// RecommendedFix is the single concrete change the agent recommends — what an
+	// Apply action will do. Lets the UI show it + the user confirm a known action.
+	RecommendedFix string `json:"recommendedFix"`
 	// SessionID is the CLI session this turn ran in — pass it back as
 	// Request.SessionID to continue the conversation.
 	SessionID string `json:"sessionId"`
@@ -109,12 +112,12 @@ var radarWriteTools = []string{
 	"manage_cronjob", "manage_node", "manage_gitops",
 }
 
-const applyPrompt = "Apply the remediation you recommended for this resource now. Use the Radar " +
-	"write tools to make the MINIMAL, targeted change — do not do anything beyond the fix you " +
-	"proposed. If the resource is GitOps-managed (Argo/Flux) or Helm-managed, a direct change will " +
-	"be reverted on the next reconcile — say so and prefer the GitOps/Helm-aware path (or explain " +
-	"what to change in Git) instead of patching live. When done, briefly confirm exactly what you " +
-	"changed (the resource, field, and new value)."
+const applyPrompt = "Apply the single change you stated as recommended_fix — and ONLY that change. " +
+	"Use the Radar write tools to make the minimal patch; do not do anything beyond the recommended " +
+	"fix. If the resource is GitOps-managed (Argo/Flux) or Helm-managed, a direct change will be " +
+	"reverted on the next reconcile — say so and prefer the GitOps/Helm-aware path (or explain what " +
+	"to change in Git) instead of patching live. When done, briefly confirm exactly what you changed " +
+	"(the resource, field, and new value)."
 
 const systemPrompt = "You are a senior Kubernetes SRE investigating an unhealthy resource. " +
 	"Investigate methodically and SHOW YOUR WORK: make several specific, targeted tool calls " +
@@ -271,7 +274,15 @@ func taskPrompt(req Request) string {
 	return fmt.Sprintf(
 		"Investigate the unhealthy %s %s/%s. Find the root cause and propose remediation. "+
 			"Finish your reply with a fenced ```json block: "+
-			`{"root_cause": string, "remediation": [string], "confidence": number 0..1}.`,
+			`{"root_cause": string, "remediation": [string], "recommended_fix": string, "confidence": number 0..1}. `+
+			"recommended_fix is the SINGLE change you most recommend applying — the safest, most "+
+			"targeted of the remediation options, stated as one concrete sentence (resource, field, "+
+			"and new value). It is exactly what an 'Apply' action will perform, so be specific and "+
+			"deterministic; if no safe automatic fix exists, set it to an empty string. "+
+			"In root_cause, recommended_fix, and each remediation string USE GitHub-flavored markdown "+
+			"— wrap field paths, resource/image/configmap names, values, and inline commands in "+
+			"backticks, and put any multi-line command in a fenced bash code block. Each remediation "+
+			"item should be one self-contained, copy-pasteable step.",
 		req.Kind, ns, req.Name)
 }
 

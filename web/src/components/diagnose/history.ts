@@ -19,8 +19,10 @@ export interface SavedTurn {
   rootCause: string;
   report: string;
   remediation: string[];
+  recommendedFix?: string;
   confidence?: number;
   costUsd?: number;
+  apply?: boolean; // an apply turn renders as an outcome, not a root cause
   tools: string[]; // tool names only — never raw results
 }
 
@@ -50,8 +52,12 @@ function trim(entry: HistoryEntry): HistoryEntry {
       remediation: (t.remediation || [])
         .slice(0, MAX_REMEDIATION)
         .map((r) => cap(r, MAX_FIELD)),
+      recommendedFix: t.recommendedFix
+        ? cap(t.recommendedFix, MAX_FIELD)
+        : undefined,
       confidence: t.confidence,
       costUsd: t.costUsd,
+      apply: t.apply,
       tools: (t.tools || []).slice(0, 50),
     })),
   };

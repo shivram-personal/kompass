@@ -20,7 +20,7 @@ function DiagnoseResourceButton({
   if (!d.available) return null;
   return (
     <Tooltip
-      content={`Investigate this resource with ${d.agentLabel}`}
+      content={`Runs ${d.agentLabel} on your machine and sends it this resource's context (spec, events, logs) to find the root cause`}
       position="bottom"
     >
       <button
@@ -39,6 +39,39 @@ export const defaultDiagnoseAction: RenderDiagnoseAction = ({
   namespace,
   name,
 }) => <DiagnoseResourceButton kind={kind} namespace={namespace} name={name} />;
+
+// Compact per-issue "Diagnose" action for the Issues queue — launches an
+// investigation for the issue's subject from where the problem is surfaced.
+// stopPropagation so it doesn't toggle the issue row it lives in.
+export function IssueDiagnoseButton({
+  kind,
+  namespace,
+  name,
+}: {
+  kind: string;
+  namespace: string;
+  name: string;
+}) {
+  const d = useDiagnose();
+  if (!d.available) return null;
+  return (
+    <Tooltip
+      content={`Runs ${d.agentLabel} on your machine and sends it this resource's context to find the root cause`}
+      position="left"
+    >
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          d.openInvestigation({ kind, namespace, name });
+        }}
+        className="flex shrink-0 items-center gap-1 rounded-md border border-theme-border px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+      >
+        <Sparkles className="h-3 w-3 text-accent" />
+        Diagnose
+      </button>
+    </Tooltip>
+  );
+}
 
 // Global top-bar entry into the AI surface (opens its Home / recent
 // investigations). Self-hides when no agent CLI is present.

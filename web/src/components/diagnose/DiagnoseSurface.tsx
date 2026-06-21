@@ -10,7 +10,6 @@ import { Tooltip } from "../ui/Tooltip";
 import { useDiagnose } from "./DiagnoseContext";
 import { InvestigationView } from "./InvestigationView";
 import { RecentList } from "./Home";
-import { SavedReportView } from "./parts";
 
 export function DiagnoseSurface({
   width,
@@ -79,7 +78,10 @@ export function DiagnoseSurface({
     ? { top: chrome.top, left: chrome.left, right: 0, bottom: 0 }
     : { top: 0, right: 0, bottom: 0, width, maxWidth: "100vw" };
 
-  // The detail pane (right side when expanded; the whole body when docked).
+  // The detail pane (right side when expanded; the whole body when docked). A
+  // saved entry reopens as a continuable investigation (seeded with its saved
+  // turns; resumes the agent session on follow-up / apply) rather than a
+  // read-only report.
   const detail =
     d.view === "investigation" && d.target ? (
       <InvestigationView
@@ -89,11 +91,17 @@ export function DiagnoseSurface({
         maximized={maximized}
       />
     ) : d.view === "saved" && d.saved ? (
-      <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
-        <div className="mx-auto max-w-3xl">
-          <SavedReportView entry={d.saved} />
-        </div>
-      </div>
+      <InvestigationView
+        key={d.saved.id}
+        target={{
+          kind: d.saved.kind,
+          namespace: d.saved.namespace,
+          name: d.saved.name,
+        }}
+        agentLabel={d.agentLabel}
+        maximized={maximized}
+        seed={d.saved}
+      />
     ) : (
       <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
         Select an investigation, or open a resource and click Diagnose.
@@ -170,25 +178,37 @@ export function DiagnoseSurface({
         </div>
       </div>
 
-      {/* Body */}
-      {maximized ? (
-        <div className="flex min-h-0 flex-1">
-          <aside className="w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3">
+      {/* Body. The detail wrapper keeps a stable position + key across both
+          layouts so toggling Expand doesn't remount a live InvestigationView
+          (which would discard its transcript and re-run the agent). The aside
+          only appears when expanded; keys keep the detail node identity-stable
+          as it comes and goes. */}
+      <div className="flex min-h-0 flex-1">
+        {maximized && (
+          <aside
+            key="recent"
+            className="w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3"
+          >
             <RecentList
               agentLabel={d.agentLabel}
               selectedId={d.saved?.id}
               onSelect={d.openSaved}
             />
           </aside>
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">{detail}</div>
-        </div>
-      ) : d.view === "home" ? (
-        <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
-          <RecentList agentLabel={d.agentLabel} onSelect={d.openSaved} />
-        </div>
-      ) : (
-        detail
-      )}
+        )}
+        {!maximized && d.view === "home" ? (
+          <div
+            key="main"
+            className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
+          >
+            <RecentList agentLabel={d.agentLabel} onSelect={d.openSaved} />
+          </div>
+        ) : (
+          <div key="main" className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {detail}
+          </div>
+        )}
+      </div>
     </div>,
     document.body,
   );

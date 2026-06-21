@@ -11,12 +11,12 @@ import {
   type DiagnoseStreamEvent,
 } from "../../api/diagnose";
 import { getApiBase, getCredentialsMode } from "../../api/config";
-import { saveEntry } from "./history";
-import { ConfirmDialog } from "../ui/ConfirmDialog";
+import { saveEntry, type HistoryEntry, type SavedTurn } from "./history";
 import { useDiagnose, type Target } from "./DiagnoseContext";
 import {
   ConsentCard,
   TurnView,
+  ApplyDialog,
   appendThinking,
   upsertTool,
   type Turn,
@@ -25,33 +25,74 @@ import {
 
 const CONSENT_KEY = "radar-ai-consent-v1";
 
+// Rebuild a live Turn from a persisted one so a reopened investigation shows its
+// transcript and can be continued. Saved tool entries keep only names (never raw
+// results), so the timeline rows are non-expandable.
+function turnFromSaved(t: SavedTurn, ti: number): Turn {
+  return {
+    question: t.question,
+    timeline: (t.tools || []).map((tool, i) => ({
+      kind: "tool",
+      id: `saved-${ti}-${i}`,
+      tool,
+      status: "done",
+    })),
+    answer: "",
+    diagnosis: {
+      rootCause: t.rootCause,
+      report: t.report,
+      remediation: t.remediation,
+      recommendedFix: t.recommendedFix,
+      confidence: t.confidence,
+      costUsd: t.costUsd,
+    },
+    error: null,
+    status: "done",
+    apply: t.apply,
+  };
+}
+
 export function InvestigationView({
   target,
   agentLabel,
   maximized,
+  seed,
 }: {
   target: Target;
   agentLabel: string;
   maximized: boolean;
+  // A persisted entry to rehydrate: shows its saved turns and resumes the
+  // agent's session (claude --resume) on follow-up / apply, instead of starting
+  // a fresh investigation.
+  seed?: HistoryEntry;
 }) {
   const { kind, namespace, name } = target;
   const { close } = useDiagnose();
   const hasConsent =
     typeof window !== "undefined" && localStorage.getItem(CONSENT_KEY) === "1";
-  const [consented, setConsented] = useState(hasConsent);
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [consented, setConsented] = useState(hasConsent || !!seed);
+  const [turns, setTurns] = useState<Turn[]>(() =>
+    seed ? seed.turns.map(turnFromSaved) : [],
+  );
   const [input, setInput] = useState("");
-  const ctxRef = useRef("");
-  const sessionIdRef = useRef("");
+  const ctxRef = useRef(seed?.ctx || "");
+  const sessionIdRef = useRef(seed?.id || "");
+  // A seeded view shouldn't re-persist (bumping its timestamp) just for being
+  // opened — only once the user actually continues it.
+  const mutatedRef = useRef(!seed);
   const cancelRef = useRef<(() => void) | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  const running = turns[turns.length - 1]?.status === "running";
+  const lastTurn = turns[turns.length - 1];
+  const running = lastTurn?.status === "running";
+  const applying = running && !!lastTurn?.apply;
+  const lastRecommendedFix = lastTurn?.diagnosis?.recommendedFix;
   const updateLast = (fn: (t: Turn) => Turn) =>
     setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));
 
   const runTurn = useCallback(
     (question?: string, apply?: boolean) => {
+      mutatedRef.current = true;
       setTurns((prev) => [
         ...prev,
         {
@@ -61,6 +102,7 @@ export function InvestigationView({
           diagnosis: null,
           error: null,
           status: "running",
+          apply,
         },
       ]);
       cancelRef.current = streamDiagnose(
@@ -142,6 +184,8 @@ export function InvestigationView({
   useEffect(() => {
     const last = turns[turns.length - 1];
     if (!last || last.status === "running" || !sessionIdRef.current) return;
+    // Don't re-save a freshly reopened entry until the user continues it.
+    if (!mutatedRef.current) return;
     saveEntry({
       id: sessionIdRef.current,
       ctx: ctxRef.current,
@@ -155,8 +199,10 @@ export function InvestigationView({
         rootCause: t.diagnosis?.rootCause || "",
         report: t.diagnosis?.report || "",
         remediation: t.diagnosis?.remediation || [],
+        recommendedFix: t.diagnosis?.recommendedFix,
         confidence: t.diagnosis?.confidence,
         costUsd: t.diagnosis?.costUsd,
+        apply: t.apply,
         tools: t.timeline
           .filter(
             (it): it is Extract<TimelineItem, { kind: "tool" }> =>
@@ -211,10 +257,13 @@ export function InvestigationView({
           ) : (
             <div className="space-y-4">
               {turns.map((t, i) => {
+                // Apply is offered only on the latest result that carries a
+                // concrete recommended fix — that's what the one click executes.
                 const canApply =
                   i === turns.length - 1 &&
                   t.status === "done" &&
-                  (t.diagnosis?.remediation?.length ?? 0) > 0;
+                  !t.apply &&
+                  !!t.diagnosis?.recommendedFix?.trim();
                 return (
                   <TurnView
                     key={i}
@@ -228,15 +277,13 @@ export function InvestigationView({
         </div>
       </div>
 
-      <ConfirmDialog
+      <ApplyDialog
         open={confirmApply}
         onClose={() => setConfirmApply(false)}
         onConfirm={runApply}
-        variant="warning"
-        title="Apply the AI's fix?"
-        message={`Let ${agentLabel} apply its recommended remediation to ${kind} ${namespace}/${name}.`}
-        details="The agent will change your cluster using your kubeconfig credentials. Review the remediation steps first. For GitOps/Helm-managed resources a direct change may be reverted — the agent will flag that and prefer the managed path."
-        confirmLabel="Apply fix"
+        agentLabel={agentLabel}
+        resourceLabel={`${kind} ${namespace ? `${namespace}/` : ""}${name}`}
+        recommendedFix={lastRecommendedFix}
       />
 
       {consented && (
@@ -248,7 +295,7 @@ export function InvestigationView({
               onClick={stop}
               className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
             >
-              Stop investigation
+              {applying ? "Stop applying" : "Stop investigation"}
             </button>
           ) : (
             <div className="flex items-end gap-2">
