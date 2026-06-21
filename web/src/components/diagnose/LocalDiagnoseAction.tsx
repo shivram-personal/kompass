@@ -1,5 +1,6 @@
 import { Sparkles } from "lucide-react";
 import { useDiagnose } from "./DiagnoseContext";
+import { Tooltip } from "../ui/Tooltip";
 import type { RenderDiagnoseAction } from "../../context/DiagnoseCustomization";
 
 // The per-resource "Diagnose with AI" button. It no longer owns a panel — it
@@ -18,14 +19,18 @@ function DiagnoseResourceButton({
   const d = useDiagnose();
   if (!d.available) return null;
   return (
-    <button
-      onClick={() => d.openInvestigation({ kind, namespace, name })}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-theme-border px-2.5 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-      title="Investigate this resource with a local AI agent"
+    <Tooltip
+      content={`Investigate this resource with ${d.agentLabel}`}
+      position="bottom"
     >
-      <Sparkles className="h-3.5 w-3.5 text-accent" />
-      Diagnose with AI
-    </button>
+      <button
+        onClick={() => d.openInvestigation({ kind, namespace, name })}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-theme-border px-2.5 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+      >
+        <Sparkles className="h-3.5 w-3.5 text-accent" />
+        Diagnose
+      </button>
+    </Tooltip>
   );
 }
 
@@ -41,13 +46,14 @@ export function GlobalDiagnoseButton() {
   const d = useDiagnose();
   if (!d.available) return null;
   return (
-    <button
-      onClick={d.openHome}
-      className="rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
-      title="AI investigations"
-      aria-label="AI investigations"
-    >
-      <Sparkles className="h-4 w-4 text-accent" />
-    </button>
+    <Tooltip content="AI investigations" position="bottom">
+      <button
+        onClick={d.openHome}
+        className="rounded-md bg-theme-elevated p-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+        aria-label="AI investigations"
+      >
+        <Sparkles className="h-4 w-4 text-accent" />
+      </button>
+    </Tooltip>
   );
 }

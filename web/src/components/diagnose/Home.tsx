@@ -1,6 +1,6 @@
-// Home view of the AI surface: the list of recent investigations. This is where
-// history lives (not a clock icon in a per-resource drawer). Click one → its
-// saved report. Cloud swaps loadHistory/clearHistory for a server-backed source.
+// The recent-investigations list — history's home. Used both as the docked
+// surface's Home view and as the master pane of the maximized workspace.
+// Cloud swaps loadHistory/clearHistory for a server-backed source.
 import { useState } from "react";
 import { Sparkles, Trash2 } from "lucide-react";
 import {
@@ -16,12 +16,14 @@ function oneLiner(e: HistoryEntry): string {
   return rc.length > 120 ? rc.slice(0, 120) + "…" : rc;
 }
 
-export function Home({
+export function RecentList({
   agentLabel,
-  onOpenSaved,
+  onSelect,
+  selectedId,
 }: {
   agentLabel: string;
-  onOpenSaved: (e: HistoryEntry) => void;
+  onSelect: (e: HistoryEntry) => void;
+  selectedId?: string;
 }) {
   const [list, setList] = useState<HistoryEntry[]>(() => loadHistory());
   const now = Date.now();
@@ -36,7 +38,7 @@ export function Home({
         <p className="mt-1 max-w-xs text-sm text-theme-text-tertiary">
           Open a resource and click{" "}
           <span className="font-medium text-theme-text-secondary">
-            Diagnose with AI
+            Diagnose
           </span>{" "}
           to investigate it with {agentLabel}. Past investigations show up here.
         </p>
@@ -52,8 +54,12 @@ export function Home({
       {list.map((e) => (
         <button
           key={e.id}
-          onClick={() => onOpenSaved(e)}
-          className="flex w-full flex-col gap-0.5 rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2 text-left hover:bg-theme-hover"
+          onClick={() => onSelect(e)}
+          className={`flex w-full flex-col gap-0.5 rounded-md border px-2.5 py-2 text-left ${
+            e.id === selectedId
+              ? "border-accent/50 bg-accent/10"
+              : "border-theme-border/60 bg-theme-base/40 hover:bg-theme-hover"
+          }`}
         >
           <div className="flex items-center gap-2">
             <span

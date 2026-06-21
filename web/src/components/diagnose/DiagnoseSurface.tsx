@@ -1,11 +1,15 @@
-// The right-docked shell of the AI surface: resize / maximize / close, a
-// back-to-home affordance, and the three views (Home · Investigation · Saved).
-// Stateless re: what to show — it reads the controller (DiagnoseContext).
+// The right-docked shell of the AI surface. Two layouts:
+//  - docked: a single-pane right column (app reflows left via the provider's push)
+//  - expanded: a master-detail workspace that fills ONLY the content area (does
+//    not cover the left nav rail or top bar) — recent list on the left, the
+//    selected investigation/report on the right.
+import { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Sparkles, X, Maximize2, Minimize2, ArrowLeft } from "lucide-react";
+import { Sparkles, X, Maximize2, Minimize2, ChevronLeft } from "lucide-react";
+import { Tooltip } from "../ui/Tooltip";
 import { useDiagnose } from "./DiagnoseContext";
 import { InvestigationView } from "./InvestigationView";
-import { Home } from "./Home";
+import { RecentList } from "./Home";
 import { SavedReportView } from "./parts";
 
 export function DiagnoseSurface({
@@ -28,6 +32,23 @@ export function DiagnoseSurface({
   widthKey: string;
 }) {
   const d = useDiagnose();
+  // When expanded, fill the content area only — measure the top bar + nav rail
+  // so we don't cover the app chrome.
+  const [chrome, setChrome] = useState({ top: 0, left: 0 });
+  useLayoutEffect(() => {
+    if (!maximized) return;
+    const measure = () => {
+      const h = document.querySelector("header");
+      const nav = document.querySelector('[aria-label="Primary navigation"]');
+      setChrome({
+        top: h ? Math.round(h.getBoundingClientRect().bottom) : 0,
+        left: nav ? Math.round(nav.getBoundingClientRect().right) : 0,
+      });
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [maximized]);
 
   const startResize = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -47,26 +68,47 @@ export function DiagnoseSurface({
     document.addEventListener("mouseup", onUp);
   };
 
-  const effWidth = maximized ? "100vw" : narrow ? "min(440px, 92vw)" : width;
+  const detailTitle =
+    d.view === "saved" && d.saved
+      ? `${d.saved.kind} ${d.saved.namespace}/${d.saved.name}`
+      : d.view === "investigation" && d.target
+        ? `${d.target.kind} ${d.target.namespace}/${d.target.name}`
+        : "AI investigations";
 
-  const title =
-    d.view === "home"
-      ? "AI investigations"
-      : d.view === "saved" && d.saved
-        ? `${d.saved.kind} ${d.saved.namespace}/${d.saved.name}`
-        : d.target
-          ? `${d.target.kind} ${d.target.namespace}/${d.target.name}`
-          : "Investigation";
-  const subtitle = d.view === "home" ? `via ${d.agentLabel}` : d.agentLabel;
+  const positionStyle: React.CSSProperties = maximized
+    ? { top: chrome.top, left: chrome.left, right: 0, bottom: 0 }
+    : { top: 0, right: 0, bottom: 0, width, maxWidth: "100vw" };
+
+  // The detail pane (right side when expanded; the whole body when docked).
+  const detail =
+    d.view === "investigation" && d.target ? (
+      <InvestigationView
+        key={`${d.target.kind}/${d.target.namespace}/${d.target.name}`}
+        target={d.target}
+        agentLabel={d.agentLabel}
+        maximized={maximized}
+      />
+    ) : d.view === "saved" && d.saved ? (
+      <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
+        <div className="mx-auto max-w-3xl">
+          <SavedReportView entry={d.saved} />
+        </div>
+      </div>
+    ) : (
+      <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
+        Select an investigation, or open a resource and click Diagnose.
+      </div>
+    );
+
+  const showBreadcrumb = !maximized && d.view !== "home";
 
   return createPortal(
     <div
       role="dialog"
       aria-label="AI investigations"
-      className="fixed bottom-0 right-0 top-0 z-50 flex flex-col border-l border-theme-border bg-theme-surface shadow-2xl"
+      className="fixed z-50 flex flex-col border-l border-theme-border bg-theme-surface shadow-2xl"
       style={{
-        width: effWidth,
-        maxWidth: "100vw",
+        ...positionStyle,
         animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",
       }}
     >
@@ -79,71 +121,73 @@ export function DiagnoseSurface({
       )}
 
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-theme-border px-3 py-3">
+      <div className="flex items-center justify-between border-b border-theme-border px-4 py-2.5">
         <div className="flex min-w-0 items-center gap-2">
-          {d.view === "home" ? (
-            <Sparkles className="ml-1 h-4 w-4 shrink-0 text-accent" />
-          ) : (
-            <button
-              onClick={d.goHome}
-              className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-              aria-label="Back to investigations"
-              title="Back to investigations"
-            >
-              <ArrowLeft className="h-4 w-4" />
-            </button>
+          {!showBreadcrumb && (
+            <Sparkles className="h-4 w-4 shrink-0 text-accent" />
           )}
           <div className="min-w-0">
+            {showBreadcrumb && (
+              <button
+                onClick={d.goHome}
+                className="-ml-1 mb-0.5 flex items-center gap-0.5 rounded px-1 text-[11px] text-theme-text-tertiary hover:text-theme-text-primary"
+              >
+                <ChevronLeft className="h-3 w-3" />
+                Investigations
+              </button>
+            )}
             <div className="truncate text-sm font-medium text-theme-text-primary">
-              {title}
+              {detailTitle}
             </div>
             <div className="truncate text-xs text-theme-text-tertiary">
-              {subtitle}
+              {d.view === "home" ? `via ${d.agentLabel}` : d.agentLabel}
             </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
-          <button
-            onClick={() => setMaximized((v) => !v)}
-            className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-            aria-label={maximized ? "Restore" : "Expand"}
-            title={maximized ? "Restore" : "Expand"}
-          >
-            {maximized ? (
-              <Minimize2 className="h-4 w-4" />
-            ) : (
-              <Maximize2 className="h-4 w-4" />
-            )}
-          </button>
-          <button
-            onClick={d.close}
-            className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-            aria-label="Close"
-            title="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
+            <button
+              onClick={() => setMaximized((v) => !v)}
+              className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+              aria-label={maximized ? "Restore" : "Expand"}
+            >
+              {maximized ? (
+                <Minimize2 className="h-4 w-4" />
+              ) : (
+                <Maximize2 className="h-4 w-4" />
+              )}
+            </button>
+          </Tooltip>
+          <Tooltip content="Close" position="bottom">
+            <button
+              onClick={d.close}
+              className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
       {/* Body */}
-      {d.view === "investigation" && d.target ? (
-        <InvestigationView
-          key={`${d.target.kind}/${d.target.namespace}/${d.target.name}`}
-          target={d.target}
-          agentLabel={d.agentLabel}
-          maximized={maximized}
-        />
-      ) : (
-        <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
-          <div className={maximized ? "mx-auto max-w-3xl" : ""}>
-            {d.view === "home" ? (
-              <Home agentLabel={d.agentLabel} onOpenSaved={d.openSaved} />
-            ) : d.saved ? (
-              <SavedReportView entry={d.saved} />
-            ) : null}
-          </div>
+      {maximized ? (
+        <div className="flex min-h-0 flex-1">
+          <aside className="w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3">
+            <RecentList
+              agentLabel={d.agentLabel}
+              selectedId={d.saved?.id}
+              onSelect={d.openSaved}
+            />
+          </aside>
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">{detail}</div>
         </div>
+      ) : d.view === "home" ? (
+        <div className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3">
+          <RecentList agentLabel={d.agentLabel} onSelect={d.openSaved} />
+        </div>
+      ) : (
+        detail
       )}
     </div>,
     document.body,
