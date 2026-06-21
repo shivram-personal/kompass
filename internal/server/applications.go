@@ -218,7 +218,7 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	rows := groupApplications(wls)
 	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
 	appSetByKey := appSetFanouts(appSetChildren)
-	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache))
+	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache), fluxKustomizationFacts(ctx, cache))
 	claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 	applicationsCacheMu.Lock()
 	if len(applicationsCache) >= applicationsCacheMaxEntries {

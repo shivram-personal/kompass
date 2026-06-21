@@ -244,13 +244,14 @@ func pathStemEnv(path string) (stem, env string) {
 
 // identityCandidate is one row's chosen env-instance reading, post-qualification.
 type identityCandidate struct {
-	row      *appRow
-	stem     string
-	env      string // canonical display token
-	pathStem string // F1 declared stem ("" when none)
-	labelEnv string // explicit env label ("" when none)
-	repos    map[string]bool
-	prio     int
+	row        *appRow
+	stem       string
+	env        string // canonical display token
+	pathStem   string // F1 declared stem ("" when none)
+	pathSource string // SourceArgoPath | SourceFluxSource for the declared path stem
+	labelEnv   string // explicit env label ("" when none)
+	repos      map[string]bool
+	prio       int
 	// adopted: this member's env token never qualified on its own — it joins
 	// only because the stem-group's CORE proved itself (≥2 qualified envs),
 	// and it never counts toward that proof. Single-token namespaces only;
@@ -262,16 +263,17 @@ type identityCandidate struct {
 // Two phases: discover which tokens are envs from the cluster's structure,
 // then form app groups using only qualified tokens. argoSourcePaths maps an
 // in-cluster Argo Application name → its source path.
-func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appSetByKey map[string]appSetFanout, nsEnvLabels map[string]string) {
+func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appSetByKey map[string]appSetFanout, nsEnvLabels map[string]string, fluxPaths map[string]string) {
 	type rowInfo struct {
-		row       *appRow
-		readings  []reading
-		repos     map[string]bool
-		pathStem  string
-		pathEnv   string
-		labelEnv  string // explicit env label (workload, else namespace)
-		nameLabel string // app.kubernetes.io/name, when the row's workloads agree
-		appAnno   string // app.skyhook.io/app explicit declaration, when workloads agree
+		row        *appRow
+		readings   []reading
+		repos      map[string]bool
+		pathStem   string
+		pathEnv    string
+		pathSource string // SourceArgoPath | SourceFluxSource for the declared path stem
+		labelEnv   string // explicit env label (workload, else namespace)
+		nameLabel  string // app.kubernetes.io/name, when the row's workloads agree
+		appAnno    string // app.skyhook.io/app explicit declaration, when workloads agree
 	}
 	infos := make([]rowInfo, 0, len(rows))
 	clusterNamespaces := map[string]bool{}
@@ -336,7 +338,16 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appS
 			for _, key := range argoSourcePathKeys(r.Key) {
 				if p, ok := argoSourcePaths[key]; ok {
 					if ps, pe := pathStemEnv(p); ps != "" {
-						info.pathStem, info.pathEnv = ps, pe
+						info.pathStem, info.pathEnv, info.pathSource = ps, pe, SourceArgoPath
+					}
+					break
+				}
+			}
+		} else if r.Tier == 2 { // Flux Kustomization — its source path is a declared origin, like Argo's.
+			for _, key := range argoSourcePathKeys(r.Key) {
+				if p, ok := fluxPaths[key]; ok {
+					if ps, pe := pathStemEnv(p); ps != "" {
+						info.pathStem, info.pathEnv, info.pathSource = ps, pe, SourceFluxSource
 					}
 					break
 				}
@@ -503,7 +514,7 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appS
 			}
 			continue
 		}
-		c := &identityCandidate{row: info.row, repos: info.repos, pathStem: info.pathStem, labelEnv: info.labelEnv}
+		c := &identityCandidate{row: info.row, repos: info.repos, pathStem: info.pathStem, pathSource: info.pathSource, labelEnv: info.labelEnv}
 		if chosen != nil {
 			c.stem = chosen.stem
 			c.env = canonicalEnvToken(chosen.token)
@@ -565,8 +576,12 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appS
 			case c.pathStem != "":
 				conf = "high"
 				portable = true
-				source = SourceArgoPath
-				why = "Argo CD source path " + c.pathStem + " (env overlay " + c.env + ")"
+				source = c.pathSource
+				origin := "Argo CD source path"
+				if c.pathSource == SourceFluxSource {
+					origin = "Flux source path"
+				}
+				why = origin + " " + c.pathStem + " (env overlay " + c.env + ")"
 			case c.labelEnv != "":
 				why = fmt.Sprintf("environment label %q + name/repo evidence", c.labelEnv)
 			case c.prio >= 2:
@@ -769,6 +784,49 @@ func argoSourcePathKeys(rowKey string) []string {
 		return []string{name}
 	}
 	return []string{ns + "/" + name, name}
+}
+
+// fluxKustomizationFacts maps each Flux Kustomization to its env-bearing source
+// path — the flux-source identity feed, mirroring the Argo source-path map. A
+// Kustomization's spec.path is a declared origin just like an Argo Application's.
+// Namespaced key always emitted; bare-name fallback only when unambiguous.
+func fluxKustomizationFacts(ctx context.Context, cache resourceLister) map[string]string {
+	out := map[string]string{}
+	byName := map[string]string{}
+	ambiguous := map[string]bool{}
+	items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io")
+	if err != nil {
+		return out
+	}
+	for _, item := range items {
+		spec, _ := item.Object["spec"].(map[string]any)
+		if spec == nil {
+			continue
+		}
+		p, _ := spec["path"].(string)
+		if p == "" {
+			continue
+		}
+		if stem, _ := pathStemEnv(p); stem == "" {
+			continue
+		}
+		name := item.GetName()
+		nsKey := name
+		if ns := item.GetNamespace(); ns != "" {
+			nsKey = ns + "/" + name
+		}
+		out[nsKey] = p
+		if prev, exists := byName[name]; exists && prev != p {
+			delete(byName, name)
+			ambiguous[name] = true
+		} else if !ambiguous[name] {
+			byName[name] = p
+		}
+	}
+	for name, path := range byName {
+		out[name] = path
+	}
+	return out
 }
 
 // nameSegments splits a resource name on - and _ into its tokens.
