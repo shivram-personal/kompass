@@ -128,10 +128,18 @@ func New(cfg Config) *Server {
 
 	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
 	// subscription). nil when none is found — the feature stays disabled.
-	if bin := ai.ResolveCLI(); bin != "" {
-		if d, err := ai.New(bin); err == nil {
-			s.aiDiagnoser = d
-			log.Printf("[ai] diagnose enabled (agent CLI: %s)", bin)
+	//
+	// Gated to no-auth (local/standalone) Radar: the engine drives the CLI
+	// against this server's OWN localhost /mcp with no credentials, which only
+	// works when /mcp is unauthenticated. Under proxy/OIDC auth (team / cloud
+	// deployments) the MCP requires identity headers the local CLI can't supply,
+	// and AI diagnosis is the embedding host's job (e.g. Radar Hub) anyway.
+	if !s.authConfig.Enabled() {
+		if bin := ai.ResolveCLI(); bin != "" {
+			if d, err := ai.New(bin); err == nil {
+				s.aiDiagnoser = d
+				log.Printf("[ai] diagnose enabled (agent CLI: %s)", bin)
+			}
 		}
 	}
 
