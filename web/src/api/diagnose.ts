@@ -38,12 +38,38 @@ export interface Diagnosis {
 }
 
 export interface DiagnoseStreamEvent {
-  type: "phase" | "step" | "token" | "thinking" | "done" | "error";
+  type:
+    | "turn"
+    | "phase"
+    | "step"
+    | "token"
+    | "thinking"
+    | "done"
+    | "error"
+    | "closed";
   phase?: string;
   step?: DiagnoseStep;
   token?: string;
   diagnosis?: Diagnosis;
   error?: string;
+  question?: string; // on "turn"
+  apply?: boolean; // on "turn"
+}
+
+// A run is a durable, server-owned investigation. Its lifetime is independent of
+// any browser tab — it survives panel close / navigation / refresh while the radar
+// server runs.
+export interface RunSummary {
+  id: string;
+  kind: string;
+  namespace: string;
+  name: string;
+  context: string;
+  status: "running" | "done" | "error" | "stopped" | "stale";
+  sessionId?: string;
+  preview?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export async function fetchAgents(
@@ -57,81 +83,130 @@ export async function fetchAgents(
   return res.json();
 }
 
-export interface DiagnoseHandlers {
+async function errorText(res: Response): Promise<string> {
+  try {
+    const d = await res.json();
+    if (d && typeof d.error === "string") return d.error;
+  } catch {
+    /* ignore */
+  }
+  return `request failed (${res.status})`;
+}
+
+// DiagnoseError carries the HTTP status so callers can special-case (e.g. 409 cap).
+export class DiagnoseError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const RUNS = () => `${getApiBase()}/diagnose/runs`;
+
+// createRun starts a server-side investigation (or focuses a live one for the same
+// target) and returns its run summary.
+export async function createRun(target: {
+  kind: string;
+  namespace: string;
+  name: string;
+}): Promise<RunSummary> {
+  const res = await fetch(RUNS(), {
+    method: "POST",
+    credentials: getCredentialsMode(),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(target),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  return res.json();
+}
+
+// listRuns returns all server-side runs (newest first) — the source of truth for
+// the recent-investigations list.
+export async function listRuns(signal?: AbortSignal): Promise<RunSummary[]> {
+  const res = await fetch(RUNS(), {
+    credentials: getCredentialsMode(),
+    signal,
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+  const d = await res.json();
+  return d.runs ?? [];
+}
+
+// addTurn appends a follow-up (question) or an apply turn (apply + confirmed fix).
+export async function addTurn(
+  id: string,
+  body: { question?: string; apply?: boolean; fix?: string },
+): Promise<void> {
+  const res = await fetch(`${RUNS()}/${id}/turns`, {
+    method: "POST",
+    credentials: getCredentialsMode(),
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
+}
+
+// stopRun cancels a run's in-flight agent.
+export async function stopRun(id: string): Promise<void> {
+  await fetch(`${RUNS()}/${id}/stop`, {
+    method: "POST",
+    credentials: getCredentialsMode(),
+  }).catch(() => {});
+}
+
+export interface SubscribeHandlers {
   onEvent: (ev: DiagnoseStreamEvent) => void;
-  onClose?: () => void;
+  onClosed?: () => void; // the run can no longer produce events (stale/evicted)
 }
 
 /**
- * Starts a streaming investigation. Returns a cancel function that closes the
- * SSE connection (which aborts the request — the server kills the agent's
- * process group on disconnect).
+ * Subscribes to a run's event stream: the server replays everything (so a fresh
+ * tab reconstructs the whole transcript) then streams live. Closing this only
+ * unsubscribes — the run keeps running server-side. The EventSource auto-reconnects
+ * on transient errors (resuming via Last-Event-ID); a "closed" event means the run
+ * is gone, so we stop for good.
  */
-export function streamDiagnose(
-  params: {
-    kind: string;
-    namespace: string;
-    name: string;
-    sessionId?: string; // resume a prior session (multi-turn follow-up)
-    question?: string; // the follow-up question (absent on the first turn)
-    apply?: boolean; // user-confirmed remediation turn (enables write tools)
-    fix?: string; // the exact recommended-fix text the user confirmed (apply turns)
-  },
-  handlers: DiagnoseHandlers,
+export function subscribeRun(
+  id: string,
+  handlers: SubscribeHandlers,
 ): () => void {
-  const q = new URLSearchParams({
-    kind: params.kind,
-    namespace: params.namespace,
-    name: params.name,
-  });
-  if (params.sessionId) q.set("session", params.sessionId);
-  if (params.question) q.set("q", params.question);
-  if (params.apply) q.set("apply", "1");
-  if (params.apply && params.fix) q.set("fix", params.fix);
-  const url = `${getApiBase()}/diagnose/stream?${q.toString()}`;
-  const es = new EventSource(url, {
+  const es = new EventSource(`${RUNS()}/${id}/stream`, {
     withCredentials: getCredentialsMode() === "include",
   });
-
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
     es.close();
-    handlers.onClose?.();
   };
-
-  const dispatch = (type: DiagnoseStreamEvent["type"]) => (e: MessageEvent) => {
+  const dispatch = (e: MessageEvent) => {
     let ev: DiagnoseStreamEvent;
     try {
       ev = JSON.parse(e.data);
     } catch {
       return;
     }
+    if (ev.type === "closed") {
+      close();
+      handlers.onClosed?.();
+      return;
+    }
     handlers.onEvent(ev);
-    if (type === "done" || type === "error") close();
   };
-
   for (const t of [
+    "turn",
     "phase",
     "step",
     "token",
     "thinking",
     "done",
     "error",
+    "closed",
   ] as const) {
-    es.addEventListener(t, dispatch(t));
+    es.addEventListener(t, dispatch);
   }
-  // A transport error after we've started: surface once, then stop (EventSource
-  // would otherwise auto-reconnect and restart the whole investigation).
-  es.onerror = () => {
-    if (closed) return;
-    handlers.onEvent({
-      type: "error",
-      error: "Connection to the investigation stream was lost.",
-    });
-    close();
-  };
-
+  // Transient transport errors: let EventSource auto-reconnect (it resends
+  // Last-Event-ID, so the server replays only what we missed). No teardown here.
   return close;
 }

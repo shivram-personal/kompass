@@ -1,18 +1,19 @@
 // The single controller for the AI assistant surface. One instance app-wide:
 // the per-resource "Diagnose" button and the global top-bar entry both dispatch
-// here. Owns open/view/target state + the push-content layout (reserves a right
-// column so the cluster UI reflows instead of being covered; overlay fallback on
-// narrow viewports). Mounts exactly one <DiagnoseSurface/>.
+// here. Investigations are durable, server-side jobs (see internal/ai RunManager);
+// this provider lists them, tracks which one is focused, and owns the push-content
+// layout. The run lifetime is the server's, so closing/navigating never kills one.
 import {
   createContext,
   useCallback,
   useContext,
   useEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
-import { fetchAgents } from "../../api/diagnose";
-import { type HistoryEntry } from "./history";
+import { fetchAgents, listRuns, createRun, DiagnoseError } from "../../api/diagnose";
+import { type RunSummary } from "../../api/diagnose";
 import { DiagnoseSurface } from "./DiagnoseSurface";
 
 export interface Target {
@@ -20,20 +21,26 @@ export interface Target {
   namespace: string;
   name: string;
 }
-export type DiagnoseView = "home" | "investigation" | "saved";
+export type DiagnoseView = "home" | "investigation";
 
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
   agentLabel: string; // e.g. "Claude Code"
   open: boolean;
   view: DiagnoseView;
-  target: Target | null;
-  saved: HistoryEntry | null;
+  activeRunId: string | null;
+  runs: RunSummary[];
+  needsConsent: boolean; // a start is pending the one-time consent
+  startError: string | null;
   openInvestigation: (t: Target) => void;
+  openRun: (id: string) => void;
   openHome: () => void;
-  openSaved: (e: HistoryEntry) => void;
   goHome: () => void;
   close: () => void;
+  approveConsent: () => void;
+  cancelConsent: () => void;
+  refreshRuns: () => void;
+  dismissError: () => void;
 }
 
 const Ctx = createContext<DiagnoseCtx | null>(null);
@@ -47,6 +54,7 @@ export function useDiagnose(): DiagnoseCtx {
 const MIN_W = 400;
 const MAX_W = 1100;
 const WIDTH_KEY = "radar-ai-panel-width";
+const CONSENT_KEY = "radar-ai-consent-v1";
 const PUSH_MIN_VIEWPORT = 1024; // below this, overlay instead of pushing
 
 const AGENT_LABELS: Record<string, string> = {
@@ -56,16 +64,26 @@ const AGENT_LABELS: Record<string, string> = {
   "cursor-agent": "Cursor Agent",
 };
 
+// localStorage can throw (private mode); never let it crash the always-mounted provider.
+function readConsent(): boolean {
+  try {
+    return localStorage.getItem(CONSENT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
   const [agentLabel, setAgentLabel] = useState("your AI agent");
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<DiagnoseView>("home");
-  const [target, setTarget] = useState<Target | null>(null);
-  const [saved, setSaved] = useState<HistoryEntry | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [runs, setRuns] = useState<RunSummary[]>([]);
+  const [consented, setConsented] = useState(readConsent());
+  const [pendingTarget, setPendingTarget] = useState<Target | null>(null);
+  const [startError, setStartError] = useState<string | null>(null);
   const [width, setWidth] = useState<number>(() => {
-    // localStorage can throw (private mode / disabled). This provider wraps the
-    // whole app, so a throw here would take down all of Radar — fail to default.
     try {
       const v = Number(localStorage.getItem(WIDTH_KEY));
       return v >= MIN_W && v <= MAX_W ? v : 560;
@@ -103,40 +121,101 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const openInvestigation = useCallback((t: Target) => {
-    setTarget(t);
-    setSaved(null);
+  const refreshRuns = useCallback(() => {
+    if (!available) return;
+    listRuns()
+      .then(setRuns)
+      .catch(() => {});
+  }, [available]);
+
+  // Keep the run list (statuses, new background runs) fresh while the surface is
+  // open — cheap poll; background runs surface here without a manual refresh.
+  useEffect(() => {
+    if (!open || !available) return;
+    refreshRuns();
+    const t = setInterval(refreshRuns, 4000);
+    return () => clearInterval(t);
+  }, [open, available, refreshRuns]);
+
+  const startRunRef = useRef<(t: Target) => void>(() => {});
+  startRunRef.current = (t: Target) => {
+    createRun(t)
+      .then((run) => {
+        setActiveRunId(run.id);
+        setView("investigation");
+        setRuns((prev) =>
+          prev.some((r) => r.id === run.id) ? prev : [run, ...prev],
+        );
+      })
+      .catch((e) => {
+        setStartError(
+          e instanceof DiagnoseError
+            ? e.message
+            : "Couldn't start the investigation.",
+        );
+      });
+  };
+
+  const openInvestigation = useCallback(
+    (t: Target) => {
+      setStartError(null);
+      setOpen(true);
+      if (!readConsent()) {
+        setPendingTarget(t);
+        setView("investigation");
+        return;
+      }
+      setView("investigation");
+      startRunRef.current(t);
+    },
+    [],
+  );
+  const openRun = useCallback((id: string) => {
+    setActiveRunId(id);
     setView("investigation");
     setOpen(true);
   }, []);
   const openHome = useCallback(() => {
-    setSaved(null);
     setView("home");
     setOpen(true);
   }, []);
-  const openSaved = useCallback((e: HistoryEntry) => {
-    setSaved(e);
-    setView("saved");
-    setOpen(true);
-  }, []);
-  const goHome = useCallback(() => {
-    setSaved(null);
-    setView("home");
-  }, []);
+  const goHome = useCallback(() => setView("home"), []);
   const close = useCallback(() => setOpen(false), []);
+  const approveConsent = useCallback(() => {
+    try {
+      localStorage.setItem(CONSENT_KEY, "1");
+    } catch {
+      /* storage disabled — consent holds for this session */
+    }
+    setConsented(true);
+    const t = pendingTarget;
+    setPendingTarget(null);
+    if (t) startRunRef.current(t);
+  }, [pendingTarget]);
+  const cancelConsent = useCallback(() => {
+    setPendingTarget(null);
+    setOpen(false);
+  }, []);
+  const dismissError = useCallback(() => setStartError(null), []);
 
   const value: DiagnoseCtx = {
     available,
     agentLabel,
     open,
     view,
-    target,
-    saved,
+    activeRunId,
+    runs,
+    needsConsent: !!pendingTarget && !consented,
+    startError,
     openInvestigation,
+    openRun,
     openHome,
-    openSaved,
     goHome,
     close,
+    approveConsent,
+    cancelConsent,
+    refreshRuns,
+    dismissError,
   };
 
   // Push the whole app left by reserving the surface's width (wide viewports

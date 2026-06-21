@@ -94,6 +94,9 @@ type Server struct {
 	// aiDiagnoser drives a local agent CLI for "Diagnose with AI" (nil when no
 	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
 	aiDiagnoser *ai.Diagnoser
+	// aiRuns owns investigations as durable server-side jobs (survive panel close
+	// / navigation / refresh). nil exactly when aiDiagnoser is.
+	aiRuns *ai.RunManager
 }
 
 // Config holds server configuration
@@ -140,6 +143,7 @@ func New(cfg Config) *Server {
 		if bin := ai.ResolveCLI(); bin != "" {
 			if d, err := ai.New(bin); err == nil {
 				s.aiDiagnoser = d
+				s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName)
 				log.Printf("[ai] diagnose enabled (agent CLI: %s)", bin)
 			}
 		}
@@ -277,9 +281,9 @@ func (s *Server) setupRoutes() {
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
-		// AI investigation streams via SSE — runs for tens of seconds to minutes,
-		// so it lives outside the 60s timeout group.
-		r.Get("/diagnose/stream", s.handleDiagnoseStream)
+		// AI investigation event stream via SSE — long-lived; lives outside the
+		// 60s timeout group. The run keeps going server-side after disconnect.
+		r.Get("/diagnose/runs/{id}/stream", s.handleDiagnoseRunStream)
 
 		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
@@ -290,6 +294,11 @@ func (s *Server) setupRoutes() {
 
 			r.Get("/health", s.handleHealth)
 			r.Get("/agents", s.handleListAgents)
+			// AI investigations as durable server-side jobs (start/list/turn/stop).
+			r.Post("/diagnose/runs", s.handleDiagnoseStart)
+			r.Get("/diagnose/runs", s.handleDiagnoseList)
+			r.Post("/diagnose/runs/{id}/turns", s.handleDiagnoseTurn)
+			r.Post("/diagnose/runs/{id}/stop", s.handleDiagnoseStop)
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)

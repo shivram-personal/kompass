@@ -19,7 +19,6 @@ import {
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
 import { type Diagnosis, type DiagnoseStep } from "../../api/diagnose";
 import { Markdown } from "../ui/Markdown";
-import { relativeTime, type HistoryEntry } from "./history";
 
 // Turn is one round of the conversation: the initial investigation (no question)
 // or a follow-up, each with its own transcript + result.
@@ -401,49 +400,6 @@ function compactArgs(raw: string): string {
   } catch {
     return raw;
   }
-}
-
-export function SavedReportView({ entry }: { entry: HistoryEntry }) {
-  const now = Date.now();
-  return (
-    <div className="space-y-4">
-      <div className="text-[11px] text-theme-text-tertiary">
-        {entry.kind} {entry.namespace}/{entry.name} · saved{" "}
-        {relativeTime(entry.ts, now)}
-        {entry.ctx ? ` · ${entry.ctx}` : ""}
-      </div>
-      {entry.turns.map((t, i) => (
-        <div key={i} className="space-y-2">
-          {t.question && (
-            <div className="flex justify-end">
-              <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
-                {t.question}
-              </div>
-            </div>
-          )}
-          {t.tools.length > 0 && (
-            <div className="text-[11px] text-theme-text-tertiary">
-              <span className="font-medium uppercase tracking-wide">
-                Investigation
-              </span>{" "}
-              {t.tools.map(prettyTool).join(" · ")}
-            </div>
-          )}
-          <ResultCard
-            diagnosis={{
-              rootCause: t.rootCause,
-              report: t.report,
-              remediation: t.remediation,
-              recommendedIndex: t.recommendedIndex,
-              confidence: t.confidence,
-              costUsd: t.costUsd,
-            }}
-            apply={t.apply}
-          />
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function ResultCard({

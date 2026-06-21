@@ -79,13 +79,17 @@ type Diagnosis struct {
 }
 
 // StreamEvent is one normalized event emitted during an investigation.
+// "turn" marks the start of a new turn (carries Question/Apply) so a connecting
+// or reconnecting client can reconstruct turn boundaries from the event log.
 type StreamEvent struct {
-	Type  string     `json:"type"` // "phase" | "step" | "token" | "done" | "error"
-	Phase string     `json:"phase,omitempty"`
-	Step  *StepInfo  `json:"step,omitempty"`
-	Token string     `json:"token,omitempty"`
-	Diag  *Diagnosis `json:"diagnosis,omitempty"`
-	Error string     `json:"error,omitempty"`
+	Type     string     `json:"type"` // "turn"|"phase"|"step"|"token"|"thinking"|"done"|"error"|"closed"
+	Phase    string     `json:"phase,omitempty"`
+	Step     *StepInfo  `json:"step,omitempty"`
+	Token    string     `json:"token,omitempty"`
+	Diag     *Diagnosis `json:"diagnosis,omitempty"`
+	Error    string     `json:"error,omitempty"`
+	Question string     `json:"question,omitempty"` // on "turn"
+	Apply    bool       `json:"apply,omitempty"`    // on "turn"
 }
 
 // StepInfo describes one tool invocation (running → done).

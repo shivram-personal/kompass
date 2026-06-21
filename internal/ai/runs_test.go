@@ -1,0 +1,77 @@
+package ai
+
+import "testing"
+
+// TestRunSubscribeReplay pins the SSE-replay contract: a subscriber gets the
+// backlog after its last-seen seq, then live events, then a close on terminal.
+func TestRunSubscribeReplay(t *testing.T) {
+	r := &Run{subs: map[int]chan RunEvent{}}
+	r.append(StreamEvent{Type: "turn"})            // seq 1
+	r.append(StreamEvent{Type: "phase"})           // seq 2
+	r.append(StreamEvent{Type: "token", Token: "x"}) // seq 3
+
+	backlog, ch, cancel := r.Subscribe(1) // everything after seq 1
+	defer cancel()
+	if len(backlog) != 2 || backlog[0].Seq != 2 || backlog[1].Seq != 3 {
+		t.Fatalf("backlog = %+v, want seq 2,3", backlog)
+	}
+
+	r.append(StreamEvent{Type: "done"}) // seq 4 → live
+	live, ok := <-ch
+	if !ok || live.Seq != 4 || live.Event.Type != "done" {
+		t.Fatalf("live = %+v ok=%v, want seq 4 done", live, ok)
+	}
+
+	// A completed turn must NOT close the subscription (multi-turn keeps it alive).
+	r.append(StreamEvent{Type: "turn", Question: "follow-up"}) // seq 5
+	if next := <-ch; next.Seq != 5 {
+		t.Fatalf("expected live follow-up turn at seq 5, got %+v", next)
+	}
+
+	// finalize (stale/evict) is what closes it.
+	r.finalize()
+	for range ch { // drain the trailing "closed" sentinel
+	}
+}
+
+// TestSubscribeAfterFinalize: reopening a finalized (stale/evicted) run replays
+// its full log then ends, rather than hanging.
+func TestSubscribeAfterFinalize(t *testing.T) {
+	r := &Run{subs: map[int]chan RunEvent{}}
+	r.append(StreamEvent{Type: "turn"})
+	r.append(StreamEvent{Type: "done"})
+	r.finalize() // appends a "closed" sentinel + drops subs
+
+	backlog, ch, cancel := r.Subscribe(0)
+	defer cancel()
+	if len(backlog) != 3 { // turn, done, closed
+		t.Fatalf("backlog = %d, want 3", len(backlog))
+	}
+	if _, ok := <-ch; ok {
+		t.Errorf("channel should be closed for a finalized run")
+	}
+}
+
+// TestEvictKeepsRunning: the retention cap never drops a running investigation;
+// it evicts the oldest finished one.
+func TestEvictKeepsRunning(t *testing.T) {
+	m := &RunManager{runs: map[string]*Run{}, maxRetained: 2}
+	add := func(id, status string) {
+		m.runs[id] = &Run{ID: id, status: status, subs: map[int]chan RunEvent{}}
+		m.order = append(m.order, id)
+	}
+	add("a", "running") // oldest, but running → must survive
+	add("b", "done")
+	add("c", "done")
+	m.evictLocked()
+
+	if _, ok := m.runs["a"]; !ok {
+		t.Errorf("running run 'a' was evicted")
+	}
+	if _, ok := m.runs["b"]; ok {
+		t.Errorf("oldest finished run 'b' should have been evicted")
+	}
+	if len(m.order) != 2 {
+		t.Errorf("order = %v, want len 2", m.order)
+	}
+}

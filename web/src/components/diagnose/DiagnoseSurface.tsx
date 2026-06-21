@@ -10,6 +10,7 @@ import { Tooltip } from "../ui/Tooltip";
 import { useDiagnose } from "./DiagnoseContext";
 import { InvestigationView } from "./InvestigationView";
 import { RecentList } from "./Home";
+import { ConsentCard } from "./parts";
 
 export function DiagnoseSurface({
   width,
@@ -71,46 +72,49 @@ export function DiagnoseSurface({
     document.addEventListener("mouseup", onUp);
   };
 
-  const detailTitle =
-    d.view === "saved" && d.saved
-      ? `${d.saved.kind} ${d.saved.namespace}/${d.saved.name}`
-      : d.view === "investigation" && d.target
-        ? `${d.target.kind} ${d.target.namespace}/${d.target.name}`
-        : "AI investigations";
+  const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
+  const detailTitle = activeRun
+    ? `${activeRun.kind} ${activeRun.namespace ? `${activeRun.namespace}/` : ""}${activeRun.name}`
+    : "AI investigations";
 
   const positionStyle: React.CSSProperties = maximized
     ? { top: chrome.top, left: chrome.left, right: 0, bottom: 0 }
     : { top: 0, right: 0, bottom: 0, width, maxWidth: "100vw" };
 
-  // The detail pane (right side when expanded; the whole body when docked). A
-  // saved entry reopens as a continuable investigation (seeded with its saved
-  // turns; resumes the agent session on follow-up / apply) rather than a
-  // read-only report.
-  const detail =
-    d.view === "investigation" && d.target ? (
-      <InvestigationView
-        key={`${d.target.kind}/${d.target.namespace}/${d.target.name}`}
-        target={d.target}
-        agentLabel={d.agentLabel}
-        maximized={maximized}
-      />
-    ) : d.view === "saved" && d.saved ? (
-      <InvestigationView
-        key={d.saved.id}
-        target={{
-          kind: d.saved.kind,
-          namespace: d.saved.namespace,
-          name: d.saved.name,
-        }}
-        agentLabel={d.agentLabel}
-        maximized={maximized}
-        seed={d.saved}
-      />
-    ) : (
-      <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
-        Select an investigation, or open a resource and click Diagnose.
+  // The detail pane (right side when expanded; the whole body when docked).
+  // Keyed by run id so toggling Expand doesn't remount a focused run's view.
+  const detail = d.needsConsent ? (
+    <div className="flex-1 overflow-y-auto px-4 py-3">
+      <div className={maximized ? "mx-auto max-w-3xl" : ""}>
+        <ConsentCard
+          agentName={d.agentLabel}
+          onApprove={d.approveConsent}
+          onCancel={d.cancelConsent}
+        />
       </div>
-    );
+    </div>
+  ) : activeRun ? (
+    <InvestigationView
+      key={activeRun.id}
+      run={activeRun}
+      agentLabel={d.agentLabel}
+      maximized={maximized}
+    />
+  ) : d.startError ? (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <p className="text-sm text-theme-text-secondary">{d.startError}</p>
+      <button
+        onClick={d.dismissError}
+        className="rounded-lg border border-theme-border px-3 py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+      >
+        Dismiss
+      </button>
+    </div>
+  ) : (
+    <div className="flex flex-1 items-center justify-center px-6 text-center text-sm text-theme-text-tertiary">
+      Select an investigation, or open a resource and click Diagnose.
+    </div>
+  );
 
   const showBreadcrumb = !maximized && d.view !== "home";
 
@@ -195,8 +199,9 @@ export function DiagnoseSurface({
           >
             <RecentList
               agentLabel={d.agentLabel}
-              selectedId={d.saved?.id}
-              onSelect={d.openSaved}
+              runs={d.runs}
+              selectedId={d.activeRunId}
+              onSelect={d.openRun}
             />
           </aside>
         )}
@@ -205,7 +210,11 @@ export function DiagnoseSurface({
             key="main"
             className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
           >
-            <RecentList agentLabel={d.agentLabel} onSelect={d.openSaved} />
+            <RecentList
+              agentLabel={d.agentLabel}
+              runs={d.runs}
+              onSelect={d.openRun}
+            />
           </div>
         ) : (
           <div key="main" className="flex min-h-0 min-w-0 flex-1 flex-col">

@@ -118,6 +118,11 @@ func (s *Server) finalizePostContextSwitch() {
 	clearPackagesCache()
 	clearApplicationsCache()
 	s.clearAllNamespacePreferences()
+	// AI investigations reason about the previous cluster — stop + mark them stale
+	// so they can't continue or apply against the newly-connected one.
+	if s.aiRuns != nil {
+		s.aiRuns.OnContextSwitch()
+	}
 }
 
 // loadSavedNamespacePreference seeds the per-user map from settings.json on

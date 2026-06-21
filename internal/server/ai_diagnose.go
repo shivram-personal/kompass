@@ -2,9 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/ai"
 )
@@ -17,43 +21,152 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	withVersions := r.URL.Query().Get("versions") == "1"
 	s.writeJSON(w, map[string]any{
 		"agents":  ai.DetectAgents(r.Context(), withVersions),
-		"enabled": s.aiDiagnoser != nil,
+		"enabled": s.aiRuns != nil,
 	})
 }
 
-// handleDiagnoseStream runs a read-only AI investigation of a resource and
-// streams normalized events over SSE. Keyless — the agent CLI authenticates on
-// the user's own subscription. GET (EventSource-compatible); params in the query.
-func (s *Server) handleDiagnoseStream(w http.ResponseWriter, r *http.Request) {
-	kind := strings.TrimSpace(r.URL.Query().Get("kind"))
-	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
-	name := strings.TrimSpace(r.URL.Query().Get("name"))
+// aiReady gates every diagnose endpoint: the engine is built only in no-auth
+// standalone radar with /mcp mounted and an agent CLI present. Returns false (and
+// writes the error) when unavailable.
+func (s *Server) aiReady(w http.ResponseWriter) bool {
+	if s.aiRuns == nil {
+		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code to enable AI diagnosis")
+		return false
+	}
+	return s.requireConnected(w)
+}
+
+// localOriginOK rejects cross-origin POSTs to these state-changing, process-
+// spawning endpoints. Same-origin (no Origin header) and localhost origins pass;
+// anything else is refused so a random web page can't drive the local agent.
+func localOriginOK(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return true // same-origin / non-browser
+	}
+	return strings.Contains(o, "://localhost") || strings.Contains(o, "://127.0.0.1")
+}
+
+// handleDiagnoseStart begins an investigation (or focuses a live one for the same
+// target) and returns its run id. POST {kind, namespace, name}.
+func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if !s.aiReady(w) {
+		return
+	}
+	var body struct{ Kind, Namespace, Name string }
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	kind := strings.TrimSpace(body.Kind)
+	name := strings.TrimSpace(body.Name)
+	namespace := strings.TrimSpace(body.Namespace)
 	if kind == "" || name == "" {
 		s.writeError(w, http.StatusBadRequest, "kind and name are required")
 		return
 	}
-	// Multi-turn: a follow-up resumes the prior CLI session with the user's question.
-	session := strings.TrimSpace(r.URL.Query().Get("session"))
-	question := strings.TrimSpace(r.URL.Query().Get("q"))
-	// Apply: a user-confirmed remediation turn (write tools enabled). Requires a
-	// session to resume (the investigation it's applying the fix from). fix is the
-	// exact recommended-fix text the user confirmed, so the apply is bound to it.
-	apply := r.URL.Query().Get("apply") == "1" && session != ""
-	fix := strings.TrimSpace(r.URL.Query().Get("fix"))
-
-	if s.aiDiagnoser == nil {
-		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code to enable AI diagnosis")
-		return
-	}
-	if !s.requireConnected(w) {
-		return
-	}
-	// Namespace-scoped resources require read access to that namespace; the agent
-	// also calls the MCP, which re-enforces RBAC, but gate here too for a clean error.
 	if namespace != "" {
 		if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
 			return
+		}
+	}
+	run, err := s.aiRuns.Start(kind, namespace, name)
+	if err != nil {
+		if errors.Is(err, ai.ErrAtCapacity) {
+			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, run)
+}
+
+// handleDiagnoseList returns all in-memory runs (newest first).
+func (s *Server) handleDiagnoseList(w http.ResponseWriter, r *http.Request) {
+	if !s.aiReady(w) {
+		return
+	}
+	s.writeJSON(w, map[string]any{"runs": s.aiRuns.List()})
+}
+
+// handleDiagnoseTurn adds a follow-up or apply turn to a run. POST {question?,
+// apply?, fix?}. Apply enables write tools and binds to the confirmed fix text.
+func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if !s.aiReady(w) {
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Question string `json:"question"`
+		Apply    bool   `json:"apply"`
+		Fix      string `json:"fix"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	err := s.aiRuns.AddTurn(id, strings.TrimSpace(body.Question), body.Apply, body.Fix)
+	switch {
+	case errors.Is(err, ai.ErrRunNotFound):
+		s.writeError(w, http.StatusNotFound, "investigation not found")
+	case errors.Is(err, ai.ErrTurnInFlight):
+		s.writeError(w, http.StatusConflict, "a turn is already running")
+	case errors.Is(err, ai.ErrNoSession):
+		s.writeError(w, http.StatusConflict, "investigation isn't ready for follow-ups yet")
+	case err != nil:
+		s.writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		s.writeJSON(w, map[string]any{"ok": true})
+	}
+}
+
+// handleDiagnoseStop cancels a run's in-flight agent.
+func (s *Server) handleDiagnoseStop(w http.ResponseWriter, r *http.Request) {
+	if !localOriginOK(r) {
+		s.writeError(w, http.StatusForbidden, "cross-origin request rejected")
+		return
+	}
+	if !s.aiReady(w) {
+		return
+	}
+	if err := s.aiRuns.Stop(chi.URLParam(r, "id")); err != nil {
+		s.writeError(w, http.StatusNotFound, "investigation not found")
+		return
+	}
+	s.writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleDiagnoseRunStream streams a run's events over SSE: a replay of everything
+// after Last-Event-ID (or ?after=), then the live tail. Disconnecting does NOT
+// stop the run — that's the whole point of server-side jobs.
+func (s *Server) handleDiagnoseRunStream(w http.ResponseWriter, r *http.Request) {
+	if !s.aiReady(w) {
+		return
+	}
+	run := s.aiRuns.Get(chi.URLParam(r, "id"))
+	if run == nil {
+		s.writeError(w, http.StatusNotFound, "investigation not found")
+		return
+	}
+
+	afterSeq := 0
+	if le := r.Header.Get("Last-Event-ID"); le != "" {
+		if n, err := strconv.Atoi(le); err == nil {
+			afterSeq = n
+		}
+	} else if a := r.URL.Query().Get("after"); a != "" {
+		if n, err := strconv.Atoi(a); err == nil {
+			afterSeq = n
 		}
 	}
 
@@ -67,27 +180,38 @@ func (s *Server) handleDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	send := func(ev ai.StreamEvent) {
-		b, err := json.Marshal(ev)
+	backlog, ch, cancel := run.Subscribe(afterSeq)
+	defer cancel()
+
+	send := func(e ai.RunEvent) bool {
+		b, err := json.Marshal(e.Event)
 		if err != nil {
-			return
+			return true
 		}
-		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev.Type, b)
+		// id: drives EventSource's Last-Event-ID for replay on reconnect.
+		if _, err := fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", e.Seq, e.Event.Type, b); err != nil {
+			return false
+		}
 		flusher.Flush()
+		return true
 	}
 
-	// onEvent is called synchronously from the parse loop (single goroutine), so
-	// writing to w here is race-free.
-	diag, err := s.aiDiagnoser.DiagnoseStream(r.Context(), ai.Request{
-		Kind: kind, Namespace: namespace, Name: name, MCPPort: s.ActualPort(),
-		SessionID: session, Question: question, Apply: apply, Fix: fix,
-	}, send)
-	if err != nil {
-		if r.Context().Err() != nil {
-			return // client disconnected / cancelled
+	for _, e := range backlog {
+		if !send(e) {
+			return
 		}
-		send(ai.StreamEvent{Type: "error", Error: err.Error()})
-		return
 	}
-	send(ai.StreamEvent{Type: "done", Diag: &diag})
+	for {
+		select {
+		case <-r.Context().Done():
+			return // client went away — run keeps going server-side
+		case e, ok := <-ch:
+			if !ok {
+				return // run terminated; channel closed
+			}
+			if !send(e) {
+				return
+			}
+		}
+	}
 }
