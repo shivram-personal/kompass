@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { createPortal } from "react-dom";
 import {
   Sparkles,
@@ -11,6 +17,9 @@ import {
   ShieldCheck,
   ChevronRight,
   Send,
+  Maximize2,
+  Minimize2,
+  Minus,
 } from "lucide-react";
 import {
   streamDiagnose,
@@ -21,6 +30,9 @@ import {
 import { Markdown } from "../ui/Markdown";
 
 const CONSENT_KEY = "radar-ai-consent-v1";
+const PANEL_WIDTH_KEY = "radar-ai-panel-width";
+const MIN_W = 400;
+const MAX_W = 1100;
 
 interface Props {
   kind: string;
@@ -53,6 +65,13 @@ export function DiagnosePanel({
   const [consented, setConsented] = useState(hasConsent);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState("");
+  const [width, setWidth] = useState<number>(() => {
+    const v = Number(localStorage.getItem(PANEL_WIDTH_KEY));
+    return v >= MIN_W && v <= MAX_W ? v : 560;
+  });
+  const [maximized, setMaximized] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [topOffset, setTopOffset] = useState(0);
   // The CLI session id of the latest turn — resumed by the next follow-up so the
   // agent keeps full context. Kept in a ref to avoid stale closures in onEvent.
   const sessionIdRef = useRef("");
@@ -142,6 +161,29 @@ export function DiagnosePanel({
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
+  // Dock BELOW the app's top bar (don't occlude it) — measure its height.
+  useLayoutEffect(() => {
+    const measure = () => {
+      const h = document.querySelector("header");
+      setTopOffset(h ? Math.round(h.getBoundingClientRect().height) : 0);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, []);
+
+  // Esc collapses to the pill (keeps a running investigation alive) — but not
+  // while the user is typing a follow-up.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.activeElement?.tagName === "TEXTAREA") return;
+      setCollapsed(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const approve = () => {
     localStorage.setItem(CONSENT_KEY, "1");
     setConsented(true);
@@ -168,38 +210,98 @@ export function DiagnosePanel({
     ? `${kind} ${namespace}/${name}`
     : `${kind} ${name}`;
 
+  // Drag the left edge to resize; width persists across opens.
+  const startResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const onMove = (m: MouseEvent) =>
+      setWidth(Math.min(MAX_W, Math.max(MIN_W, window.innerWidth - m.clientX)));
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      setWidth((w) => {
+        localStorage.setItem(PANEL_WIDTH_KEY, String(w));
+        return w;
+      });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  };
+
+  // Collapsed: a small launcher pill, so the investigation keeps running in the
+  // background while the user works the cluster UI unobstructed.
+  if (collapsed) {
+    return createPortal(
+      <button
+        onClick={() => setCollapsed(false)}
+        className="fixed bottom-4 right-4 z-50 flex items-center gap-2 rounded-full border border-theme-border bg-theme-surface px-4 py-2 text-sm font-medium text-theme-text-primary shadow-2xl hover:bg-theme-hover"
+      >
+        <Sparkles className="h-4 w-4 text-accent" />
+        Diagnose
+        {running && (
+          <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+        )}
+      </button>,
+      document.body,
+    );
+  }
+
+  // Non-blocking dock: NO backdrop — the cluster UI behind stays interactive so
+  // the user can cross-reference resources/topology while investigating.
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex justify-end"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
+      role="dialog"
+      aria-label="Diagnose with AI"
+      className="fixed bottom-0 right-0 z-50 flex flex-col border-l border-theme-border bg-theme-surface shadow-2xl"
+      style={{
+        top: topOffset,
+        width: maximized ? "100vw" : width,
+        maxWidth: "100vw",
+        animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",
       }}
     >
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Diagnose with AI"
-        className="relative flex h-full w-full max-w-[560px] flex-col border-l border-theme-border bg-theme-surface shadow-2xl"
-        style={{
-          animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",
-        }}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between border-b border-theme-border px-4 py-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <Sparkles className="h-4 w-4 shrink-0 text-accent" />
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-theme-text-primary">
-                Diagnose with AI
-              </div>
-              <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
-                <span className="truncate">{resourceLabel}</span>
-                <span className="shrink-0 opacity-60">·</span>
-                <span className="shrink-0">{agentName}</span>
-              </div>
+      {!maximized && (
+        <div
+          onMouseDown={startResize}
+          className="absolute left-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-accent/40"
+          title="Drag to resize"
+        />
+      )}
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-theme-border px-4 py-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <Sparkles className="h-4 w-4 shrink-0 text-accent" />
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-theme-text-primary">
+              Diagnose with AI
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
+              <span className="truncate">{resourceLabel}</span>
+              <span className="shrink-0 opacity-60">·</span>
+              <span className="shrink-0">{agentName}</span>
             </div>
           </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            onClick={() => setMaximized((v) => !v)}
+            className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+            aria-label={maximized ? "Restore" : "Maximize"}
+            title={maximized ? "Restore" : "Maximize"}
+          >
+            {maximized ? (
+              <Minimize2 className="h-4 w-4" />
+            ) : (
+              <Maximize2 className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            onClick={() => setCollapsed(true)}
+            className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+            aria-label="Minimize to pill"
+            title="Minimize"
+          >
+            <Minus className="h-4 w-4" />
+          </button>
           <button
             onClick={onClose}
             className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
@@ -208,65 +310,67 @@ export function DiagnosePanel({
             <X className="h-4 w-4" />
           </button>
         </div>
+      </div>
 
-        {/* Body */}
-        <div
-          ref={scrollRef}
-          className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
-        >
-          {!consented ? (
-            <ConsentCard
-              agentName={agentName}
-              onApprove={approve}
-              onCancel={onClose}
-            />
-          ) : (
-            <div className="space-y-4">
-              {turns.map((t, i) => (
-                <TurnView key={i} turn={t} />
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Footer — follow-up composer (or Stop while running) */}
-        {consented && (
-          <div className="border-t border-theme-border px-3 py-2.5">
-            {running ? (
-              <button
-                onClick={stop}
-                className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
-              >
-                Stop investigation
-              </button>
-            ) : (
-              <div className="flex items-end gap-2">
-                <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      submitFollowup();
-                    }
-                  }}
-                  rows={1}
-                  placeholder="Ask a follow-up or refine…"
-                  className="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none"
-                />
-                <button
-                  onClick={submitFollowup}
-                  disabled={!input.trim()}
-                  className="shrink-0 rounded-lg btn-brand p-2 disabled:opacity-40"
-                  aria-label="Send follow-up"
-                >
-                  <Send className="h-4 w-4" />
-                </button>
-              </div>
-            )}
+      {/* Body */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
+      >
+        {!consented ? (
+          <ConsentCard
+            agentName={agentName}
+            onApprove={approve}
+            onCancel={onClose}
+          />
+        ) : (
+          <div className={`space-y-4 ${maximized ? "mx-auto max-w-3xl" : ""}`}>
+            {turns.map((t, i) => (
+              <TurnView key={i} turn={t} />
+            ))}
           </div>
         )}
       </div>
+
+      {/* Footer — follow-up composer (or Stop while running) */}
+      {consented && (
+        <div
+          className={`border-t border-theme-border px-3 py-2.5 ${maximized ? "[&>*]:mx-auto [&>*]:max-w-3xl" : ""}`}
+        >
+          {running ? (
+            <button
+              onClick={stop}
+              className="w-full rounded-lg border border-theme-border py-1.5 text-sm text-theme-text-secondary hover:bg-theme-hover"
+            >
+              Stop investigation
+            </button>
+          ) : (
+            <div className="flex items-end gap-2">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submitFollowup();
+                  }
+                }}
+                rows={1}
+                placeholder="Ask a follow-up or refine…"
+                className="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none"
+              />
+              <button
+                onClick={submitFollowup}
+                disabled={!input.trim()}
+                className="shrink-0 rounded-lg btn-brand p-2 disabled:opacity-40"
+                aria-label="Send follow-up"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>,
     document.body,
   );
