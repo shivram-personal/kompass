@@ -1,4 +1,4 @@
-import { provenanceSource, HEALTH_META, type AppWorkload } from '../../utils/applications'
+import { provenanceSource, HEALTH_META, appGroupingExplainer, APP_IDENTITY_ANNOTATION, type AppWorkload, type AppIdentity } from '../../utils/applications'
 import { midTruncate } from '../../utils/format'
 
 // Structured tooltip content for the application chips. Both render a short
@@ -174,6 +174,28 @@ function quotedEvidenceValue(value: string, prefix: string, separator: string): 
   const sep = value.indexOf(separator, start)
   if (sep < 0) return null
   return { value: value.slice(start, sep), rest: value.slice(sep + separator.length) }
+}
+
+// GroupingHint — why an app folds across clusters (or doesn't) and how to make
+// it. Rendered from the per-cluster row's info affordance, so the canonical
+// answer to "why isn't this grouped?" lives exactly where the question arises.
+export function GroupingHint({ identity }: { identity?: AppIdentity }) {
+  const { folds, how, fix } = appGroupingExplainer(identity)
+  return (
+    <div className="max-w-xs space-y-1.5">
+      <div className="text-xs text-theme-text-primary">{how}</div>
+      {folds ? (
+        <div className="text-[11px] leading-snug text-theme-text-secondary">
+          Folds across clusters — its identity is a declared origin.
+        </div>
+      ) : (
+        <>
+          <div className="text-[11px] leading-snug text-theme-text-secondary">{fix}</div>
+          <code className="inline-code">{APP_IDENTITY_ANNOTATION}=&lt;your-app&gt;</code>
+        </>
+      )}
+    </div>
+  )
 }
 
 // EnvHint — how environments are determined + how to set one explicitly.

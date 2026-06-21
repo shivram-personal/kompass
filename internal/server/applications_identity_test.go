@@ -43,7 +43,7 @@ func TestIdentities_DeclaredPathPlusRawNamespaceEnv(t *testing.T) {
 		identRow("billing-staging", "staging", 3, "/Application/billing-staging", "repo.dev/koala/billing:b_2026-06-05_01"),
 		identRow("billing", "dev", 0, "", "repo.dev/koala/billing:b_2026-05-18_00"),
 	}
-	resolveAppIdentities(rows, map[string]string{"billing-staging": "billing/deploy/overlays/staging"}, nil)
+	resolveAppIdentities(rows, map[string]string{"billing-staging": "billing/deploy/overlays/staging"}, nil, nil)
 
 	st := identOf(t, rows, "billing-staging")
 	if st == nil || st.Key != "billing" || st.Env != "staging" || st.Confidence != "high" {
@@ -62,7 +62,7 @@ func TestIdentities_EnvPrefixTrackingPair(t *testing.T) {
 		identRow("dev-koala-backend-us-east1", "dev", 3, "/Application/dev-koala-backend-us-east1", "repo.dev/koala/koala-backend:m1"),
 		identRow("staging-koala-backend-us-east1", "staging", 3, "/Application/staging-koala-backend-us-east1", "repo.dev/koala/koala-backend:m2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 
 	a := identOf(t, rows, "dev-koala-backend-us-east1")
 	b := identOf(t, rows, "staging-koala-backend-us-east1")
@@ -82,7 +82,7 @@ func TestIdentities_SameNameAcrossEnvNamespaces(t *testing.T) {
 		identRow("project-infra", "staging", 7, "staging/app/project-infra", "repo.dev/koala/project-infra:y"),
 		identRow("project-infra", "qa", 7, "qa/app/project-infra", "repo.dev/koala/project-infra:z"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	envs := map[string]bool{}
 	for i := range rows {
 		f := rows[i].Identity
@@ -103,7 +103,7 @@ func TestIdentities_NoRepoOverlapRefuses(t *testing.T) {
 		identRow("api", "dev", 0, "", "repo.dev/teamA/api:1"),
 		identRow("api", "staging", 0, "", "repo.dev/teamB/other:1"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	if rows[0].Identity != nil || rows[1].Identity != nil {
 		t.Fatalf("uncorroborated stem match grouped: %+v / %+v", rows[0].Identity, rows[1].Identity)
 	}
@@ -115,7 +115,7 @@ func TestIdentities_SingleEnvRefuses(t *testing.T) {
 		identRow("worker", "staging", 0, "staging/app/worker-a", "repo.dev/koala/worker:1"),
 		identRow("worker", "staging", 0, "staging/app/worker-b", "repo.dev/koala/worker:1"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	if rows[0].Identity != nil {
 		t.Fatalf("single-env group formed: %+v", rows[0].Identity)
 	}
@@ -130,7 +130,7 @@ func TestIdentities_ConflictingDeclaredStemsRefuse(t *testing.T) {
 	resolveAppIdentities(rows, map[string]string{
 		"shop-staging": "teamA/shop/overlays/staging",
 		"shop-dev":     "teamB/legacy-shop/overlays/dev",
-	}, nil)
+	}, nil, nil)
 	if rows[0].Identity != nil || rows[1].Identity != nil {
 		t.Fatalf("conflicting declarations grouped: %+v / %+v", rows[0].Identity, rows[1].Identity)
 	}
@@ -143,7 +143,7 @@ func TestIdentities_GenericTokensNotNameEvidence(t *testing.T) {
 		identRow("load-test", "apps", 0, "", "repo.dev/koala/load:1"),
 		identRow("load", "dev", 0, "", "repo.dev/koala/load:1"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	if rows[0].Identity != nil {
 		t.Fatalf("'-test' suffix treated as env: %+v", rows[0].Identity)
 	}
@@ -155,7 +155,7 @@ func TestIdentities_EnvSynonymsCanonicalize(t *testing.T) {
 		identRow("pay-production", "payments", 0, "", "repo.dev/koala/pay:1"),
 		identRow("pay-stage", "payments", 0, "", "repo.dev/koala/pay:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	a, b := rows[0].Identity, rows[1].Identity
 	if a == nil || b == nil || a.Env != "prod" || b.Env != "staging" {
 		t.Fatalf("synonyms = %+v / %+v, want prod / staging", a, b)
@@ -172,7 +172,7 @@ func TestIdentities_ClassificationNotIdentity(t *testing.T) {
 		}
 	}
 	tagged := mk()
-	resolveAppIdentities(tagged, nil, nil)
+	resolveAppIdentities(tagged, nil, nil, nil)
 	for i := range tagged {
 		tagged[i].Identity = nil
 	}
@@ -196,7 +196,7 @@ func TestIdentities_CustomTokenDiscoveredByRecurrence(t *testing.T) {
 		identRow("cron", "dev", 0, "dev/app/cron", "repo.dev/koala/cron:1"),
 		identRow("cron-loadtest", "team3", 0, "", "repo.dev/koala/cron:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	a := identOf(t, rows, "api-loadtest")
 	if a == nil || a.Key != "api" || a.Env != "loadtest" {
 		t.Fatalf("api-loadtest identity = %+v, want key=api env=loadtest (recurrence-discovered)", a)
@@ -210,7 +210,7 @@ func TestIdentities_AffixCorroboratedByNamespace(t *testing.T) {
 		identRow("api", "dev", 0, "dev/app/api", "repo.dev/koala/api:1"),
 		identRow("api-loadtest", "loadtest", 0, "", "repo.dev/koala/api:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	a := identOf(t, rows, "api-loadtest")
 	if a == nil || a.Env != "loadtest" {
 		t.Fatalf("affix+namespace corroboration failed: %+v", a)
@@ -228,7 +228,7 @@ func TestIdentities_VariantSuffixesNotEnvs(t *testing.T) {
 		identRow("mempool-cos", "infra", 0, "", "repo.dev/koala/mp:1"),
 		identRow("mempool-ubuntu", "infra", 0, "", "repo.dev/koala/mp:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	for i := range rows {
 		if rows[i].Identity != nil {
 			t.Fatalf("variant suffix grouped as env: %s → %+v", rows[i].Name, rows[i].Identity)
@@ -243,7 +243,7 @@ func TestIdentities_MultiSegmentNamespaceNotAToken(t *testing.T) {
 		identRow("frps-a", "skyhook-clients-frps", 0, "", "repo.dev/koala/frps:1"),
 		identRow("frps-a", "skyhook-clients-frps-staging", 0, "", "repo.dev/koala/frps:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	for i := range rows {
 		f := rows[i].Identity
 		if f != nil && f.Env != "staging" {
@@ -259,7 +259,7 @@ func TestIdentities_OneOffTokenNotDiscovered(t *testing.T) {
 		identRow("api", "dev", 0, "dev/app/api", "repo.dev/koala/api:1"),
 		identRow("api-v2", "dev", 0, "", "repo.dev/koala/api:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	if f := identOf(t, rows, "api-v2"); f != nil {
 		t.Fatalf("api-v2 grouped as env instance: %+v", f)
 	}
@@ -273,7 +273,7 @@ func TestIdentities_ExplicitEnvLabels(t *testing.T) {
 	b := identRow("payments", "team-b", 0, "team-b/app/payments", "repo.dev/koala/pay:2")
 	a.Workloads[0].envLabel = "blue"
 	rows := []appRow{a, b}
-	resolveAppIdentities(rows, nil, map[string]string{"team-b": "green"})
+	resolveAppIdentities(rows, nil, nil, map[string]string{"team-b": "green"})
 	fa, fb := rows[0].Identity, rows[1].Identity
 	if fa == nil || fa.Env != "blue" || fa.Confidence != "medium" || fa.Portable || !strings.Contains(fa.Evidence, `environment label "blue"`) {
 		t.Fatalf("workload-labeled instance = %+v, want env=blue medium/local with label evidence", fa)
@@ -295,7 +295,7 @@ func TestIdentities_DisagreeingWorkloadLabelsIgnored(t *testing.T) {
 	a.Workloads[1].envLabel = "prod"
 	b := identRow("api", "staging", 0, "staging/app/api", "repo.dev/koala/api:2")
 	rows := []appRow{a, b}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	fa := rows[0].Identity
 	// Falls back to the namespace reading (dev) instead of either label.
 	if fa == nil || fa.Env != "dev" {
@@ -323,7 +323,7 @@ func TestIdentities_AdoptionJoinsProvenCore(t *testing.T) {
 		identRow("project-infra", "staging", 7, "staging/app/project-infra", "repo.dev/koala/pi:y"),
 		identRow("project-infra", "sandboxx", 7, "sandboxx/app/project-infra", "repo.dev/koala/pi:z"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	f := identOf(t, rows, "project-infra")
 	got := rows[2].Identity
 	if f == nil || got == nil || got.Key != "project-infra" || got.Env != "sandboxx" {
@@ -338,7 +338,7 @@ func TestIdentities_AdoptionNeverBootstraps(t *testing.T) {
 		identRow("api", "dev", 0, "dev/app/api", "repo.dev/koala/api:1"),
 		identRow("api", "teamspace", 0, "teamspace/app/api", "repo.dev/koala/api:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	if rows[0].Identity != nil || rows[1].Identity != nil {
 		t.Fatalf("adoption bootstrapped a identity: %+v / %+v", rows[0].Identity, rows[1].Identity)
 	}
@@ -353,7 +353,7 @@ func TestIdentities_AdopteeNeverVetoesCore(t *testing.T) {
 		identRow("billing", "staging", 0, "staging/app/billing", "repo.dev/koala/billing:2"),
 		identRow("billing", "team", 0, "team/app/billing", "repo.dev/other/thing:1"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	dev, st, stranger := rows[0].Identity, rows[1].Identity, rows[2].Identity
 	if dev == nil || st == nil || dev.Key != "billing" {
 		t.Fatalf("coincidence row vetoed the proven core: %+v / %+v", dev, st)
@@ -369,7 +369,7 @@ func TestIdentities_SameStemStrangerDoesNotVetoRepoCore(t *testing.T) {
 		identRow("api", "staging", 0, "staging/app/api", "repo.dev/team/api:2"),
 		identRow("api", "qa", 0, "qa/app/api", "repo.dev/other/api:1"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	dev, st, stranger := rows[0].Identity, rows[1].Identity, rows[2].Identity
 	if dev == nil || st == nil || dev.Key != "api" || st.Key != "api" {
 		t.Fatalf("different-repo stranger vetoed valid api identity: %+v / %+v", dev, st)
@@ -385,7 +385,7 @@ func TestIdentities_EmptyRepoCandidateDoesNotHideLaterRepoCore(t *testing.T) {
 		identRow("api", "staging", 0, "staging/app/api", "repo.dev/team/api:1"),
 		identRow("api", "prod", 0, "prod/app/api", "repo.dev/team/api:2"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	if rows[0].Identity != nil {
 		t.Fatalf("empty-repo candidate joined identity: %+v", rows[0].Identity)
 	}
@@ -455,7 +455,7 @@ func TestArgoSourcePaths(t *testing.T) {
 		argoApp("no-env-path", map[string]any{"source": map[string]any{"path": "charts/api"}}),
 		argoApp("malformed", map[string]any{"source": "not-a-map"}),
 	}}
-	got := argoSourcePaths(context.Background(), lister)
+	got, _ := argoApplicationFacts(context.Background(), lister)
 	want := map[string]string{
 		"billing-staging": "billing/deploy/overlays/staging",
 		"multi":           "apps/overlays/dev",
@@ -475,7 +475,7 @@ func TestArgoSourcePaths_AmbiguousSameNameRefuses(t *testing.T) {
 		argoAppInNamespace("team-a", "billing-staging", map[string]any{"source": map[string]any{"path": "team-a/billing/overlays/staging"}}),
 		argoAppInNamespace("team-b", "billing-staging", map[string]any{"source": map[string]any{"path": "team-b/billing/overlays/staging"}}),
 	}}
-	got := argoSourcePaths(context.Background(), lister)
+	got, _ := argoApplicationFacts(context.Background(), lister)
 	if got["billing-staging"] != "" {
 		t.Fatalf("bare ambiguous argoSourcePaths[billing-staging] = %q, want empty", got["billing-staging"])
 	}
@@ -492,7 +492,7 @@ func TestIdentities_ArgoSourcePathUsesNamespacedKey(t *testing.T) {
 	resolveAppIdentities(rows, map[string]string{
 		"argocd-a/billing-staging": "apps/billing/overlays/staging",
 		"argocd-b/billing-dev":     "apps/billing/overlays/dev",
-	}, nil)
+	}, nil, nil)
 	a, b := rows[0].Identity, rows[1].Identity
 	if a == nil || b == nil || a.Key != "billing" || b.Key != "billing" || !a.Portable || !b.Portable {
 		t.Fatalf("namespaced Argo path identities = %+v / %+v, want portable billing", a, b)
@@ -515,7 +515,7 @@ func TestIdentities_LabelGivesCleanSingletonKey(t *testing.T) {
 	rows := []appRow{
 		withName(identRow("koala-backend-xyz", "prod", 0, "prod/app/koala-backend-xyz", "ghcr.io/k/koala-backend:1"), "koala-backend"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	id := rows[0].Identity
 	if id == nil || id.Key != "koala-backend" || id.Confidence != "high" {
 		t.Fatalf("label identity not set high-confidence: %+v", id)
@@ -535,7 +535,7 @@ func TestIdentities_LabelUpgradesNameStem(t *testing.T) {
 		withName(identRow("widget", "dev", 0, "dev/app/widget", "ghcr.io/k/widget:1"), "widget"),
 		withName(identRow("widget", "prod", 0, "prod/app/widget", "ghcr.io/k/widget:2"), "widget"),
 	}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	for i := range rows {
 		id := rows[i].Identity
 		if id == nil || id.Key != "widget" || id.Confidence != "high" {
@@ -554,7 +554,7 @@ func TestIdentities_LabelDoesNotOverrideArgoPath(t *testing.T) {
 	resolveAppIdentities(rows, map[string]string{
 		"billing-staging": "billing/deploy/overlays/staging",
 		"billing-dev":     "billing/deploy/overlays/dev",
-	}, nil)
+	}, nil, nil)
 	// The declared Argo identity must survive — its evidence still cites the
 	// source path, not the name label (which would mean the label clobbered it).
 	id := identOf(t, rows, "billing-staging")
@@ -573,8 +573,233 @@ func TestIdentities_DisagreeingNameLabelsIgnored(t *testing.T) {
 	r.Workloads[0].nameLabel = "alpha"
 	r.Workloads[1].nameLabel = "beta"
 	rows := []appRow{r}
-	resolveAppIdentities(rows, nil, nil)
+	resolveAppIdentities(rows, nil, nil, nil)
 	if rows[0].Identity != nil {
 		t.Fatalf("disagreeing name labels should not yield identity: %+v", rows[0].Identity)
+	}
+}
+
+// The explicit app.skyhook.io/app annotation is authoritative + portable, and
+// overrides even a declared Argo source-path identity (the user opted in).
+func TestIdentities_ExplicitAnnotationIsAuthoritativePortable(t *testing.T) {
+	r := identRow("billing-staging", "staging", 3, "/Application/billing-staging", "repo.dev/koala/billing:b1")
+	r.Workloads[0].appAnnotation = "koala-billing"
+	rows := []appRow{r}
+	resolveAppIdentities(rows, map[string]string{"billing-staging": "billing/deploy/overlays/staging"}, nil, nil)
+
+	id := identOf(t, rows, "billing-staging")
+	if id == nil || id.Key != "koala-billing" || id.Source != SourceExplicit || !id.Portable {
+		t.Fatalf("explicit identity = %+v, want key=koala-billing source=explicit portable", id)
+	}
+	if id.Env != "staging" {
+		t.Errorf("explicit tier should keep the env a stronger signal resolved: %+v", id)
+	}
+}
+
+// A single unlabeled row with the explicit annotation still groups — it needs no
+// in-cluster corroboration (the declaration stands alone).
+func TestIdentities_ExplicitAnnotationStandsAlone(t *testing.T) {
+	r := identRow("api", "dev", 0, "dev/app/api", "ghcr.io/acme/api:1")
+	r.Workloads[0].appAnnotation = "acme-api"
+	rows := []appRow{r}
+	resolveAppIdentities(rows, nil, nil, nil)
+	id := identOf(t, rows, "api")
+	if id == nil || id.Key != "acme-api" || id.Source != SourceExplicit || !id.Portable {
+		t.Fatalf("standalone explicit identity = %+v, want key=acme-api source=explicit portable", id)
+	}
+}
+
+// Source provenance is stamped on every tier so the fleet consumer can gate
+// cross-cluster promotion on the source, not on the human evidence string.
+func TestIdentities_SourceProvenanceStamped(t *testing.T) {
+	// Argo source path → argo-path, portable.
+	argo := []appRow{
+		identRow("billing-staging", "staging", 3, "/Application/billing-staging", "r.dev/b:1"),
+		identRow("billing", "dev", 0, "", "r.dev/b:2"),
+	}
+	resolveAppIdentities(argo, map[string]string{"billing-staging": "billing/deploy/overlays/staging"}, nil, nil)
+	if id := identOf(t, argo, "billing-staging"); id == nil || id.Source != SourceArgoPath || !id.Portable {
+		t.Fatalf("argo-path source = %+v, want argo-path portable", id)
+	}
+
+	// Bare app.kubernetes.io/name → label, NOT portable (collision-prone, the
+	// fleet must corroborate before any cross-cluster fold).
+	lbl := identRow("web", "prod", 0, "prod/app/web", "ghcr.io/x/web:1")
+	lbl.Workloads[0].nameLabel = "web"
+	lrows := []appRow{lbl}
+	resolveAppIdentities(lrows, nil, nil, nil)
+	if id := identOf(t, lrows, "web"); id == nil || id.Source != SourceLabel || id.Portable {
+		t.Fatalf("label source = %+v, want label NOT portable", id)
+	}
+}
+
+// The ApplicationSet fan-out discriminator: only a SINGLE-APP env-fan-out (one
+// app, children differ solely by a trio env token) is a valid set identity. A
+// multi-app bundle, a per-env bundle, and a cluster/region fan-out all refuse.
+func TestAppSetFanouts_SingleAppVsBundle(t *testing.T) {
+	child := func(name string) argoChild { return argoChild{keys: []string{name}, name: name} }
+
+	// Single-app env fan-out → folds to one stem, per-child env.
+	fanout := appSetFanouts(map[string][]argoChild{
+		"billing": {child("billing-dev"), child("billing-staging"), child("billing-prod")},
+	})
+	for _, c := range []struct{ key, env string }{{"billing-dev", "dev"}, {"billing-staging", "staging"}, {"billing-prod", "prod"}} {
+		if f, ok := fanout[c.key]; !ok || f.stem != "billing" || f.env != c.env {
+			t.Fatalf("fan-out child %s = %+v, want stem=billing env=%s", c.key, f, c.env)
+		}
+	}
+
+	// Multi-app bundle (children are different apps) → no set identity.
+	if got := appSetFanouts(map[string][]argoChild{
+		"platform": {child("frontend"), child("backend"), child("database")},
+	}); len(got) != 0 {
+		t.Fatalf("multi-app bundle set must not yield identity: %+v", got)
+	}
+
+	// Per-env bundle (one env, many apps — differing token is the APP, not env)
+	// → no set identity.
+	if got := appSetFanouts(map[string][]argoChild{
+		"prod-apps": {child("billing-prod"), child("shipping-prod")},
+	}); len(got) != 0 {
+		t.Fatalf("per-env bundle set must not yield identity: %+v", got)
+	}
+
+	// Cluster fan-out (differing token is a cluster name, not a trio env) → no
+	// OSS identity; env/identity for that shape comes from the hub.
+	if got := appSetFanouts(map[string][]argoChild{
+		"billing": {child("billing-uswest"), child("billing-useast")},
+	}); len(got) != 0 {
+		t.Fatalf("cluster fan-out must not yield OSS identity: %+v", got)
+	}
+
+	// Trivial stem (children collapse to "api") → refused.
+	if got := appSetFanouts(map[string][]argoChild{
+		"api": {child("api-dev"), child("api-prod")},
+	}); len(got) != 0 {
+		t.Fatalf("trivial-stem fan-out must not yield identity: %+v", got)
+	}
+}
+
+// An ApplicationSet fan-out makes its children portable (Source=argo-appset),
+// overriding the weaker name-stem tier — so they fold across clusters.
+func TestIdentities_AppSetFanoutIsPortable(t *testing.T) {
+	rows := []appRow{
+		identRow("billing-dev", "argocd", 3, "argocd/Application/billing-dev", "repo.dev/billing:1"),
+		identRow("billing-prod", "argocd", 3, "argocd/Application/billing-prod", "repo.dev/billing:2"),
+	}
+	fan := appSetFanouts(map[string][]argoChild{
+		"billing": {{keys: []string{"argocd/billing-dev", "billing-dev"}, name: "billing-dev"}, {keys: []string{"argocd/billing-prod", "billing-prod"}, name: "billing-prod"}},
+	})
+	resolveAppIdentities(rows, nil, fan, nil)
+	for _, name := range []string{"billing-dev", "billing-prod"} {
+		id := identOf(t, rows, name)
+		if id == nil || id.Key != "billing" || id.Source != SourceArgoAppSet || !id.Portable {
+			t.Fatalf("%s appset identity = %+v, want key=billing source=argo-appset portable", name, id)
+		}
+	}
+}
+
+// collectArgoClaims emits a claim only for Applications with a DECLARED identity,
+// carrying the destination + managed workloads so the hub can stamp it onto the
+// member cluster's rows (hub-spoke). Path-less / undeclared Applications emit none.
+func TestCollectArgoClaims(t *testing.T) {
+	argoAppFull := func(name string, spec, status map[string]any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"name": name},
+			"spec":     spec,
+			"status":   status,
+		}}
+	}
+	lister := &stubLister{items: []*unstructured.Unstructured{
+		argoAppFull("billing-prod",
+			map[string]any{
+				"source":      map[string]any{"path": "apps/billing/overlays/prod"},
+				"destination": map[string]any{"name": "prod-cluster", "namespace": "billing"},
+			},
+			map[string]any{"resources": []any{
+				map[string]any{"kind": "Deployment", "namespace": "billing", "name": "billing-api"},
+				map[string]any{"kind": "ConfigMap", "namespace": "billing", "name": "billing-cfg"}, // not a workload
+			}}),
+		// No declared identity (env-less path) → no claim.
+		argoAppFull("infra", map[string]any{"source": map[string]any{"path": "charts/infra"}}, nil),
+	}}
+	sourcePaths, appSetChildren := argoApplicationFacts(context.Background(), lister)
+	claims := collectArgoClaims(context.Background(), lister, sourcePaths, appSetFanouts(appSetChildren), nil)
+
+	if len(claims) != 1 {
+		t.Fatalf("claims = %d, want 1 (only the declared app): %+v", len(claims), claims)
+	}
+	c := claims[0]
+	if c.Identity == nil || c.Identity.Key != "apps/billing" || c.Identity.Source != SourceArgoPath || !c.Identity.Portable {
+		t.Fatalf("claim identity = %+v, want apps/billing argo-path portable", c.Identity)
+	}
+	if c.DestName != "prod-cluster" || c.DestNamespace != "billing" {
+		t.Fatalf("claim destination = %q/%q, want prod-cluster/billing", c.DestName, c.DestNamespace)
+	}
+	if len(c.Workloads) != 1 || c.Workloads[0].Kind != "Deployment" || c.Workloads[0].Name != "billing-api" {
+		t.Fatalf("claim workloads = %+v, want only the Deployment", c.Workloads)
+	}
+}
+
+// Fix: a raw/label workload that merely SHARES A NAME with an ApplicationSet
+// child (but isn't Argo-managed) must not be promoted to a portable argo-appset
+// identity via the bare-name key fallback.
+func TestIdentities_AppSetFanoutSkipsNonArgoRows(t *testing.T) {
+	// A plain Deployment named "billing-dev" (tier 0, not Argo-managed).
+	rows := []appRow{identRow("billing-dev", "prod", 0, "prod/app/billing-dev", "repo.dev/x:1")}
+	fan := appSetFanouts(map[string][]argoChild{
+		"billing": {{keys: []string{"argocd/billing-dev", "billing-dev"}, name: "billing-dev"}, {keys: []string{"argocd/billing-prod", "billing-prod"}, name: "billing-prod"}},
+	})
+	resolveAppIdentities(rows, nil, fan, nil)
+	if id := rows[0].Identity; id != nil && id.Source == SourceArgoAppSet {
+		t.Fatalf("non-Argo row falsely stamped argo-appset: %+v", id)
+	}
+}
+
+// Fix: the explicit annotation is authoritative+portable, so a row where only
+// SOME workloads carry it must NOT be promoted (partial annotation ≠ whole app).
+func TestIdentities_ExplicitAnnotationRequiresAllWorkloads(t *testing.T) {
+	r := identRow("svc", "dev", 0, "dev/app/svc", "ghcr.io/a:1", "ghcr.io/a:1")
+	r.Workloads[0].appAnnotation = "acme-svc"
+	// r.Workloads[1] has no annotation → not all agree.
+	rows := []appRow{r}
+	resolveAppIdentities(rows, nil, nil, nil)
+	if id := rows[0].Identity; id != nil && id.Source == SourceExplicit {
+		t.Fatalf("partial annotation should not yield explicit identity: %+v", id)
+	}
+
+	// All workloads annotated (same value) → explicit identity applies.
+	r2 := identRow("svc", "dev", 0, "dev/app/svc", "ghcr.io/a:1", "ghcr.io/a:1")
+	r2.Workloads[0].appAnnotation = "acme-svc"
+	r2.Workloads[1].appAnnotation = "acme-svc"
+	rows2 := []appRow{r2}
+	resolveAppIdentities(rows2, nil, nil, nil)
+	if id := rows2[0].Identity; id == nil || id.Source != SourceExplicit || id.Key != "acme-svc" {
+		t.Fatalf("fully-annotated row should be explicit: %+v", id)
+	}
+}
+
+// Fix: collectArgoClaims scopes to the caller's allowed namespaces — a
+// namespace-scoped request must not leak claims for Applications elsewhere.
+func TestCollectArgoClaims_NamespaceScoped(t *testing.T) {
+	app := func(ns, name, path string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"metadata": map[string]any{"namespace": ns, "name": name},
+			"spec":     map[string]any{"source": map[string]any{"path": path}},
+		}}
+	}
+	lister := &stubLister{items: []*unstructured.Unstructured{
+		app("team-a", "billing", "apps/billing/overlays/prod"),
+		app("team-b", "shipping", "apps/shipping/overlays/prod"),
+	}}
+	sp, asc := argoApplicationFacts(context.Background(), lister)
+	// Scoped to team-a only → no team-b claim.
+	claims := collectArgoClaims(context.Background(), lister, sp, appSetFanouts(asc), []string{"team-a"})
+	if len(claims) != 1 || claims[0].Identity.Key != "apps/billing" {
+		t.Fatalf("namespace-scoped claims = %+v, want only team-a's billing", claims)
+	}
+	// Unscoped (nil) → both.
+	if all := collectArgoClaims(context.Background(), lister, sp, appSetFanouts(asc), nil); len(all) != 2 {
+		t.Fatalf("unscoped claims = %d, want 2", len(all))
 	}
 }

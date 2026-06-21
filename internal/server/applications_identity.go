@@ -60,7 +60,31 @@ type appIdentity struct {
 	// participate in cross-cluster grouping. Local name/repo evidence must be
 	// scoped by the fleet consumer.
 	Portable bool `json:"portable,omitempty"`
+	// Source is the machine-readable provenance tier, so the fleet consumer can
+	// decide cross-cluster promotion on the SOURCE, not on a human evidence
+	// string. Declared GitOps ORIGINS (argo-path, argo-appset, flux-source) name a
+	// shared upstream and are collision-free across clusters; NAMES (label,
+	// name-stem, namespace) collide (two teams' "redis") and stay per-cluster.
+	Source string `json:"source,omitempty"`
 }
+
+// App identity provenance tiers (appIdentity.Source). The declaredOrigin set is
+// the only one a fleet consumer may auto-promote to cross-cluster portable.
+const (
+	SourceExplicit   = "explicit"    // app.skyhook.io/app annotation — user-declared, authoritative
+	SourceArgoPath   = "argo-path"   // declared Argo Application source path (origin)
+	SourceArgoAppSet = "argo-appset" // declared ApplicationSet fan-out (origin)
+	SourceFluxSource = "flux-source" // declared Flux source ref (origin)
+	SourceLabel      = "label"       // app.kubernetes.io/name — a NAME, collision-prone
+	SourceNameStem   = "name-stem"   // inferred name-stem — a NAME
+	SourceNamespace  = "namespace"   // namespace stem — a NAME
+)
+
+// appIdentityAnnotation is the explicit, user-declared cross-cluster app key. Set
+// the SAME value on an app's workloads in every cluster and Radar folds them — the
+// canonical answer to "how do I force grouping?" for non-GitOps apps. Deliberate
+// (zero-collision), so it is authoritative over every inferred/declared tier.
+const appIdentityAnnotation = "app.skyhook.io/app"
 
 // The ONLY hardcoded env vocabulary: the universal trio, kept solely because
 // promotion DIRECTION (dev < staging < prod) cannot be derived from a
@@ -238,7 +262,7 @@ type identityCandidate struct {
 // Two phases: discover which tokens are envs from the cluster's structure,
 // then form app groups using only qualified tokens. argoSourcePaths maps an
 // in-cluster Argo Application name → its source path.
-func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEnvLabels map[string]string) {
+func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appSetByKey map[string]appSetFanout, nsEnvLabels map[string]string) {
 	type rowInfo struct {
 		row       *appRow
 		readings  []reading
@@ -247,6 +271,7 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 		pathEnv   string
 		labelEnv  string // explicit env label (workload, else namespace)
 		nameLabel string // app.kubernetes.io/name, when the row's workloads agree
+		appAnno   string // app.skyhook.io/app explicit declaration, when workloads agree
 	}
 	infos := make([]rowInfo, 0, len(rows))
 	clusterNamespaces := map[string]bool{}
@@ -265,6 +290,7 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 		info := rowInfo{row: r, readings: readingsOf(r.Name, ns), repos: map[string]bool{}}
 		wlEnv, wlEnvAgree := "", true
 		wlName, wlNameAgree := "", true
+		wlApp, wlAppAgree, wlAppCount := "", true, 0
 		for _, w := range r.Workloads {
 			if repo := imageRepo(w.Image); repo != "" {
 				info.repos[repo] = true
@@ -283,6 +309,14 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 					wlNameAgree = false // disagreeing app names — not one app
 				}
 			}
+			if w.appAnnotation != "" {
+				wlAppCount++
+				if wlApp == "" {
+					wlApp = w.appAnnotation
+				} else if wlApp != w.appAnnotation {
+					wlAppAgree = false // disagreeing explicit keys — not one app
+				}
+			}
 		}
 		if wlEnv != "" && wlEnvAgree {
 			info.labelEnv = wlEnv
@@ -291,6 +325,12 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 		}
 		if wlName != "" && wlNameAgree {
 			info.nameLabel = wlName
+		}
+		// Explicit identity is authoritative + portable, so demand EVERY workload
+		// in the row carry the same value — a partial annotation must not promote
+		// the whole app (including unannotated components) to a portable identity.
+		if wlApp != "" && wlAppAgree && wlAppCount == len(r.Workloads) {
+			info.appAnno = wlApp
 		}
 		if r.Tier == 3 || r.Tier == 4 {
 			for _, key := range argoSourcePathKeys(r.Key) {
@@ -520,23 +560,51 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 			}
 		}
 		for _, c := range members {
-			conf, why, portable := "medium", "", false
+			conf, why, portable, source := "medium", "", false, SourceNameStem
 			switch {
 			case c.pathStem != "":
 				conf = "high"
 				portable = true
+				source = SourceArgoPath
 				why = "Argo CD source path " + c.pathStem + " (env overlay " + c.env + ")"
 			case c.labelEnv != "":
 				why = fmt.Sprintf("environment label %q + name/repo evidence", c.labelEnv)
 			case c.prio >= 2:
+				source = SourceNamespace
 				why = fmt.Sprintf("namespace stem %q + shared image repo %s", stem, shared)
 			case shared != "":
 				why = fmt.Sprintf("name stem %q + shared image repo %s", stem, shared)
 			default:
 				continue
 			}
-			c.row.Identity = &appIdentity{Key: stem, Env: c.env, Confidence: conf, Evidence: why, Portable: portable}
+			c.row.Identity = &appIdentity{Key: stem, Env: c.env, Confidence: conf, Evidence: why, Portable: portable, Source: source}
 		}
+	}
+
+	// Env for the standalone label/explicit tiers: an env already resolved by a
+	// stronger signal wins, else the explicit env label, else a declared overlay
+	// env, else the row's best structural reading (trio outranks discovered tokens,
+	// same precedence as phase 2's better()).
+	resolveStandaloneEnv := func(info *rowInfo) string {
+		switch {
+		case info.row.Identity != nil && info.row.Identity.Env != "":
+			return info.row.Identity.Env
+		case info.labelEnv != "":
+			return canonicalEnvToken(info.labelEnv)
+		case info.pathEnv != "":
+			return canonicalEnvToken(info.pathEnv)
+		}
+		for _, rd := range info.readings {
+			if _, isTrio := trioEnv(rd.token); isTrio {
+				return canonicalEnvToken(rd.token)
+			}
+		}
+		for _, rd := range info.readings {
+			if qualified[rd.token] {
+				return canonicalEnvToken(rd.token)
+			}
+		}
+		return ""
 	}
 
 	// Label tier — app.kubernetes.io/name is an explicit, cluster-agnostic app
@@ -559,39 +627,75 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 		if cur := info.row.Identity; cur != nil && cur.Confidence == "high" {
 			continue
 		}
-		env := ""
-		switch {
-		case info.row.Identity != nil && info.row.Identity.Env != "":
-			env = info.row.Identity.Env
-		case info.labelEnv != "":
-			env = canonicalEnvToken(info.labelEnv)
-		case info.pathEnv != "":
-			env = canonicalEnvToken(info.pathEnv)
-		default:
-			// Prefer a trio token over a discovered one (the universal ladder
-			// outranks affix tokens — same precedence as phase 2's better()), so
-			// e.g. a `prod` namespace wins over a stray `staging` name affix.
-			for _, rd := range info.readings {
-				if _, isTrio := trioEnv(rd.token); isTrio {
-					env = canonicalEnvToken(rd.token)
-					break
-				}
-			}
-			if env == "" {
-				for _, rd := range info.readings {
-					if qualified[rd.token] {
-						env = canonicalEnvToken(rd.token)
-						break
-					}
-				}
-			}
-		}
 		info.row.Identity = &appIdentity{
 			Key:        info.nameLabel,
-			Env:        env,
+			Env:        resolveStandaloneEnv(info),
 			Confidence: "high",
 			Evidence:   fmt.Sprintf("app.kubernetes.io/name=%q", info.nameLabel),
 			Portable:   false,
+			Source:     SourceLabel,
+		}
+	}
+
+	// ApplicationSet fan-out tier — a single-app fan-out set DECLARES that its
+	// children are env-variants of one app, so its stem is a portable identity.
+	// The join is the set ownership (declared); appSetFanouts already confirmed the
+	// shape. Overrides the weaker name/label tiers but NOT a declared Argo source
+	// path (an app keeps one GitOps key across clusters) or the explicit tier.
+	if len(appSetByKey) > 0 {
+		for i := range infos {
+			info := &infos[i]
+			// Argo rows only (tier 3 tracking-id / 4 instance, as in the F1 path
+			// gate above). A raw or label-only workload that merely shares a name
+			// with an ApplicationSet child must NOT match the set via the bare-name
+			// key fallback — that would stamp a false portable identity onto an app
+			// the set doesn't manage.
+			if info.row.Tier != 3 && info.row.Tier != 4 {
+				continue
+			}
+			if cur := info.row.Identity; cur != nil && (cur.Source == SourceArgoPath || cur.Source == SourceExplicit) {
+				continue
+			}
+			var fan *appSetFanout
+			for _, key := range argoSourcePathKeys(info.row.Key) {
+				if f, ok := appSetByKey[key]; ok {
+					fan = &f
+					break
+				}
+			}
+			if fan == nil {
+				continue
+			}
+			env := fan.env
+			if env == "" {
+				env = resolveStandaloneEnv(info)
+			}
+			info.row.Identity = &appIdentity{
+				Key:        fan.stem,
+				Env:        env,
+				Confidence: "high",
+				Evidence:   fmt.Sprintf("ApplicationSet fan-out %q (env %s)", fan.stem, env),
+				Portable:   true,
+				Source:     SourceArgoAppSet,
+			}
+		}
+	}
+
+	// Explicit tier — app.skyhook.io/app is the user's deliberate cross-cluster
+	// declaration: authoritative (overrides every inferred/declared tier) and
+	// portable (the user opted in, so it is collision-free by construction).
+	for i := range infos {
+		info := &infos[i]
+		if info.appAnno == "" {
+			continue
+		}
+		info.row.Identity = &appIdentity{
+			Key:        info.appAnno,
+			Env:        resolveStandaloneEnv(info),
+			Confidence: "high",
+			Evidence:   fmt.Sprintf("%s=%q", appIdentityAnnotation, info.appAnno),
+			Portable:   true,
+			Source:     SourceExplicit,
 		}
 	}
 }
@@ -667,20 +771,66 @@ func argoSourcePathKeys(rowKey string) []string {
 	return []string{ns + "/" + name, name}
 }
 
-// argoSourcePaths maps each in-cluster Argo Application to a source path
-// carrying an env segment — the F1 evidence feed. Namespaced keys are always
-// emitted; bare-name fallback is emitted only when the name is unambiguous.
-// Multi-source apps pick the first env-bearing path. Missing CRD / no Argo →
-// empty map (F2 still works).
-func argoSourcePaths(ctx context.Context, cache resourceLister) map[string]string {
-	out := map[string]string{}
+// nameSegments splits a resource name on - and _ into its tokens.
+func nameSegments(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '_' })
+}
+
+// trivialStems recur across unrelated apps, so they must never anchor a grouping.
+var trivialStems = map[string]bool{
+	"api": true, "app": true, "web": true, "ui": true, "svc": true,
+	"service": true, "server": true, "worker": true, "frontend": true,
+	"backend": true, "gateway": true, "proxy": true,
+}
+
+func isTrivialStem(stem string) bool {
+	return len(stem) < 3 || trivialStems[strings.ToLower(stem)]
+}
+
+// argoChild is one ApplicationSet-generated Application — the appKey forms it
+// maps to (ns/name + bare name) plus the bare Application name used to test the
+// set's fan-out shape.
+type argoChild struct {
+	keys []string
+	name string
+}
+
+// appSetOwnerName returns the ApplicationSet that generated this Application:
+// the controller ownerReference (survives the cache transform), falling back to
+// the argocd.argoproj.io/application-set-name label when a GC/preserve policy
+// drops the ownerRef. "" when the Application is not set-generated.
+func appSetOwnerName(item *unstructured.Unstructured) string {
+	for _, ref := range item.GetOwnerReferences() {
+		if ref.Kind == "ApplicationSet" && ref.Name != "" {
+			return ref.Name
+		}
+	}
+	return item.GetLabels()["argocd.argoproj.io/application-set-name"]
+}
+
+// argoApplicationFacts lists in-cluster Argo Applications once and returns the F1
+// source-path feed (appKey → env-bearing path) plus the ApplicationSet → children
+// grouping that drives the declared argo-appset fan-out tier. Missing CRD / no
+// Argo → empty maps (the name/label tiers still work).
+func argoApplicationFacts(ctx context.Context, cache resourceLister) (sourcePaths map[string]string, appSetChildren map[string][]argoChild) {
+	sourcePaths = map[string]string{}
+	appSetChildren = map[string][]argoChild{}
 	byName := map[string]string{}
 	ambiguous := map[string]bool{}
 	items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io")
 	if err != nil {
-		return out
+		return sourcePaths, appSetChildren
 	}
 	for _, item := range items {
+		name := item.GetName()
+		nsKey := name
+		if ns := item.GetNamespace(); ns != "" {
+			nsKey = ns + "/" + name
+		}
+		if set := appSetOwnerName(item); set != "" {
+			appSetChildren[set] = append(appSetChildren[set], argoChild{keys: []string{nsKey, name}, name: name})
+		}
+
 		spec, _ := item.Object["spec"].(map[string]any)
 		if spec == nil {
 			continue
@@ -702,12 +852,7 @@ func argoSourcePaths(ctx context.Context, cache resourceLister) map[string]strin
 		}
 		for _, p := range paths {
 			if stem, _ := pathStemEnv(p); stem != "" {
-				name := item.GetName()
-				nsKey := name
-				if ns := item.GetNamespace(); ns != "" {
-					nsKey = ns + "/" + name
-				}
-				out[nsKey] = p
+				sourcePaths[nsKey] = p
 				if prev, exists := byName[name]; exists && prev != p {
 					delete(byName, name)
 					ambiguous[name] = true
@@ -721,7 +866,188 @@ func argoSourcePaths(ctx context.Context, cache resourceLister) map[string]strin
 		}
 	}
 	for name, path := range byName {
-		out[name] = path
+		sourcePaths[name] = path
+	}
+	return sourcePaths, appSetChildren
+}
+
+// argoWorkloadKinds are the status.resources kinds the hub matches against a
+// destination cluster's app rows. Config/Service/RBAC resources are not workloads
+// and would mis-target rows, so only true workloads carry a claim.
+var argoWorkloadKinds = map[string]bool{
+	"Deployment": true, "StatefulSet": true, "DaemonSet": true,
+	"ReplicaSet": true, "CronJob": true, "Job": true, "Rollout": true,
+}
+
+// collectArgoClaims emits one claim per Argo Application that carries a declared
+// identity (an Argo source-path stem, or a validated ApplicationSet env fan-out),
+// so the hub can stamp that identity onto the destination cluster's workload rows
+// in a hub-spoke topology. Applications with no declared identity are skipped —
+// name/label identity never propagates across clusters.
+func collectArgoClaims(ctx context.Context, cache resourceLister, sourcePaths map[string]string, appSetByKey map[string]appSetFanout, namespaces []string) []argoClaim {
+	items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io")
+	if err != nil {
+		return nil
+	}
+	// Scope claims to the caller's allowed namespaces (when filtered): an
+	// Application is a namespaced resource, and its claim exposes its destination +
+	// managed workloads, so a namespace-scoped user must not receive claims for
+	// Applications outside their visibility. Empty filter = unscoped (all).
+	var allowed map[string]bool
+	if len(namespaces) > 0 {
+		allowed = make(map[string]bool, len(namespaces))
+		for _, ns := range namespaces {
+			allowed[ns] = true
+		}
+	}
+	var claims []argoClaim
+	for _, item := range items {
+		if allowed != nil && !allowed[item.GetNamespace()] {
+			continue
+		}
+		name := item.GetName()
+		nsKey := name
+		if ns := item.GetNamespace(); ns != "" {
+			nsKey = ns + "/" + name
+		}
+
+		// Declared identity: ApplicationSet fan-out first (a set declares the
+		// sibling relationship), else an env-bearing source path.
+		var id *appIdentity
+		if fan, ok := appSetByKey[nsKey]; ok {
+			id = &appIdentity{Key: fan.stem, Env: fan.env, Confidence: "high", Portable: true, Source: SourceArgoAppSet,
+				Evidence: fmt.Sprintf("ApplicationSet fan-out %q (env %s)", fan.stem, fan.env)}
+		} else if path, ok := sourcePaths[nsKey]; ok {
+			if stem, env := pathStemEnv(path); stem != "" {
+				id = &appIdentity{Key: stem, Env: env, Confidence: "high", Portable: true, Source: SourceArgoPath,
+					Evidence: "Argo CD source path " + stem + " (env overlay " + env + ")"}
+			}
+		}
+		if id == nil {
+			continue
+		}
+
+		spec, _ := item.Object["spec"].(map[string]any)
+		dest, _ := spec["destination"].(map[string]any)
+		claim := argoClaim{Identity: id}
+		if dest != nil {
+			claim.DestServer, _ = dest["server"].(string)
+			claim.DestName, _ = dest["name"].(string)
+			claim.DestNamespace, _ = dest["namespace"].(string)
+		}
+		claim.Workloads = argoManagedWorkloads(item)
+		claims = append(claims, claim)
+	}
+	return claims
+}
+
+// argoManagedWorkloads extracts the workload resources an Argo Application
+// manages from status.resources (the hub matches these against destination rows).
+func argoManagedWorkloads(item *unstructured.Unstructured) []workloadRef {
+	resources, _, _ := unstructured.NestedSlice(item.Object, "status", "resources")
+	var out []workloadRef
+	for _, r := range resources {
+		m, _ := r.(map[string]any)
+		if m == nil {
+			continue
+		}
+		kind, _ := m["kind"].(string)
+		if !argoWorkloadKinds[kind] {
+			continue
+		}
+		ns, _ := m["namespace"].(string)
+		nm, _ := m["name"].(string)
+		if nm == "" {
+			continue
+		}
+		out = append(out, workloadRef{Kind: kind, Namespace: ns, Name: nm})
+	}
+	return out
+}
+
+// appSetFanout is one child's declared identity within a single-app fan-out set.
+type appSetFanout struct {
+	stem string
+	env  string // canonical trio env
+}
+
+// appSetFanouts decides, per ApplicationSet, whether the set is a SINGLE-APP
+// fan-out (one app across envs) — the only shape whose set name is a valid app
+// identity — and returns the declared stem+env for each child appKey. A set is a
+// fan-out only when its children are identical except for ONE token position
+// whose values are ALL trio envs (dev/staging/prod). A multi-app BUNDLE set
+// (children with differing app stems) or a cluster/region fan-out (differing
+// tokens that aren't trio envs — those get their env from the hub) yields
+// nothing: the set name would over-merge unrelated apps.
+//
+// This is bounded to one declared sibling set, so it is NOT a global name-stem
+// match — the join is the ApplicationSet ownership; the token check only confirms
+// the set's shape.
+func appSetFanouts(appSetChildren map[string][]argoChild) map[string]appSetFanout {
+	out := map[string]appSetFanout{}
+	for _, children := range appSetChildren {
+		if len(children) < 2 {
+			continue
+		}
+		segsByChild := make([][]string, len(children))
+		width := -1
+		uniform := true
+		for i, c := range children {
+			segsByChild[i] = nameSegments(c.name)
+			if width == -1 {
+				width = len(segsByChild[i])
+			} else if len(segsByChild[i]) != width {
+				uniform = false
+			}
+		}
+		if !uniform || width < 2 {
+			continue // children must share the SAME shape to be one app's env-fan-out
+		}
+		// Find the single token position that varies; every other must be constant.
+		varyPos := -1
+		ok := true
+		for pos := 0; pos < width && ok; pos++ {
+			differs := false
+			for i := 1; i < len(segsByChild); i++ {
+				if !strings.EqualFold(segsByChild[i][pos], segsByChild[0][pos]) {
+					differs = true
+					break
+				}
+			}
+			if differs {
+				if varyPos != -1 {
+					ok = false // more than one varying position — not a clean env-fan-out
+				}
+				varyPos = pos
+			}
+		}
+		if !ok || varyPos == -1 {
+			continue
+		}
+		// The varying tokens must ALL be trio envs (declared single-app fan-out);
+		// otherwise the set varies by app or by cluster, not by env.
+		allEnv := true
+		for i := range children {
+			if _, isTrio := trioEnv(segsByChild[i][varyPos]); !isTrio {
+				allEnv = false
+				break
+			}
+		}
+		if !allEnv {
+			continue
+		}
+		stemSegs := append([]string{}, segsByChild[0][:varyPos]...)
+		stemSegs = append(stemSegs, segsByChild[0][varyPos+1:]...)
+		stem := strings.Join(stemSegs, "-")
+		if isTrivialStem(stem) {
+			continue
+		}
+		for i, c := range children {
+			env, _ := trioEnv(segsByChild[i][varyPos])
+			for _, k := range c.keys {
+				out[k] = appSetFanout{stem: stem, env: env}
+			}
+		}
 	}
 	return out
 }

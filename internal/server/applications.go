@@ -45,7 +45,31 @@ import (
 
 // applicationsResponse is the GET /api/applications body.
 type applicationsResponse struct {
-	Applications []appRow `json:"applications"`
+	Applications []appRow    `json:"applications"`
+	ArgoClaims   []argoClaim `json:"argoClaims,omitempty"`
+}
+
+// argoClaim propagates a declared Argo Application identity to the cluster its
+// workloads actually run in. In hub-spoke Argo the Application CR lives in a
+// control cluster while its workloads run in a member cluster, so this cluster's
+// workload rows never see the Application — only the fleet hub, which knows every
+// cluster, can stamp the identity onto the destination's rows. Emitted only for
+// Applications with a DECLARED-portable identity (Argo source path / validated
+// ApplicationSet fan-out); name/label apps are never propagated cross-cluster.
+type argoClaim struct {
+	Identity      *appIdentity  `json:"identity"`
+	DestServer    string        `json:"destServer,omitempty"`
+	DestName      string        `json:"destName,omitempty"`
+	DestNamespace string        `json:"destNamespace,omitempty"`
+	Workloads     []workloadRef `json:"workloads,omitempty"` // managed workloads (status.resources)
+}
+
+// workloadRef identifies one managed workload for the hub to match against a
+// destination cluster's rows.
+type workloadRef struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
 }
 
 const applicationsCacheTTL = 60 * time.Second
@@ -58,8 +82,9 @@ var (
 )
 
 type applicationsCacheEntry struct {
-	at   time.Time
-	rows []appRow
+	at     time.Time
+	rows   []appRow
+	claims []argoClaim
 }
 
 // appRow is one logical app in this cluster.
@@ -133,6 +158,9 @@ type appWorkload struct {
 	// identity the chart/author declared. The strongest identity signal we have:
 	// app-identity resolver input, not on the wire.
 	nameLabel string
+	// appAnnotation is app.skyhook.io/app — the user's explicit cross-cluster app
+	// declaration (authoritative, portable). Resolver input, not on the wire.
+	appAnnotation string
 }
 
 // handleListApplications serves GET /api/applications.
@@ -182,20 +210,23 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	entry, hit := applicationsCache[cacheKey]
 	applicationsCacheMu.Unlock()
 	if hit && time.Since(entry.at) < applicationsCacheTTL {
-		return &applicationsResponse{Applications: entry.rows}, nil
+		return &applicationsResponse{Applications: entry.rows, ArgoClaims: entry.claims}, nil
 	}
 
 	g := buildAppGraph(cache, namespaces)
 	wls := collectAppWorkloads(cache, namespaces, g)
 	rows := groupApplications(wls)
-	resolveAppIdentities(rows, argoSourcePaths(ctx, cache), namespaceEnvLabels(cache))
+	sourcePaths, appSetChildren := argoApplicationFacts(ctx, cache)
+	appSetByKey := appSetFanouts(appSetChildren)
+	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache))
+	claims := collectArgoClaims(ctx, cache, sourcePaths, appSetByKey, namespaces)
 	applicationsCacheMu.Lock()
 	if len(applicationsCache) >= applicationsCacheMaxEntries {
 		evictOldestApplicationsCacheEntry()
 	}
-	applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows}
+	applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows, claims: claims}
 	applicationsCacheMu.Unlock()
-	return &applicationsResponse{Applications: rows}, nil
+	return &applicationsResponse{Applications: rows, ArgoClaims: claims}, nil
 }
 
 func evictOldestApplicationsCacheEntry() {
@@ -417,6 +448,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				Reason:        reason,
 				envLabel:      envLabelOf(lbls),
 				nameLabel:     lbls["app.kubernetes.io/name"],
+				appAnnotation: strings.TrimSpace(anns[appIdentityAnnotation]),
 			},
 			overlay:  subject.ResolveOverlay(&meta, false),
 			events:   eventsForWorkload(eventsByObj[ns], kind, name, pods),

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { compareVersions, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, type AppGroupFoldEntry } from './applications'
+import { compareVersions, appGroupingExplainer, APP_IDENTITY_ANNOTATION, appGroupLagMessage, matchWorkloadAcrossInstances, foldAppGroups, identityEnvInferred, type AppGroupFoldEntry } from './applications'
 
 describe('compareVersions', () => {
   it('orders semver', () => {
@@ -203,5 +203,23 @@ describe('foldAppGroups', () => {
       localScope: (e) => e.row.key,
     })
     expect(grouped.map((r) => r.kind)).toEqual(['group'])
+  })
+})
+
+describe('appGroupingExplainer', () => {
+  it('declared origins fold across clusters with no fix needed', () => {
+    for (const source of ['explicit', 'argo-path', 'argo-appset', 'flux-source']) {
+      const e = appGroupingExplainer({ key: 'k', env: 'prod', confidence: 'high', evidence: '', source })
+      expect(e.folds).toBe(true)
+      expect(e.fix).toBeUndefined()
+    }
+  })
+
+  it('NAME sources stay per-cluster and tell the user how to fold', () => {
+    for (const source of ['label', 'name-stem', 'namespace', undefined]) {
+      const e = appGroupingExplainer({ key: 'k', env: 'prod', confidence: 'high', evidence: '', source })
+      expect(e.folds).toBe(false)
+      expect(e.fix).toContain(APP_IDENTITY_ANNOTATION)
+    }
   })
 })
