@@ -81,6 +81,8 @@ export function appSourceLabel(source?: string): string {
       return 'its ApplicationSet (env fan-out)'
     case 'flux-source':
       return 'its Flux source'
+    case 'addon':
+      return 'a shared add-on name + chart/image'
     case 'label':
       return 'the app.kubernetes.io/name label'
     case 'name-stem':
