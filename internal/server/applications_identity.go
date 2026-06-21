@@ -812,14 +812,14 @@ func appSetOwnerName(item *unstructured.Unstructured) string {
 // source-path feed (appKey → env-bearing path) plus the ApplicationSet → children
 // grouping that drives the declared argo-appset fan-out tier. Missing CRD / no
 // Argo → empty maps (the name/label tiers still work).
-func argoApplicationFacts(ctx context.Context, cache resourceLister) (sourcePaths map[string]string, appSetChildren map[string][]argoChild) {
+func argoApplicationFacts(ctx context.Context, cache resourceLister) (sourcePaths map[string]string, appSetChildren map[string][]argoChild, items []*unstructured.Unstructured) {
 	sourcePaths = map[string]string{}
 	appSetChildren = map[string][]argoChild{}
 	byName := map[string]string{}
 	ambiguous := map[string]bool{}
 	items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io")
 	if err != nil {
-		return sourcePaths, appSetChildren
+		return sourcePaths, appSetChildren, nil
 	}
 	for _, item := range items {
 		name := item.GetName()
@@ -868,7 +868,7 @@ func argoApplicationFacts(ctx context.Context, cache resourceLister) (sourcePath
 	for name, path := range byName {
 		sourcePaths[name] = path
 	}
-	return sourcePaths, appSetChildren
+	return sourcePaths, appSetChildren, items
 }
 
 // argoWorkloadKinds are the status.resources kinds the hub matches against a
@@ -884,11 +884,7 @@ var argoWorkloadKinds = map[string]bool{
 // so the hub can stamp that identity onto the destination cluster's workload rows
 // in a hub-spoke topology. Applications with no declared identity are skipped —
 // name/label identity never propagates across clusters.
-func collectArgoClaims(ctx context.Context, cache resourceLister, sourcePaths map[string]string, appSetByKey map[string]appSetFanout, namespaces []string) []argoClaim {
-	items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io")
-	if err != nil {
-		return nil
-	}
+func collectArgoClaims(items []*unstructured.Unstructured, sourcePaths map[string]string, appSetByKey map[string]appSetFanout, namespaces []string) []argoClaim {
 	// Scope claims to the caller's visibility. namespaces is nil for full access
 	// (no-auth local / the fleet hub), a non-nil EMPTY slice for explicit no
 	// access (noNamespaceAccess), and a non-nil non-empty set when scoped. A claim

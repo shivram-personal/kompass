@@ -455,7 +455,7 @@ func TestArgoSourcePaths(t *testing.T) {
 		argoApp("no-env-path", map[string]any{"source": map[string]any{"path": "charts/api"}}),
 		argoApp("malformed", map[string]any{"source": "not-a-map"}),
 	}}
-	got, _ := argoApplicationFacts(context.Background(), lister)
+	got, _, _ := argoApplicationFacts(context.Background(), lister)
 	want := map[string]string{
 		"billing-staging": "billing/deploy/overlays/staging",
 		"multi":           "apps/overlays/dev",
@@ -475,7 +475,7 @@ func TestArgoSourcePaths_AmbiguousSameNameRefuses(t *testing.T) {
 		argoAppInNamespace("team-a", "billing-staging", map[string]any{"source": map[string]any{"path": "team-a/billing/overlays/staging"}}),
 		argoAppInNamespace("team-b", "billing-staging", map[string]any{"source": map[string]any{"path": "team-b/billing/overlays/staging"}}),
 	}}
-	got, _ := argoApplicationFacts(context.Background(), lister)
+	got, _, _ := argoApplicationFacts(context.Background(), lister)
 	if got["billing-staging"] != "" {
 		t.Fatalf("bare ambiguous argoSourcePaths[billing-staging] = %q, want empty", got["billing-staging"])
 	}
@@ -723,8 +723,8 @@ func TestCollectArgoClaims(t *testing.T) {
 		// No declared identity (env-less path) → no claim.
 		argoAppFull("infra", map[string]any{"source": map[string]any{"path": "charts/infra"}}, nil),
 	}}
-	sourcePaths, appSetChildren := argoApplicationFacts(context.Background(), lister)
-	claims := collectArgoClaims(context.Background(), lister, sourcePaths, appSetFanouts(appSetChildren), nil)
+	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(context.Background(), lister)
+	claims := collectArgoClaims(argoItems, sourcePaths, appSetFanouts(appSetChildren), nil)
 
 	if len(claims) != 1 {
 		t.Fatalf("claims = %d, want 1 (only the declared app): %+v", len(claims), claims)
@@ -798,21 +798,21 @@ func TestCollectArgoClaims_NamespaceScoped(t *testing.T) {
 		app("billing", "apps/billing/overlays/prod", "team-a", "billing-api"),
 		app("shipping", "apps/shipping/overlays/prod", "team-b", "shipping-api"),
 	}}
-	sp, asc := argoApplicationFacts(context.Background(), lister)
+	sp, asc, argoItems := argoApplicationFacts(context.Background(), lister)
 	asf := appSetFanouts(asc)
 
 	// Scoped to team-a → only billing (its workload is visible), even though both
 	// Applications live in argocd, which is NOT in the allowed set.
-	claims := collectArgoClaims(context.Background(), lister, sp, asf, []string{"team-a"})
+	claims := collectArgoClaims(argoItems, sp, asf, []string{"team-a"})
 	if len(claims) != 1 || claims[0].Identity.Key != "apps/billing" {
 		t.Fatalf("namespace-scoped claims = %+v, want only billing (team-a workload visible)", claims)
 	}
 	// Explicit no access (non-nil empty) → nothing.
-	if none := collectArgoClaims(context.Background(), lister, sp, asf, []string{}); len(none) != 0 {
+	if none := collectArgoClaims(argoItems, sp, asf, []string{}); len(none) != 0 {
 		t.Fatalf("no-access claims = %d, want 0", len(none))
 	}
 	// Full access (nil) → both.
-	if all := collectArgoClaims(context.Background(), lister, sp, asf, nil); len(all) != 2 {
+	if all := collectArgoClaims(argoItems, sp, asf, nil); len(all) != 2 {
 		t.Fatalf("unscoped claims = %d, want 2", len(all))
 	}
 }
@@ -844,8 +844,8 @@ func TestCollectArgoClaims_PrefersPathOverAppSet(t *testing.T) {
 		"spec": map[string]any{"source": map[string]any{"path": "apps/billing/overlays/dev"}},
 	}}
 	lister := &stubLister{items: []*unstructured.Unstructured{item, sib}}
-	sp, asc := argoApplicationFacts(context.Background(), lister)
-	claims := collectArgoClaims(context.Background(), lister, sp, appSetFanouts(asc), nil)
+	sp, asc, argoItems := argoApplicationFacts(context.Background(), lister)
+	claims := collectArgoClaims(argoItems, sp, appSetFanouts(asc), nil)
 	for _, c := range claims {
 		if c.Identity != nil && c.Identity.Key == "billing-api" {
 			continue

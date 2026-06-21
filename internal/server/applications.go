@@ -216,10 +216,10 @@ func ListApplications(ctx context.Context, namespaces []string) (*applicationsRe
 	g := buildAppGraph(cache, namespaces)
 	wls := collectAppWorkloads(cache, namespaces, g)
 	rows := groupApplications(wls)
-	sourcePaths, appSetChildren := argoApplicationFacts(ctx, cache)
+	sourcePaths, appSetChildren, argoItems := argoApplicationFacts(ctx, cache)
 	appSetByKey := appSetFanouts(appSetChildren)
 	resolveAppIdentities(rows, sourcePaths, appSetByKey, namespaceEnvLabels(cache))
-	claims := collectArgoClaims(ctx, cache, sourcePaths, appSetByKey, namespaces)
+	claims := collectArgoClaims(argoItems, sourcePaths, appSetByKey, namespaces)
 	applicationsCacheMu.Lock()
 	if len(applicationsCache) >= applicationsCacheMaxEntries {
 		evictOldestApplicationsCacheEntry()
