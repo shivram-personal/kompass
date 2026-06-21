@@ -129,6 +129,10 @@ type appWorkload struct {
 	// envLabel is the explicit environment label, when the workload carries
 	// one (see envLabelOf) — app-identity resolver input, not on the wire.
 	envLabel string
+	// nameLabel is app.kubernetes.io/name — the explicit, cluster-agnostic app
+	// identity the chart/author declared. The strongest identity signal we have:
+	// app-identity resolver input, not on the wire.
+	nameLabel string
 }
 
 // handleListApplications serves GET /api/applications.
@@ -412,6 +416,7 @@ func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGr
 				Restarts:      restarts,
 				Reason:        reason,
 				envLabel:      envLabelOf(lbls),
+				nameLabel:     lbls["app.kubernetes.io/name"],
 			},
 			overlay:  subject.ResolveOverlay(&meta, false),
 			events:   eventsForWorkload(eventsByObj[ns], kind, name, pods),

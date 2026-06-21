@@ -498,3 +498,83 @@ func TestIdentities_ArgoSourcePathUsesNamespacedKey(t *testing.T) {
 		t.Fatalf("namespaced Argo path identities = %+v / %+v, want portable billing", a, b)
 	}
 }
+
+// withName stamps app.kubernetes.io/name on every workload of a row.
+func withName(r appRow, nameLabel string) appRow {
+	for i := range r.Workloads {
+		r.Workloads[i].nameLabel = nameLabel
+	}
+	return r
+}
+
+// A single-instance row with an app.kubernetes.io/name label gets a clean,
+// high-confidence identity keyed on the label — no in-cluster group needed. It
+// is NOT portable on its own: cross-cluster folding is the hub's corroborated
+// call (a bare label like "api" must not collapse unrelated apps globally).
+func TestIdentities_LabelGivesCleanSingletonKey(t *testing.T) {
+	rows := []appRow{
+		withName(identRow("koala-backend-xyz", "prod", 0, "prod/app/koala-backend-xyz", "ghcr.io/k/koala-backend:1"), "koala-backend"),
+	}
+	resolveAppIdentities(rows, nil, nil)
+	id := rows[0].Identity
+	if id == nil || id.Key != "koala-backend" || id.Confidence != "high" {
+		t.Fatalf("label identity not set high-confidence: %+v", id)
+	}
+	if id.Portable {
+		t.Errorf("bare label must not be standalone-portable: %+v", id)
+	}
+	if id.Env != "prod" {
+		t.Errorf("env = %q, want prod", id.Env)
+	}
+}
+
+// The label upgrades a weaker name-stem identity to a clean, high-confidence
+// declared key (portability stays the hub's call).
+func TestIdentities_LabelUpgradesNameStem(t *testing.T) {
+	rows := []appRow{
+		withName(identRow("widget", "dev", 0, "dev/app/widget", "ghcr.io/k/widget:1"), "widget"),
+		withName(identRow("widget", "prod", 0, "prod/app/widget", "ghcr.io/k/widget:2"), "widget"),
+	}
+	resolveAppIdentities(rows, nil, nil)
+	for i := range rows {
+		id := rows[i].Identity
+		if id == nil || id.Key != "widget" || id.Confidence != "high" {
+			t.Fatalf("expected high-confidence label key, got %+v", id)
+		}
+	}
+}
+
+// A declared Argo source-path identity (equally high confidence, more specific
+// about the env overlay) is NOT overwritten by the name label.
+func TestIdentities_LabelDoesNotOverrideArgoPath(t *testing.T) {
+	rows := []appRow{
+		withName(identRow("billing-staging", "staging", 4, "/Application/billing-staging", "ghcr.io/k/billing:1"), "billing"),
+		identRow("billing-dev", "dev", 4, "/Application/billing-dev", "ghcr.io/k/billing:2"),
+	}
+	resolveAppIdentities(rows, map[string]string{
+		"billing-staging": "billing/deploy/overlays/staging",
+		"billing-dev":     "billing/deploy/overlays/dev",
+	}, nil)
+	// The declared Argo identity must survive — its evidence still cites the
+	// source path, not the name label (which would mean the label clobbered it).
+	id := identOf(t, rows, "billing-staging")
+	if id == nil || !strings.Contains(id.Evidence, "Argo CD source path") {
+		t.Fatalf("Argo path identity overridden by label: %+v", id)
+	}
+	if id.Env != "staging" {
+		t.Errorf("Argo overlay env lost: %+v", id)
+	}
+}
+
+// Workloads disagreeing on app.kubernetes.io/name are not one app — no label
+// identity (and a lone row forms no group either).
+func TestIdentities_DisagreeingNameLabelsIgnored(t *testing.T) {
+	r := identRow("multi", "prod", 0, "prod/app/multi", "ghcr.io/k/multi:1", "ghcr.io/k/multi:1")
+	r.Workloads[0].nameLabel = "alpha"
+	r.Workloads[1].nameLabel = "beta"
+	rows := []appRow{r}
+	resolveAppIdentities(rows, nil, nil)
+	if rows[0].Identity != nil {
+		t.Fatalf("disagreeing name labels should not yield identity: %+v", rows[0].Identity)
+	}
+}

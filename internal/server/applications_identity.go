@@ -240,12 +240,13 @@ type identityCandidate struct {
 // in-cluster Argo Application name → its source path.
 func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEnvLabels map[string]string) {
 	type rowInfo struct {
-		row      *appRow
-		readings []reading
-		repos    map[string]bool
-		pathStem string
-		pathEnv  string
-		labelEnv string // explicit env label (workload, else namespace)
+		row       *appRow
+		readings  []reading
+		repos     map[string]bool
+		pathStem  string
+		pathEnv   string
+		labelEnv  string // explicit env label (workload, else namespace)
+		nameLabel string // app.kubernetes.io/name, when the row's workloads agree
 	}
 	infos := make([]rowInfo, 0, len(rows))
 	clusterNamespaces := map[string]bool{}
@@ -263,6 +264,7 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 		}
 		info := rowInfo{row: r, readings: readingsOf(r.Name, ns), repos: map[string]bool{}}
 		wlEnv, wlEnvAgree := "", true
+		wlName, wlNameAgree := "", true
 		for _, w := range r.Workloads {
 			if repo := imageRepo(w.Image); repo != "" {
 				info.repos[repo] = true
@@ -274,11 +276,21 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 					wlEnvAgree = false // disagreeing labels — refuse the tier
 				}
 			}
+			if w.nameLabel != "" {
+				if wlName == "" {
+					wlName = w.nameLabel
+				} else if wlName != w.nameLabel {
+					wlNameAgree = false // disagreeing app names — not one app
+				}
+			}
 		}
 		if wlEnv != "" && wlEnvAgree {
 			info.labelEnv = wlEnv
 		} else if v := nsEnvLabels[ns]; v != "" {
 			info.labelEnv = v
+		}
+		if wlName != "" && wlNameAgree {
+			info.nameLabel = wlName
 		}
 		if r.Tier == 3 || r.Tier == 4 {
 			for _, key := range argoSourcePathKeys(r.Key) {
@@ -524,6 +536,51 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 				continue
 			}
 			c.row.Identity = &appIdentity{Key: stem, Env: c.env, Confidence: conf, Evidence: why, Portable: portable}
+		}
+	}
+
+	// Label tier — app.kubernetes.io/name is an explicit, cluster-agnostic app
+	// identity the chart/author declared. Unlike a name stem it needs no
+	// affix-stripping and no in-cluster group to corroborate, so it stands alone
+	// (single-instance rows included) and gives a clean, cluster-agnostic key.
+	//
+	// It is NOT portable on its own, though: a bare label is a per-cluster
+	// identity, not a cross-cluster guarantee — a generic name ("api", "web") or
+	// a reused chart name would otherwise collapse unrelated apps across clusters.
+	// Cross-cluster folding is the fleet consumer's corroborated decision (it has
+	// the cluster names + cross-cluster repo/env signal the per-cluster resolver
+	// lacks). The label still upgrades the weaker name-stem / namespace tiers and
+	// does NOT override a declared Argo source-path identity.
+	for i := range infos {
+		info := &infos[i]
+		if info.nameLabel == "" {
+			continue
+		}
+		if cur := info.row.Identity; cur != nil && cur.Confidence == "high" {
+			continue
+		}
+		env := ""
+		switch {
+		case info.row.Identity != nil && info.row.Identity.Env != "":
+			env = info.row.Identity.Env
+		case info.labelEnv != "":
+			env = canonicalEnvToken(info.labelEnv)
+		case info.pathEnv != "":
+			env = canonicalEnvToken(info.pathEnv)
+		default:
+			for _, rd := range info.readings {
+				if _, isTrio := trioEnv(rd.token); isTrio || qualified[rd.token] {
+					env = canonicalEnvToken(rd.token)
+					break
+				}
+			}
+		}
+		info.row.Identity = &appIdentity{
+			Key:        info.nameLabel,
+			Env:        env,
+			Confidence: "high",
+			Evidence:   fmt.Sprintf("app.kubernetes.io/name=%q", info.nameLabel),
+			Portable:   false,
 		}
 	}
 }
