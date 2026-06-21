@@ -9,6 +9,7 @@ import {
   Copy,
   Check,
   ShieldCheck,
+  ChevronRight,
 } from "lucide-react";
 import {
   streamDiagnose,
@@ -40,8 +41,8 @@ export function DiagnosePanel({
   const hasConsent =
     typeof window !== "undefined" && localStorage.getItem(CONSENT_KEY) === "1";
   const [phase, setPhase] = useState<Phase>(hasConsent ? "running" : "consent");
-  const [steps, setSteps] = useState<DiagnoseStep[]>([]);
-  const [narration, setNarration] = useState("");
+  const [timeline, setTimeline] = useState<TimelineItem[]>([]);
+  const [answer, setAnswer] = useState("");
   const [diagnosis, setDiagnosis] = useState<Diagnosis | null>(null);
   const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef<(() => void) | null>(null);
@@ -49,31 +50,20 @@ export function DiagnosePanel({
 
   const start = useCallback(() => {
     setPhase("running");
-    setSteps([]);
-    setNarration("");
+    setTimeline([]);
+    setAnswer("");
     setDiagnosis(null);
     setError(null);
     cancelRef.current = streamDiagnose(
       { kind, namespace, name },
       {
         onEvent: (ev: DiagnoseStreamEvent) => {
-          if (ev.type === "step" && ev.step) {
-            setSteps((prev) => {
-              const i = prev.findIndex((s) => s.id === ev.step!.id);
-              if (i >= 0) {
-                const next = [...prev];
-                // The `done` event omits the tool name; keep the running one.
-                next[i] = {
-                  ...next[i],
-                  ...ev.step!,
-                  tool: ev.step!.tool || next[i].tool,
-                };
-                return next;
-              }
-              return [...prev, ev.step!];
-            });
+          if (ev.type === "thinking" && ev.token) {
+            setTimeline((prev) => appendThinking(prev, ev.token!));
+          } else if (ev.type === "step" && ev.step) {
+            setTimeline((prev) => upsertTool(prev, ev.step!));
           } else if (ev.type === "token" && ev.token) {
-            setNarration((prev) => (prev + ev.token).slice(-4000));
+            setAnswer((prev) => (prev + ev.token).slice(-4000));
           } else if (ev.type === "done" && ev.diagnosis) {
             setDiagnosis(ev.diagnosis);
             setPhase("done");
@@ -101,7 +91,7 @@ export function DiagnosePanel({
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
     if (nearBottom) el.scrollTop = el.scrollHeight;
-  }, [steps, narration]);
+  }, [timeline, answer]);
 
   const approve = () => {
     localStorage.setItem(CONSENT_KEY, "1");
@@ -177,11 +167,14 @@ export function DiagnosePanel({
 
           {phase !== "consent" && (
             <>
-              <ActivityLog
-                steps={steps}
-                narration={narration}
-                running={phase === "running"}
-              />
+              <Timeline items={timeline} running={phase === "running"} />
+              {/* Live answer forming — shown only while running; the result card
+                  replaces it on done (otherwise it duplicates the report). */}
+              {phase === "running" && answer && (
+                <div className="mt-2 whitespace-pre-wrap rounded-md border border-theme-border bg-theme-base/50 p-2 text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
+                  {stripJsonBlock(answer)}
+                </div>
+              )}
               {phase === "done" && diagnosis && (
                 <ResultCard diagnosis={diagnosis} />
               )}
@@ -269,52 +262,157 @@ function ConsentCard({
   );
 }
 
-function ActivityLog({
-  steps,
-  narration,
+// TimelineItem is one ordered entry in the investigation transcript: either a
+// chunk of the agent's reasoning, or a tool call (with its input + result).
+type TimelineItem =
+  | { kind: "thinking"; text: string }
+  | {
+      kind: "tool";
+      id: string;
+      tool: string;
+      status: string;
+      ms?: number;
+      summary?: string;
+      result?: string;
+    };
+
+function appendThinking(prev: TimelineItem[], text: string): TimelineItem[] {
+  const last = prev[prev.length - 1];
+  if (last && last.kind === "thinking") {
+    const next = [...prev];
+    next[next.length - 1] = { ...last, text: (last.text + text).slice(-4000) };
+    return next;
+  }
+  return [...prev, { kind: "thinking", text }];
+}
+
+function upsertTool(prev: TimelineItem[], step: DiagnoseStep): TimelineItem[] {
+  const i = prev.findIndex((it) => it.kind === "tool" && it.id === step.id);
+  if (i >= 0) {
+    const next = [...prev];
+    const cur = next[i] as Extract<TimelineItem, { kind: "tool" }>;
+    // The `done` event omits the tool name + input; keep them from `running`.
+    next[i] = {
+      ...cur,
+      ...step,
+      kind: "tool",
+      tool: step.tool || cur.tool,
+      summary: step.summary || cur.summary,
+    };
+    return next;
+  }
+  return [...prev, { kind: "tool", ...step }];
+}
+
+function Timeline({
+  items,
   running,
 }: {
-  steps: DiagnoseStep[];
-  narration: string;
+  items: TimelineItem[];
   running: boolean;
 }) {
   return (
     <div className="space-y-1.5">
-      {steps.length > 0 && (
+      {items.length > 0 && (
         <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
           Investigation
         </div>
       )}
-      {steps.map((s) => (
-        <div key={s.id} className="flex items-center gap-2 text-sm">
-          {s.status === "done" ? (
-            <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
-          ) : (
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-          )}
-          <span className="font-mono text-xs text-theme-text-secondary">
-            {prettyTool(s.tool)}
-          </span>
-          {s.ms != null && (
-            <span className="text-xs text-theme-text-tertiary">{s.ms}ms</span>
-          )}
-        </div>
-      ))}
+      {items.map((it, i) =>
+        it.kind === "thinking" ? (
+          <p
+            key={i}
+            className="whitespace-pre-wrap py-0.5 text-xs italic leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere]"
+          >
+            {it.text}
+          </p>
+        ) : (
+          <ToolRow key={it.id} step={it} />
+        ),
+      )}
       {running && (
         <div className="flex items-center gap-2 pt-1 text-xs text-theme-text-tertiary">
           <Loader2 className="h-3 w-3 animate-spin" />
-          {steps.length === 0 ? "Starting investigation…" : "Analyzing…"}
-        </div>
-      )}
-      {/* Live reasoning trace — only while running; the structured result cards
-          replace it once done (otherwise it duplicates the answer + raw json). */}
-      {running && narration && (
-        <div className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-theme-border bg-theme-base/50 p-2 font-mono text-[11px] leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere]">
-          {stripJsonBlock(narration)}
+          {items.length === 0 ? "Starting investigation…" : "Working…"}
         </div>
       )}
     </div>
   );
+}
+
+function ToolRow({ step }: { step: Extract<TimelineItem, { kind: "tool" }> }) {
+  const [open, setOpen] = useState(false);
+  const hasDetail = !!(step.summary || step.result);
+  return (
+    <div className="rounded-md border border-theme-border/60 bg-theme-base/40">
+      <button
+        onClick={() => hasDetail && setOpen((v) => !v)}
+        className={`flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm ${
+          hasDetail ? "hover:bg-theme-hover" : "cursor-default"
+        }`}
+      >
+        {step.status === "done" ? (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+        ) : (
+          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
+        )}
+        <span className="font-mono text-xs text-theme-text-secondary">
+          {prettyTool(step.tool)}
+        </span>
+        {step.summary && (
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-theme-text-tertiary">
+            {compactArgs(step.summary)}
+          </span>
+        )}
+        {step.ms != null && (
+          <span className="ml-auto shrink-0 text-[11px] text-theme-text-tertiary">
+            {step.ms}ms
+          </span>
+        )}
+        {hasDetail && (
+          <ChevronRight
+            className={`h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform ${open ? "rotate-90" : ""}`}
+          />
+        )}
+      </button>
+      {open && hasDetail && (
+        <div className="space-y-2 border-t border-theme-border/60 px-2 py-2">
+          {step.summary && (
+            <div>
+              <div className="mb-0.5 text-[10px] uppercase tracking-wide text-theme-text-tertiary">
+                Input
+              </div>
+              <pre className="overflow-x-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary">
+                {step.summary}
+              </pre>
+            </div>
+          )}
+          {step.result && (
+            <div>
+              <div className="mb-0.5 text-[10px] uppercase tracking-wide text-theme-text-tertiary">
+                Result
+              </div>
+              <pre className="max-h-48 overflow-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary">
+                {step.result}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// compactArgs renders a tool's JSON input as a compact "k=v" hint for the row.
+function compactArgs(raw: string): string {
+  try {
+    const o = JSON.parse(raw);
+    return Object.entries(o)
+      .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+      .join(" ");
+  } catch {
+    return raw;
+  }
 }
 
 function ResultCard({ diagnosis }: { diagnosis: Diagnosis }) {

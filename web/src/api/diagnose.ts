@@ -22,7 +22,8 @@ export interface DiagnoseStep {
   tool: string;
   status: "running" | "done";
   ms?: number;
-  summary?: string;
+  summary?: string; // input args (on running)
+  result?: string; // result preview (on done)
 }
 
 export interface Diagnosis {
@@ -35,7 +36,7 @@ export interface Diagnosis {
 }
 
 export interface DiagnoseStreamEvent {
-  type: "phase" | "step" | "token" | "done" | "error";
+  type: "phase" | "step" | "token" | "thinking" | "done" | "error";
   phase?: string;
   step?: DiagnoseStep;
   token?: string;
@@ -97,7 +98,14 @@ export function streamDiagnose(
     if (type === "done" || type === "error") close();
   };
 
-  for (const t of ["phase", "step", "token", "done", "error"] as const) {
+  for (const t of [
+    "phase",
+    "step",
+    "token",
+    "thinking",
+    "done",
+    "error",
+  ] as const) {
     es.addEventListener(t, dispatch(t));
   }
   // A transport error after we've started: surface once, then stop (EventSource

@@ -43,11 +43,11 @@ func TestParseStream_FormatPin(t *testing.T) {
 	}, "\n")
 
 	var running, done bool
-	var tokens int
+	var thinking, doneResult string
 	diag := parseStream(strings.NewReader(stream), func(ev StreamEvent) {
 		switch ev.Type {
-		case "token":
-			tokens++
+		case "thinking":
+			thinking += ev.Token
 		case "step":
 			if ev.Step != nil && ev.Step.Status == "running" {
 				running = true
@@ -57,14 +57,18 @@ func TestParseStream_FormatPin(t *testing.T) {
 			}
 			if ev.Step != nil && ev.Step.Status == "done" {
 				done = true
+				doneResult = ev.Step.Result
 			}
 		}
 	})
 	if !running || !done {
 		t.Errorf("expected running+done steps; running=%v done=%v", running, done)
 	}
-	if tokens < 1 {
-		t.Errorf("expected thinking token, got %d", tokens)
+	if thinking != "hmm" {
+		t.Errorf("expected thinking event %q, got %q", "hmm", thinking)
+	}
+	if doneResult == "" {
+		t.Errorf("expected tool result preview on done step")
 	}
 	if diag.RootCause != "bad tag" {
 		t.Errorf("root cause not parsed: %q", diag.RootCause)
