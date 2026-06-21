@@ -8,7 +8,6 @@ import {
   AlertTriangle,
   Copy,
   Check,
-  Wrench,
   ShieldCheck,
 } from "lucide-react";
 import {
@@ -281,6 +280,11 @@ function ActivityLog({
 }) {
   return (
     <div className="space-y-1.5">
+      {steps.length > 0 && (
+        <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+          Investigation
+        </div>
+      )}
       {steps.map((s) => (
         <div key={s.id} className="flex items-center gap-2 text-sm">
           {s.status === "done" ? (
@@ -314,54 +318,26 @@ function ActivityLog({
 }
 
 function ResultCard({ diagnosis }: { diagnosis: Diagnosis }) {
+  // The agent emits rich markdown in `report` (## headings, fenced code blocks,
+  // bold, inline code); the JSON-extracted rootCause/remediation are plain text.
+  // Render the report so commands/fields/yaml are formatted; fall back to the
+  // plain root cause if a run somehow produced no report.
+  const body = diagnosis.report || diagnosis.rootCause;
   return (
-    <div className="mt-3 space-y-3">
+    <div className="mt-3 space-y-2">
       <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
-        <div className="mb-1.5 flex items-center justify-between">
-          <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">
-            <AlertTriangle className="h-3.5 w-3.5 text-amber-400" />
-            Root cause
-          </div>
+        <div className="mb-1 flex items-center justify-end gap-2">
           {diagnosis.confidence != null && (
-            <span className="text-xs text-theme-text-tertiary">
+            <span className="text-[11px] text-theme-text-tertiary">
               {Math.round(diagnosis.confidence * 100)}% confident
             </span>
           )}
+          <CopyButton text={body} />
         </div>
-        <div className="flex items-start justify-between gap-2">
-          <Markdown className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_p]:text-theme-text-primary">
-            {diagnosis.rootCause}
-          </Markdown>
-          <CopyButton text={diagnosis.rootCause} />
-        </div>
+        <Markdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+          {body}
+        </Markdown>
       </div>
-
-      {diagnosis.remediation?.length > 0 && (
-        <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
-          <div className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary">
-            <Wrench className="h-3.5 w-3.5 text-accent" />
-            Remediation
-          </div>
-          <ol className="space-y-2">
-            {diagnosis.remediation.map((r, i) => (
-              <li
-                key={i}
-                className="flex items-start justify-between gap-2 text-sm text-theme-text-secondary"
-              >
-                <div className="flex min-w-0 flex-1 gap-1.5">
-                  <span className="shrink-0 text-theme-text-tertiary">
-                    {i + 1}.
-                  </span>
-                  <Markdown className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere] [&_ol]:my-0 [&_p]:my-0 [&_pre]:my-1.5 [&_ul]:my-0">
-                    {r}
-                  </Markdown>
-                </div>
-                <CopyButton text={r} />
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
 
       <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-theme-text-tertiary">
         <span className="flex min-w-0 items-center gap-1">
