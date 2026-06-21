@@ -38,6 +38,7 @@ import type { NavCustomization } from "./context/NavCustomization";
 import { DiagnoseCustomizationProvider } from "./context/DiagnoseCustomization";
 import type { RenderDiagnoseAction } from "./context/DiagnoseCustomization";
 import { defaultDiagnoseAction } from "./components/diagnose/LocalDiagnoseAction";
+import { DiagnoseProvider } from "./components/diagnose/DiagnoseContext";
 
 // Declare the shape of mutation meta here — inlined rather than in a
 // separate side-effect-only module so consumers that tree-shake aggressively
@@ -168,7 +169,9 @@ export function RadarApp({
             <DiagnoseCustomizationProvider
               value={renderDiagnoseAction ?? defaultDiagnoseAction}
             >
-              <App />
+              <DiagnoseProvider>
+                <App />
+              </DiagnoseProvider>
             </DiagnoseCustomizationProvider>
           </NavCustomizationProvider>
         </ToastProvider>

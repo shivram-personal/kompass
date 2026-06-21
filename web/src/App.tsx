@@ -5,6 +5,7 @@ import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transitio
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
+import { GlobalDiagnoseButton } from './components/diagnose/LocalDiagnoseAction'
 import { DebugOverlay } from './components/DebugOverlay'
 import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind, gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
 import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
@@ -1400,6 +1401,9 @@ function AppInner() {
               <GitHubStarButton />
             </div>
           )}
+
+          {/* AI investigations (self-hides when no agent CLI is present) */}
+          <GlobalDiagnoseButton />
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
