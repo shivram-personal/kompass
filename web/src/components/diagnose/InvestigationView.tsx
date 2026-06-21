@@ -12,6 +12,7 @@ import {
 } from "../../api/diagnose";
 import { getApiBase, getCredentialsMode } from "../../api/config";
 import { saveEntry } from "./history";
+import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { useDiagnose, type Target } from "./DiagnoseContext";
 import {
   ConsentCard,
@@ -50,7 +51,7 @@ export function InvestigationView({
     setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));
 
   const runTurn = useCallback(
-    (question?: string) => {
+    (question?: string, apply?: boolean) => {
       setTurns((prev) => [
         ...prev,
         {
@@ -68,7 +69,8 @@ export function InvestigationView({
           namespace,
           name,
           sessionId: sessionIdRef.current || undefined,
-          question,
+          question: apply ? undefined : question,
+          apply,
         },
         {
           onEvent: (ev: DiagnoseStreamEvent) => {
@@ -185,6 +187,14 @@ export function InvestigationView({
     runTurn(q);
   };
 
+  // Apply: a user-confirmed remediation turn (the agent gets write tools and
+  // applies the fix it proposed). Shown as its own turn in the transcript.
+  const [confirmApply, setConfirmApply] = useState(false);
+  const runApply = () => {
+    setConfirmApply(false);
+    runTurn("Apply the recommended fix", true);
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div
@@ -200,13 +210,34 @@ export function InvestigationView({
             />
           ) : (
             <div className="space-y-4">
-              {turns.map((t, i) => (
-                <TurnView key={i} turn={t} />
-              ))}
+              {turns.map((t, i) => {
+                const canApply =
+                  i === turns.length - 1 &&
+                  t.status === "done" &&
+                  (t.diagnosis?.remediation?.length ?? 0) > 0;
+                return (
+                  <TurnView
+                    key={i}
+                    turn={t}
+                    onApply={canApply ? () => setConfirmApply(true) : undefined}
+                  />
+                );
+              })}
             </div>
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmApply}
+        onClose={() => setConfirmApply(false)}
+        onConfirm={runApply}
+        variant="warning"
+        title="Apply the AI's fix?"
+        message={`Let ${agentLabel} apply its recommended remediation to ${kind} ${namespace}/${name}.`}
+        details="The agent will change your cluster using your kubeconfig credentials. Review the remediation steps first. For GitOps/Helm-managed resources a direct change may be reverted — the agent will flag that and prefer the managed path."
+        confirmLabel="Apply fix"
+      />
 
       {consented && (
         <div

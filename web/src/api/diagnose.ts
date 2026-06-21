@@ -73,6 +73,7 @@ export function streamDiagnose(
     name: string;
     sessionId?: string; // resume a prior session (multi-turn follow-up)
     question?: string; // the follow-up question (absent on the first turn)
+    apply?: boolean; // user-confirmed remediation turn (enables write tools)
   },
   handlers: DiagnoseHandlers,
 ): () => void {
@@ -83,6 +84,7 @@ export function streamDiagnose(
   });
   if (params.sessionId) q.set("session", params.sessionId);
   if (params.question) q.set("q", params.question);
+  if (params.apply) q.set("apply", "1");
   const url = `${getApiBase()}/diagnose/stream?${q.toString()}`;
   const es = new EventSource(url, {
     withCredentials: getCredentialsMode() === "include",

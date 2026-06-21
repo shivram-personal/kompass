@@ -11,6 +11,8 @@ import {
   Check,
   ShieldCheck,
   ChevronRight,
+  Wrench,
+  Wand2,
 } from "lucide-react";
 import { type Diagnosis, type DiagnoseStep } from "../../api/diagnose";
 import { Markdown } from "../ui/Markdown";
@@ -74,7 +76,13 @@ export function upsertTool(
   return [...prev, { kind: "tool", ...step }];
 }
 
-export function TurnView({ turn }: { turn: Turn }) {
+export function TurnView({
+  turn,
+  onApply,
+}: {
+  turn: Turn;
+  onApply?: () => void;
+}) {
   return (
     <div className="space-y-2">
       {turn.question && (
@@ -91,7 +99,7 @@ export function TurnView({ turn }: { turn: Turn }) {
         </div>
       )}
       {turn.status === "done" && turn.diagnosis && (
-        <ResultCard diagnosis={turn.diagnosis} />
+        <ResultCard diagnosis={turn.diagnosis} onApply={onApply} />
       )}
       {turn.status === "error" && turn.error && (
         <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-theme-text-primary">
@@ -301,30 +309,103 @@ export function SavedReportView({ entry }: { entry: HistoryEntry }) {
   );
 }
 
-function ResultCard({ diagnosis }: { diagnosis: Diagnosis }) {
-  // The agent emits rich markdown in `report`; render it so commands/fields/yaml
-  // format. Fall back to the plain root cause if a run produced no report.
-  const body = diagnosis.report || diagnosis.rootCause;
+function ResultCard({
+  diagnosis,
+  onApply,
+}: {
+  diagnosis: Diagnosis;
+  onApply?: () => void;
+}) {
+  const [showAnalysis, setShowAnalysis] = useState(false);
+  const rootCause = diagnosis.rootCause || diagnosis.report;
+  const remediation = diagnosis.remediation || [];
+  const hasRemediation = remediation.length > 0;
   return (
     <div className="mt-3 space-y-2">
-      <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
-        <div className="mb-1 flex items-center justify-end gap-2">
-          {diagnosis.confidence != null && (
-            <span className="text-[11px] text-theme-text-tertiary">
-              {Math.round(diagnosis.confidence * 100)}% confident
-            </span>
-          )}
-          <CopyButton text={body} />
+      {/* Root cause — the anchor: distinct tone + heavier type so it pops. */}
+      {rootCause && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-amber-500">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Root cause
+            </div>
+            <div className="flex items-center gap-2">
+              {diagnosis.confidence != null && (
+                <span className="text-[11px] text-theme-text-tertiary">
+                  {Math.round(diagnosis.confidence * 100)}% confident
+                </span>
+              )}
+              <CopyButton text={rootCause} />
+            </div>
+          </div>
+          <Markdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
+            {rootCause}
+          </Markdown>
         </div>
-        <Markdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
-          {body}
-        </Markdown>
-      </div>
+      )}
+
+      {/* Remediation — discrete, copyable steps + one-click apply. */}
+      {hasRemediation && (
+        <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
+          <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
+            <Wrench className="h-3.5 w-3.5 text-accent" />
+            Remediation
+          </div>
+          <ol className="space-y-2">
+            {remediation.map((r, i) => (
+              <li key={i} className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 flex-1 gap-2">
+                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-theme-base text-[10px] text-theme-text-tertiary">
+                    {i + 1}
+                  </span>
+                  <Markdown className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
+                    {r}
+                  </Markdown>
+                </div>
+                <CopyButton text={r} />
+              </li>
+            ))}
+          </ol>
+          {onApply && (
+            <button
+              onClick={onApply}
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg btn-brand py-2 text-sm font-medium"
+            >
+              <Wand2 className="h-4 w-4" />
+              Apply with AI
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Full analysis — the agent's detailed evidence, on demand. */}
+      {diagnosis.report && (
+        <div className="rounded-lg border border-theme-border bg-theme-elevated">
+          <button
+            onClick={() => setShowAnalysis((v) => !v)}
+            className="flex w-full items-center gap-1.5 px-3 py-2 text-xs font-medium uppercase tracking-wide text-theme-text-tertiary hover:text-theme-text-primary"
+          >
+            <ChevronRight
+              className={`h-3.5 w-3.5 transition-transform ${showAnalysis ? "rotate-90" : ""}`}
+            />
+            Full analysis
+          </button>
+          {showAnalysis && (
+            <div className="border-t border-theme-border/60 px-3 py-2">
+              <Markdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+                {diagnosis.report}
+              </Markdown>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-theme-text-tertiary">
         <span className="flex min-w-0 items-center gap-1">
           <ShieldCheck className="h-3 w-3 shrink-0" />
           <span className="truncate">
-            Read-only · AI-generated — verify before acting
+            AI-generated — review before applying
           </span>
         </span>
         {diagnosis.costUsd != null && (

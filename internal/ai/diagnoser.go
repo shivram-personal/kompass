@@ -49,6 +49,11 @@ type Request struct {
 	// Question is the user's prompt for this turn. Empty on the first turn (we
 	// auto-generate the investigate prompt); set for follow-ups.
 	Question string
+	// Apply, when true, runs a REMEDIATION turn: the agent is allowed the Radar
+	// write tools and instructed to apply the fix it recommended. Gated entirely
+	// by the caller (an explicit user confirmation) — the read-only investigation
+	// path never sets this.
+	Apply bool
 }
 
 // Diagnosis is the engine's final result.
@@ -95,6 +100,21 @@ var radarReadTools = []string{
 	"search", "get_subject_permissions", "query_prometheus", "discover_metrics",
 	"get_prometheus_rules", "get_workload_logs",
 }
+
+// radarWriteTools are the mutating Radar MCP tools — enabled ONLY on an apply
+// turn (Request.Apply), which the user explicitly confirms. Never on the
+// read-only investigation path.
+var radarWriteTools = []string{
+	"apply_resource", "patch_resource", "manage_workload",
+	"manage_cronjob", "manage_node", "manage_gitops",
+}
+
+const applyPrompt = "Apply the remediation you recommended for this resource now. Use the Radar " +
+	"write tools to make the MINIMAL, targeted change — do not do anything beyond the fix you " +
+	"proposed. If the resource is GitOps-managed (Argo/Flux) or Helm-managed, a direct change will " +
+	"be reverted on the next reconcile — say so and prefer the GitOps/Helm-aware path (or explain " +
+	"what to change in Git) instead of patching live. When done, briefly confirm exactly what you " +
+	"changed (the resource, field, and new value)."
 
 const systemPrompt = "You are a senior Kubernetes SRE investigating an unhealthy resource. " +
 	"Investigate methodically and SHOW YOUR WORK: make several specific, targeted tool calls " +
@@ -169,7 +189,9 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	defer cleanup()
 
 	prompt := taskPrompt(req)
-	if strings.TrimSpace(req.Question) != "" {
+	if req.Apply {
+		prompt = applyPrompt // explicit, user-confirmed remediation turn
+	} else if strings.TrimSpace(req.Question) != "" {
 		prompt = req.Question // follow-up turn
 	}
 	args := []string{
@@ -178,12 +200,19 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		// Disable ALL built-in tools — --allowedTools only pre-approves, it does
 		// NOT restrict the built-in set, so without this the agent could run Bash
 		// (arbitrary exec) or WebFetch (exfiltrate cluster data). Fail-closed +
-		// future-proof. The agent reaches the cluster ONLY via the MCP reads below.
+		// future-proof. The agent reaches the cluster ONLY via the MCP tools below.
 		"--tools", "",
 		"--allowedTools",
 	}
 	for _, t := range radarReadTools {
 		args = append(args, "mcp__radar__"+t)
+	}
+	// Apply turns also get the Radar write tools (gated by the caller's explicit
+	// confirmation). Investigation/follow-up turns stay read-only.
+	if req.Apply {
+		for _, t := range radarWriteTools {
+			args = append(args, "mcp__radar__"+t)
+		}
 	}
 	args = append(args,
 		"--permission-mode", "acceptEdits",
