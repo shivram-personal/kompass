@@ -889,12 +889,18 @@ func collectArgoClaims(ctx context.Context, cache resourceLister, sourcePaths ma
 	if err != nil {
 		return nil
 	}
-	// Scope claims to the caller's allowed namespaces (when filtered): an
-	// Application is a namespaced resource, and its claim exposes its destination +
-	// managed workloads, so a namespace-scoped user must not receive claims for
-	// Applications outside their visibility. Empty filter = unscoped (all).
+	// Scope claims to the caller's visibility. namespaces is nil for full access
+	// (no-auth local / the fleet hub), a non-nil EMPTY slice for explicit no
+	// access (noNamespaceAccess), and a non-nil non-empty set when scoped. A claim
+	// exposes an Application's destination + managed workloads, so a no-access
+	// caller gets nothing, and a scoped caller gets a claim only when it can see at
+	// least one of the workloads the Application MANAGES — filtering by the
+	// workload namespaces, not the Application's (which often lives in argocd).
+	if noNamespaceAccess(namespaces) {
+		return nil
+	}
 	var allowed map[string]bool
-	if len(namespaces) > 0 {
+	if namespaces != nil {
 		allowed = make(map[string]bool, len(namespaces))
 		for _, ns := range namespaces {
 			allowed[ns] = true
@@ -902,9 +908,6 @@ func collectArgoClaims(ctx context.Context, cache resourceLister, sourcePaths ma
 	}
 	var claims []argoClaim
 	for _, item := range items {
-		if allowed != nil && !allowed[item.GetNamespace()] {
-			continue
-		}
 		name := item.GetName()
 		nsKey := name
 		if ns := item.GetNamespace(); ns != "" {
@@ -936,9 +939,23 @@ func collectArgoClaims(ctx context.Context, cache resourceLister, sourcePaths ma
 			claim.DestNamespace, _ = dest["namespace"].(string)
 		}
 		claim.Workloads = argoManagedWorkloads(item)
+		if allowed != nil && !managedWorkloadVisible(claim.Workloads, allowed) {
+			continue // scoped caller can't see any workload this Application manages
+		}
 		claims = append(claims, claim)
 	}
 	return claims
+}
+
+// managedWorkloadVisible reports whether the caller (allowed namespace set) can
+// see at least one of the workloads an Argo claim manages.
+func managedWorkloadVisible(workloads []workloadRef, allowed map[string]bool) bool {
+	for _, w := range workloads {
+		if allowed[w.Namespace] {
+			return true
+		}
+	}
+	return false
 }
 
 // argoManagedWorkloads extracts the workload resources an Argo Application

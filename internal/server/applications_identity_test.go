@@ -779,27 +779,40 @@ func TestIdentities_ExplicitAnnotationRequiresAllWorkloads(t *testing.T) {
 	}
 }
 
-// Fix: collectArgoClaims scopes to the caller's allowed namespaces — a
-// namespace-scoped request must not leak claims for Applications elsewhere.
+// Fix: collectArgoClaims scopes by the MANAGED WORKLOAD namespace (an
+// Application may live in argocd while its workloads run elsewhere), returns
+// nothing for explicit no-access (non-nil empty), and everything for full access
+// (nil). A scoped caller gets a claim only when it can see a managed workload.
 func TestCollectArgoClaims_NamespaceScoped(t *testing.T) {
-	app := func(ns, name, path string) *unstructured.Unstructured {
+	// Both Applications live in argocd; their workloads run in app namespaces.
+	app := func(name, path, wlNs, wlName string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]any{
-			"metadata": map[string]any{"namespace": ns, "name": name},
+			"metadata": map[string]any{"namespace": "argocd", "name": name},
 			"spec":     map[string]any{"source": map[string]any{"path": path}},
+			"status": map[string]any{"resources": []any{
+				map[string]any{"kind": "Deployment", "namespace": wlNs, "name": wlName},
+			}},
 		}}
 	}
 	lister := &stubLister{items: []*unstructured.Unstructured{
-		app("team-a", "billing", "apps/billing/overlays/prod"),
-		app("team-b", "shipping", "apps/shipping/overlays/prod"),
+		app("billing", "apps/billing/overlays/prod", "team-a", "billing-api"),
+		app("shipping", "apps/shipping/overlays/prod", "team-b", "shipping-api"),
 	}}
 	sp, asc := argoApplicationFacts(context.Background(), lister)
-	// Scoped to team-a only → no team-b claim.
-	claims := collectArgoClaims(context.Background(), lister, sp, appSetFanouts(asc), []string{"team-a"})
+	asf := appSetFanouts(asc)
+
+	// Scoped to team-a → only billing (its workload is visible), even though both
+	// Applications live in argocd, which is NOT in the allowed set.
+	claims := collectArgoClaims(context.Background(), lister, sp, asf, []string{"team-a"})
 	if len(claims) != 1 || claims[0].Identity.Key != "apps/billing" {
-		t.Fatalf("namespace-scoped claims = %+v, want only team-a's billing", claims)
+		t.Fatalf("namespace-scoped claims = %+v, want only billing (team-a workload visible)", claims)
 	}
-	// Unscoped (nil) → both.
-	if all := collectArgoClaims(context.Background(), lister, sp, appSetFanouts(asc), nil); len(all) != 2 {
+	// Explicit no access (non-nil empty) → nothing.
+	if none := collectArgoClaims(context.Background(), lister, sp, asf, []string{}); len(none) != 0 {
+		t.Fatalf("no-access claims = %d, want 0", len(none))
+	}
+	// Full access (nil) → both.
+	if all := collectArgoClaims(context.Background(), lister, sp, asf, nil); len(all) != 2 {
 		t.Fatalf("unscoped claims = %d, want 2", len(all))
 	}
 }
