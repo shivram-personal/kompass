@@ -134,7 +134,9 @@ func New(cfg Config) *Server {
 	// works when /mcp is unauthenticated. Under proxy/OIDC auth (team / cloud
 	// deployments) the MCP requires identity headers the local CLI can't supply,
 	// and AI diagnosis is the embedding host's job (e.g. Radar Hub) anyway.
-	if !s.authConfig.Enabled() {
+	// Also requires /mcp to be mounted — the agent reaches the cluster only
+	// through it, so with --no-mcp the feature can't work.
+	if !s.authConfig.Enabled() && s.mcpHandler != nil {
 		if bin := ai.ResolveCLI(); bin != "" {
 			if d, err := ai.New(bin); err == nil {
 				s.aiDiagnoser = d

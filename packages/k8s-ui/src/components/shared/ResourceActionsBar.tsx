@@ -497,11 +497,13 @@ export function ResourceActionsBar({
       {/* Spacer pushes universal actions to the right */}
       <div className="flex-1" />
 
-      {/* Universal actions (right-aligned) */}
-      {renderDiagnose && resource.namespace && resource.name && (
+      {/* Universal actions (right-aligned). Cluster-scoped resources (Nodes,
+          cluster RBAC, …) have no namespace but are still diagnosable — the
+          engine accepts an empty namespace. */}
+      {renderDiagnose && resource.name && (
         renderDiagnose({
           kind,
-          namespace: resource.namespace,
+          namespace: resource.namespace ?? '',
           name: resource.name,
         })
       )}

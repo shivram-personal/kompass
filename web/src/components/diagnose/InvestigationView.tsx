@@ -82,8 +82,12 @@ export function InvestigationView({
   const { kind, namespace, name } = target;
   const { close } = useDiagnose();
   const [consented, setConsented] = useState(readConsent() || !!seed);
-  // The kube-context this view is connected to now. A seeded (reopened) entry
-  // may have run against a different context; we guard Apply on a mismatch.
+  // Cluster-mismatch guard for Apply. baselineCtx = the kube-context this
+  // investigation is ABOUT (a seed's saved ctx, or the live cluster captured
+  // when it first ran); currentCtx = the cluster we're connected to now,
+  // refreshed on focus. Apply is allowed only on a positive match, so it can't
+  // fire while the cluster is still loading or after a context switch.
+  const [baselineCtx, setBaselineCtx] = useState(seed?.ctx || "");
   const [currentCtx, setCurrentCtx] = useState("");
   const [turns, setTurns] = useState<Turn[]>(() =>
     seed ? seed.turns.map(turnFromSaved) : [],
@@ -170,9 +174,15 @@ export function InvestigationView({
     [kind, namespace, name],
   );
 
-  // Kick off the first turn once consented.
+  // Kick off the first turn once consented. startedRef guards against React
+  // Strict Mode's double effect invocation (which would otherwise leave an
+  // orphaned cancelled turn behind the real one).
+  const startedRef = useRef(false);
   useEffect(() => {
-    if (consented && turns.length === 0) runTurn();
+    if (consented && !startedRef.current && turns.length === 0) {
+      startedRef.current = true;
+      runTurn();
+    }
     return () => {
       cancelRef.current?.();
       cancelRef.current = null;
@@ -187,18 +197,32 @@ export function InvestigationView({
     if (nearBottom) el.scrollTop = el.scrollHeight;
   }, [turns]);
 
-  // Best-effort cluster/context label for history.
+  // Track the connected cluster: on mount and again on window focus, so a
+  // kube-context switch made while the panel stays open is detected (and the
+  // mismatch guard re-evaluates) rather than going stale.
   useEffect(() => {
-    fetch(`${getApiBase()}/connection`, { credentials: getCredentialsMode() })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d) {
+    let live = true;
+    const refresh = () => {
+      fetch(`${getApiBase()}/connection`, { credentials: getCredentialsMode() })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d) => {
+          if (!live || !d) return;
           const ctx = d.contextName || d.context || d.cluster || "";
           ctxRef.current = ctx;
           setCurrentCtx(ctx);
-        }
-      })
-      .catch(() => {});
+          // Freeze the investigation's baseline cluster the first time we learn
+          // it (a live run is about whatever cluster it started against). A
+          // seed already pinned baselineCtx to its saved context.
+          setBaselineCtx((prev) => prev || ctx);
+        })
+        .catch(() => {});
+    };
+    refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      live = false;
+      window.removeEventListener("focus", refresh);
+    };
   }, []);
 
   // Persist the thread to local history whenever its latest turn finishes.
@@ -279,11 +303,13 @@ export function InvestigationView({
       "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.",
     );
 
-  // A reopened investigation that ran against a different kube-context than the
-  // one we're connected to now: its reasoning is about the old cluster, so
-  // applying it here could mutate the wrong cluster. Block Apply and warn.
+  // Cluster guard: Apply may write only when we positively confirm we're still
+  // connected to the cluster the investigation is about. If the baseline is
+  // unknown (connection probe failed) we can't guard, so we don't block.
+  const ctxConfirmed = baselineCtx === "" || currentCtx === baselineCtx;
+  // Explicit mismatch (vs. merely still-loading) — drives the warning banner.
   const ctxMismatch =
-    !!seed && !!seed.ctx && !!currentCtx && seed.ctx !== currentCtx;
+    baselineCtx !== "" && currentCtx !== "" && baselineCtx !== currentCtx;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -306,7 +332,7 @@ export function InvestigationView({
                   <span>
                     This investigation ran against{" "}
                     <span className="font-medium text-theme-text-primary">
-                      {seed!.ctx}
+                      {baselineCtx}
                     </span>
                     , but you&apos;re now connected to{" "}
                     <span className="font-medium text-theme-text-primary">
@@ -325,7 +351,7 @@ export function InvestigationView({
                   isLast &&
                   t.status === "done" &&
                   !t.apply &&
-                  !ctxMismatch &&
+                  ctxConfirmed &&
                   (t.diagnosis?.remediation?.length ?? 0) > 0;
                 // After an apply, offer a one-tap verification follow-up.
                 const canCheck = isLast && t.status === "done" && !!t.apply;

@@ -79,7 +79,7 @@ func (s *Server) handleDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 	// onEvent is called synchronously from the parse loop (single goroutine), so
 	// writing to w here is race-free.
 	diag, err := s.aiDiagnoser.DiagnoseStream(r.Context(), ai.Request{
-		Kind: kind, Namespace: namespace, Name: name, MCPPort: s.port,
+		Kind: kind, Namespace: namespace, Name: name, MCPPort: s.ActualPort(),
 		SessionID: session, Question: question, Apply: apply, Fix: fix,
 	}, send)
 	if err != nil {
