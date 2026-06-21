@@ -68,9 +68,11 @@ type Diagnosis struct {
 	Confidence  *float64 `json:"confidence"`
 	CostUSD     *float64 `json:"costUsd"`
 	Turns       int      `json:"turns"`
-	// RecommendedFix is the single concrete change the agent recommends — what an
-	// Apply action will do. Lets the UI show it + the user confirm a known action.
-	RecommendedFix string `json:"recommendedFix"`
+	// RecommendedIndex is the 1-based index into Remediation of the single step the
+	// agent recommends applying (what an Apply action performs). 0/nil = no safe
+	// automatic fix. Pointing into the list (vs restating the fix) keeps the UI
+	// free of duplication and binds Apply to a specific step.
+	RecommendedIndex *int `json:"recommendedIndex,omitempty"`
 	// SessionID is the CLI session this turn ran in — pass it back as
 	// Request.SessionID to continue the conversation.
 	SessionID string `json:"sessionId"`
@@ -131,7 +133,8 @@ func applyPrompt(fix string) string {
 		return "Apply EXACTLY this fix that the user just confirmed — and ONLY this change, do not " +
 			"substitute a different one:\n\n" + fix + "\n\n" + applyGuidance
 	}
-	return "Apply the single change you stated as recommended_fix — and ONLY that change. " + applyGuidance
+	return "Apply the single remediation step you marked as recommended (recommended_index) — and ONLY " +
+		"that change. " + applyGuidance
 }
 
 const systemPrompt = "You are a senior Kubernetes SRE investigating an unhealthy resource. " +
@@ -289,15 +292,18 @@ func taskPrompt(req Request) string {
 	return fmt.Sprintf(
 		"Investigate the unhealthy %s %s/%s. Find the root cause and propose remediation. "+
 			"Finish your reply with a fenced ```json block: "+
-			`{"root_cause": string, "remediation": [string], "recommended_fix": string, "confidence": number 0..1}. `+
-			"recommended_fix is the SINGLE change you most recommend applying — the safest, most "+
-			"targeted of the remediation options, stated as one concrete sentence (resource, field, "+
-			"and new value). It is exactly what an 'Apply' action will perform, so be specific and "+
-			"deterministic; if no safe automatic fix exists, set it to an empty string. "+
-			"In root_cause, recommended_fix, and each remediation string USE GitHub-flavored markdown "+
-			"— wrap field paths, resource/image/configmap names, values, and inline commands in "+
-			"backticks, and put any multi-line command in a fenced bash code block. Each remediation "+
-			"item should be one self-contained, copy-pasteable step.",
+			`{"root_cause": string, "remediation": [string], "recommended_index": number, "confidence": number 0..1}. `+
+			"recommended_index is the 1-based index into the remediation array of the SINGLE step you "+
+			"most recommend applying — the safest, most targeted, deterministic one (exactly what an "+
+			"'Apply' action will perform). Use 0 when no step is a safe automatic fix (e.g. the change "+
+			"requires human judgement or info you don't have). Order remediation so each item is one "+
+			"self-contained, copy-pasteable step, and make the recommended one specific enough to apply "+
+			"verbatim. In root_cause and each remediation string USE GitHub-flavored markdown — wrap "+
+			"field paths, resource/image/configmap names, values, and commands in backticks. Use INLINE "+
+			"code (single backticks) for commands, even long single-line ones; only use a fenced "+
+			"```bash block for genuinely multi-line scripts, and when you do, the opening ```bash, each "+
+			"script line, and the closing ``` must EACH be on their own line — never put the command on "+
+			"the same line as ```bash or open a fence mid-sentence.",
 		req.Kind, ns, req.Name)
 }
 

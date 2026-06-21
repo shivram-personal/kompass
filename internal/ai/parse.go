@@ -17,17 +17,21 @@ func diagnosisFromText(text string) Diagnosis {
 	d := Diagnosis{Report: text}
 	if m := jsonBlockRe.FindAllStringSubmatch(text, -1); len(m) > 0 {
 		var parsed struct {
-			RootCause      string   `json:"root_cause"`
-			Remediation    []string `json:"remediation"`
-			RecommendedFix string   `json:"recommended_fix"`
-			Confidence     *float64 `json:"confidence"`
+			RootCause        string   `json:"root_cause"`
+			Remediation      []string `json:"remediation"`
+			RecommendedIndex *int     `json:"recommended_index"`
+			Confidence       *float64 `json:"confidence"`
 		}
 		if json.Unmarshal([]byte(m[len(m)-1][1]), &parsed) == nil {
 			d.RootCause = parsed.RootCause
 			d.Remediation = parsed.Remediation
-			d.RecommendedFix = parsed.RecommendedFix
 			d.Confidence = parsed.Confidence
 			d.Report = strings.TrimSpace(jsonBlockRe.ReplaceAllString(text, ""))
+			// Keep the index only when it points at a real remediation step.
+			if parsed.RecommendedIndex != nil && *parsed.RecommendedIndex >= 1 &&
+				*parsed.RecommendedIndex <= len(parsed.Remediation) {
+				d.RecommendedIndex = parsed.RecommendedIndex
+			}
 		}
 	}
 	if d.RootCause == "" {

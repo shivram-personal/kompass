@@ -14,6 +14,7 @@ import {
   Wrench,
   Wand2,
   Sparkles,
+  RefreshCw,
 } from "lucide-react";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
 import { type Diagnosis, type DiagnoseStep } from "../../api/diagnose";
@@ -84,9 +85,11 @@ export function upsertTool(
 export function TurnView({
   turn,
   onApply,
+  onCheckStatus,
 }: {
   turn: Turn;
-  onApply?: () => void;
+  onApply?: (fix: string) => void;
+  onCheckStatus?: () => void;
 }) {
   return (
     <div className="space-y-2">
@@ -112,6 +115,7 @@ export function TurnView({
           diagnosis={turn.diagnosis}
           onApply={onApply}
           apply={turn.apply}
+          onCheckStatus={onCheckStatus}
         />
       )}
       {turn.status === "error" && turn.error && (
@@ -179,16 +183,16 @@ export function ApplyDialog({
   onConfirm,
   agentLabel,
   resourceLabel,
-  recommendedFix,
+  fix,
 }: {
   open: boolean;
   onClose: () => void;
   onConfirm: () => void;
   agentLabel: string;
   resourceLabel: string;
-  recommendedFix?: string;
+  fix?: string;
 }) {
-  const fix = recommendedFix?.trim();
+  const fixText = fix?.trim();
   return (
     <DialogPortal open={open} onClose={onClose} className="max-w-lg w-full">
       <div className="flex items-start gap-3 border-b border-theme-border p-4">
@@ -209,15 +213,15 @@ export function ApplyDialog({
         </div>
       </div>
 
-      {fix && (
+      {fixText && (
         <div className="border-b border-theme-border p-4">
           <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
             <Sparkles className="h-3.5 w-3.5" />
             What will happen
           </div>
-          <Markdown className="max-h-48 overflow-auto text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5">
-            {fix}
-          </Markdown>
+          <AIMarkdown className="max-h-48 overflow-auto text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5">
+            {fixText}
+          </AIMarkdown>
         </div>
       )}
 
@@ -412,7 +416,7 @@ export function SavedReportView({ entry }: { entry: HistoryEntry }) {
               rootCause: t.rootCause,
               report: t.report,
               remediation: t.remediation,
-              recommendedFix: t.recommendedFix,
+              recommendedIndex: t.recommendedIndex,
               confidence: t.confidence,
               costUsd: t.costUsd,
             }}
@@ -428,23 +432,33 @@ function ResultCard({
   diagnosis,
   onApply,
   apply,
+  onCheckStatus,
 }: {
   diagnosis: Diagnosis;
-  onApply?: () => void;
+  onApply?: (fix: string) => void;
   apply?: boolean;
+  onCheckStatus?: () => void;
 }) {
   // Apply turns report what changed — an outcome, not a diagnosis. Frame as a
   // success confirmation (emerald) rather than the amber root-cause anchor.
-  if (apply) return <ApplyOutcomeCard diagnosis={diagnosis} />;
+  if (apply)
+    return (
+      <ApplyOutcomeCard diagnosis={diagnosis} onCheckStatus={onCheckStatus} />
+    );
 
   const [showAnalysis, setShowAnalysis] = useState(false);
   const rootCause = diagnosis.rootCause || diagnosis.report;
   const remediation = diagnosis.remediation || [];
   const hasRemediation = remediation.length > 0;
-  const recommended = diagnosis.recommendedFix?.trim();
-  // Apply is only offered for a concrete, named fix — so the user knows exactly
-  // what the one click will do before it happens.
-  const canApply = !!onApply && !!recommended;
+  // The recommended step is a pointer into the list (1-based) — used to highlight
+  // the suggested default. Any step can be applied, though, so the pointer only
+  // drives emphasis, not whether Apply is offered.
+  const recIdx = diagnosis.recommendedIndex;
+  const recValid =
+    recIdx != null && recIdx >= 1 && recIdx <= remediation.length;
+  // The host decides whether this turn is applyable (latest result, right cluster,
+  // etc.); when it is, every step gets an Apply affordance.
+  const canApply = !!onApply;
   return (
     <div className="mt-3 space-y-2">
       {/* Root cause — the anchor: distinct tone + heavier type so it pops. */}
@@ -458,19 +472,20 @@ function ResultCard({
             <div className="flex items-center gap-2">
               {diagnosis.confidence != null && (
                 <span className="text-[11px] text-theme-text-tertiary">
-                  {Math.round(diagnosis.confidence * 100)}% confident
+                  {confidenceLabel(diagnosis.confidence)} confidence
                 </span>
               )}
               <CopyButton text={rootCause} />
             </div>
           </div>
-          <Markdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
+          <AIMarkdown className="text-sm font-medium text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary">
             {rootCause}
-          </Markdown>
+          </AIMarkdown>
         </div>
       )}
 
-      {/* Remediation — discrete, copyable steps. */}
+      {/* Remediation — copyable steps; the recommended one is highlighted as the
+          default, and any step can be applied (Apply binds to that step's text). */}
       {hasRemediation && (
         <div className="rounded-lg border border-theme-border bg-theme-elevated p-3">
           <div className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-theme-text-tertiary">
@@ -478,43 +493,64 @@ function ResultCard({
             Remediation
           </div>
           <ol className="space-y-2">
-            {remediation.map((r, i) => (
-              <li key={i} className="flex items-start justify-between gap-2">
-                <div className="flex min-w-0 flex-1 gap-2">
-                  <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-theme-base text-[10px] text-theme-text-tertiary">
-                    {i + 1}
-                  </span>
-                  <Markdown className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
-                    {r}
-                  </Markdown>
-                </div>
-                <CopyButton text={r} />
-              </li>
-            ))}
+            {remediation.map((r, i) => {
+              const isRec = recValid && i === recIdx! - 1;
+              return (
+                <li
+                  key={i}
+                  className={
+                    isRec
+                      ? "rounded-lg border border-accent/40 bg-accent/5 p-2.5"
+                      : ""
+                  }
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 flex-1 gap-2">
+                      <span
+                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
+                          isRec
+                            ? "bg-accent/20 text-accent"
+                            : "bg-theme-base text-theme-text-tertiary"
+                        }`}
+                      >
+                        {i + 1}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        {isRec && (
+                          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                            <Sparkles className="h-3 w-3" />
+                            Recommended
+                          </div>
+                        )}
+                        <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
+                          {r}
+                        </AIMarkdown>
+                      </div>
+                    </div>
+                    <CopyButton text={r} />
+                  </div>
+                  {canApply &&
+                    (isRec ? (
+                      <button
+                        onClick={() => onApply!(r)}
+                        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg btn-brand py-2 text-sm font-medium"
+                      >
+                        <Wand2 className="h-4 w-4" />
+                        Apply recommended fix
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onApply!(r)}
+                        className="mt-2 inline-flex items-center gap-1 rounded-md border border-theme-border px-2.5 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                      >
+                        <Wand2 className="h-3 w-3" />
+                        Apply this step
+                      </button>
+                    ))}
+                </li>
+              );
+            })}
           </ol>
-        </div>
-      )}
-
-      {/* Recommended fix — the one action Apply will take, named up front so the
-          user knows the outcome before clicking. */}
-      {recommended && (
-        <div className="rounded-lg border border-accent/40 bg-accent/5 p-3">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-accent">
-            <Sparkles className="h-3.5 w-3.5" />
-            Recommended fix
-          </div>
-          <Markdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_p]:my-0 [&_p]:text-theme-text-primary [&_pre]:my-1.5">
-            {recommended}
-          </Markdown>
-          {canApply && (
-            <button
-              onClick={onApply}
-              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg btn-brand py-2 text-sm font-medium"
-            >
-              <Wand2 className="h-4 w-4" />
-              Apply recommended fix
-            </button>
-          )}
         </div>
       )}
 
@@ -532,9 +568,9 @@ function ResultCard({
           </button>
           <Collapse open={showAnalysis}>
             <div className="border-t border-theme-border/60 px-3 py-2">
-              <Markdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
+              <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_h2:first-child]:mt-0 [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-wide [&_h2]:text-theme-text-tertiary [&_h3]:text-sm [&_li]:text-theme-text-secondary [&_p]:my-1.5 [&_p]:text-theme-text-secondary">
                 {diagnosis.report}
-              </Markdown>
+              </AIMarkdown>
             </div>
           </Collapse>
         </div>
@@ -550,7 +586,13 @@ function ResultCard({
 
 // The result of an apply turn: a success confirmation of what changed, not a
 // diagnosis. Emerald + checkmark so it reads as an outcome.
-function ApplyOutcomeCard({ diagnosis }: { diagnosis: Diagnosis }) {
+function ApplyOutcomeCard({
+  diagnosis,
+  onCheckStatus,
+}: {
+  diagnosis: Diagnosis;
+  onCheckStatus?: () => void;
+}) {
   const outcome = diagnosis.report || diagnosis.rootCause;
   return (
     <div className="mt-3 space-y-2">
@@ -563,9 +605,18 @@ function ApplyOutcomeCard({ diagnosis }: { diagnosis: Diagnosis }) {
           {outcome && <CopyButton text={outcome} />}
         </div>
         {outcome && (
-          <Markdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+          <AIMarkdown className="text-sm text-theme-text-primary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-primary [&_p]:my-1 [&_p]:text-theme-text-primary [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
             {outcome}
-          </Markdown>
+          </AIMarkdown>
+        )}
+        {onCheckStatus && (
+          <button
+            onClick={onCheckStatus}
+            className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border border-emerald-500/40 py-2 text-sm font-medium text-emerald-500 hover:bg-emerald-500/10"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Check status
+          </button>
         )}
       </div>
       <div className="flex items-center gap-1 px-0.5 text-[11px] text-theme-text-tertiary">
@@ -605,4 +656,35 @@ export function prettyTool(tool: string): string {
 
 function stripJsonBlock(text: string): string {
   return text.replace(/```json[\s\S]*?```/g, "").trimEnd();
+}
+
+// A coarse band, not a precise %: a two-sig-fig confidence on an LLM judgement
+// reads as calibrated when it isn't.
+function confidenceLabel(c: number): string {
+  if (c >= 0.8) return "High";
+  if (c >= 0.5) return "Medium";
+  return "Low";
+}
+
+// LLMs occasionally open a ```fence mid-line ("run this: ```bash kubectl …") or
+// put the command on the same line as the ```lang marker. GFM then won't parse
+// it as a fence — it leaks the literal ``` and renders an empty code box. Coerce
+// fence markers onto their own lines and push trailing content off the opener so
+// the block renders. (Well-formed markdown is unaffected.)
+function tidyFences(md: string): string {
+  if (!md || !md.includes("```")) return md;
+  return md
+    .replace(/([^\n])```/g, "$1\n\n```") // opener/closer must start a line
+    .replace(/```([A-Za-z0-9_-]*)[ \t]+(\S)/g, "```$1\n$2"); // content off the opener line
+}
+
+// Markdown for agent-generated text — normalizes flaky fences first.
+function AIMarkdown({
+  className,
+  children,
+}: {
+  className?: string;
+  children: string;
+}) {
+  return <Markdown className={className}>{tidyFences(children)}</Markdown>;
 }

@@ -55,7 +55,7 @@ function turnFromSaved(t: SavedTurn, ti: number): Turn {
       rootCause: t.rootCause,
       report: t.report,
       remediation: t.remediation,
-      recommendedFix: t.recommendedFix,
+      recommendedIndex: t.recommendedIndex,
       confidence: t.confidence,
       costUsd: t.costUsd,
     },
@@ -100,7 +100,6 @@ export function InvestigationView({
   const lastTurn = turns[turns.length - 1];
   const running = lastTurn?.status === "running";
   const applying = running && !!lastTurn?.apply;
-  const lastRecommendedFix = lastTurn?.diagnosis?.recommendedFix;
   const updateLast = (fn: (t: Turn) => Turn) =>
     setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));
 
@@ -221,7 +220,7 @@ export function InvestigationView({
         rootCause: t.diagnosis?.rootCause || "",
         report: t.diagnosis?.report || "",
         remediation: t.diagnosis?.remediation || [],
-        recommendedFix: t.diagnosis?.recommendedFix,
+        recommendedIndex: t.diagnosis?.recommendedIndex,
         confidence: t.diagnosis?.confidence,
         costUsd: t.diagnosis?.costUsd,
         apply: t.apply,
@@ -262,12 +261,23 @@ export function InvestigationView({
   // Apply: a user-confirmed remediation turn (the agent gets write tools and
   // applies the fix it proposed). Shown as its own turn in the transcript.
   const [confirmApply, setConfirmApply] = useState(false);
+  // The remediation step the user chose to apply (any step, not just the
+  // recommended one); drives the confirm dialog + binds the apply turn.
+  const [pendingFix, setPendingFix] = useState("");
+  const requestApply = (fix: string) => {
+    setPendingFix(fix);
+    setConfirmApply(true);
+  };
   const runApply = () => {
     setConfirmApply(false);
-    // Bind the apply to the exact fix the user confirmed (not the session's own
-    // recollection of "the recommended fix").
-    runTurn("Apply the recommended fix", true, lastRecommendedFix);
+    // Bind the apply to the exact step the user confirmed.
+    runTurn("Apply this fix", true, pendingFix);
   };
+  // Post-apply verification: a read-only follow-up that re-checks the resource.
+  const checkStatus = () =>
+    runTurn(
+      "Did the fix resolve the issue? Re-check the resource's current status and health now, and say whether it's healthy.",
+    );
 
   // A reopened investigation that ran against a different kube-context than the
   // one we're connected to now: its reasoning is about the old cluster, so
@@ -308,19 +318,23 @@ export function InvestigationView({
                 </div>
               )}
               {turns.map((t, i) => {
-                // Apply is offered only on the latest result that carries a
-                // concrete recommended fix — that's what the one click executes.
+                const isLast = i === turns.length - 1;
+                // Apply (any remediation step) is offered on the latest result,
+                // as long as we're still pointed at the cluster it was about.
                 const canApply =
-                  i === turns.length - 1 &&
+                  isLast &&
                   t.status === "done" &&
                   !t.apply &&
                   !ctxMismatch &&
-                  !!t.diagnosis?.recommendedFix?.trim();
+                  (t.diagnosis?.remediation?.length ?? 0) > 0;
+                // After an apply, offer a one-tap verification follow-up.
+                const canCheck = isLast && t.status === "done" && !!t.apply;
                 return (
                   <TurnView
                     key={i}
                     turn={t}
-                    onApply={canApply ? () => setConfirmApply(true) : undefined}
+                    onApply={canApply ? requestApply : undefined}
+                    onCheckStatus={canCheck ? checkStatus : undefined}
                   />
                 );
               })}
@@ -335,7 +349,7 @@ export function InvestigationView({
         onConfirm={runApply}
         agentLabel={agentLabel}
         resourceLabel={`${kind} ${namespace ? `${namespace}/` : ""}${name}`}
-        recommendedFix={lastRecommendedFix}
+        fix={pendingFix}
       />
 
       {consented && (

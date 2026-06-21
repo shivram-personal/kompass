@@ -30,7 +30,7 @@ export interface Diagnosis {
   rootCause: string;
   report: string;
   remediation: string[];
-  recommendedFix?: string; // the single change Apply will perform (deterministic)
+  recommendedIndex?: number; // 1-based index into remediation of the step Apply performs
   confidence?: number;
   costUsd?: number;
   turns?: number;
