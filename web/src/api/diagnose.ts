@@ -5,9 +5,11 @@ import { getApiBase, getCredentialsMode } from "./config";
 
 export interface AgentInfo {
   name: string;
+  label: string;
   path: string;
   version: string;
   present: boolean;
+  supported: boolean;
 }
 
 export interface AgentsResponse {

@@ -10,14 +10,33 @@ import (
 // AgentInfo describes a detected local agent CLI for the OSS BYO-agent picker.
 type AgentInfo struct {
 	Name    string `json:"name"`    // "claude"
+	Label   string `json:"label"`   // display name, e.g. "Claude Code"
 	Path    string `json:"path"`    // absolute path from LookPath
 	Version string `json:"version"` // best-effort `--version`, "" if it failed
 	Present bool   `json:"present"`
+	// Supported is true when Radar can actually DRIVE this CLI (we parse its
+	// stream-json). Detected-but-unsupported CLIs are shown so the user knows
+	// they exist, but can't be selected to run an investigation yet.
+	Supported bool `json:"supported"`
 }
 
 // knownAgents are the CLI names we probe for — a FIXED list. We never exec a
 // user-supplied name/path: only these literals, resolved through PATH, are run.
 var knownAgents = []string{"claude", "codex", "gemini", "cursor-agent"}
+
+var agentLabels = map[string]string{
+	"claude": "Claude Code", "codex": "Codex", "gemini": "Gemini CLI", "cursor-agent": "Cursor Agent",
+}
+
+// supportedAgents are the CLIs we can drive today (have a stream-json parser).
+func isSupportedAgent(name string) bool {
+	for _, c := range agentCLICandidates {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
 
 // DetectAgents probes for known agent CLIs on PATH. Safe by construction: only
 // the fixed knownAgents names are resolved + run, each `--version` is hard
@@ -31,10 +50,12 @@ func DetectAgents(ctx context.Context) []AgentInfo {
 			continue
 		}
 		out = append(out, AgentInfo{
-			Name:    name,
-			Path:    path,
-			Version: probeVersion(ctx, path),
-			Present: true,
+			Name:      name,
+			Label:     agentLabels[name],
+			Path:      path,
+			Version:   probeVersion(ctx, path),
+			Present:   true,
+			Supported: isSupportedAgent(name),
 		})
 	}
 	return out

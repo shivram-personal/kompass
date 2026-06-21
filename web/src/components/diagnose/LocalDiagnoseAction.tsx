@@ -29,11 +29,12 @@ function useLocalAgent() {
     let live = true;
     getAgents().then((r) => {
       if (!live) return;
-      const primary = r.agents[0];
+      // Prefer a supported (drivable) agent — that's the one the engine runs.
+      const primary = r.agents.find((a) => a.supported) ?? r.agents[0];
       setState({
         enabled: r.enabled,
         label: primary
-          ? AGENT_LABELS[primary.name] || primary.name
+          ? primary.label || AGENT_LABELS[primary.name] || primary.name
           : "your AI agent",
       });
     });

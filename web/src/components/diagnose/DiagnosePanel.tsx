@@ -17,6 +17,7 @@ import {
   type DiagnoseStep,
   type DiagnoseStreamEvent,
 } from "../../api/diagnose";
+import { Markdown } from "../ui/Markdown";
 
 const CONSENT_KEY = "radar-ai-consent-v1";
 
@@ -62,7 +63,12 @@ export function DiagnosePanel({
               const i = prev.findIndex((s) => s.id === ev.step!.id);
               if (i >= 0) {
                 const next = [...prev];
-                next[i] = { ...next[i], ...ev.step! };
+                // The `done` event omits the tool name; keep the running one.
+                next[i] = {
+                  ...next[i],
+                  ...ev.step!,
+                  tool: ev.step!.tool || next[i].tool,
+                };
                 return next;
               }
               return [...prev, ev.step!];
@@ -128,7 +134,7 @@ export function DiagnosePanel({
         role="dialog"
         aria-modal="true"
         aria-label="Diagnose with AI"
-        className="relative flex h-full w-full max-w-[460px] flex-col border-l border-theme-border bg-theme-surface shadow-2xl"
+        className="relative flex h-full w-full max-w-[560px] flex-col border-l border-theme-border bg-theme-surface shadow-2xl"
         style={{
           animation: "slide-in-from-right 0.22s cubic-bezier(0.32,0.72,0,1)",
         }}
@@ -141,8 +147,10 @@ export function DiagnosePanel({
               <div className="text-sm font-medium text-theme-text-primary">
                 Diagnose with AI
               </div>
-              <div className="truncate text-xs text-theme-text-tertiary">
-                {resourceLabel}
+              <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
+                <span className="truncate">{resourceLabel}</span>
+                <span className="shrink-0 opacity-60">·</span>
+                <span className="shrink-0">{agentName}</span>
               </div>
             </div>
           </div>
@@ -156,7 +164,10 @@ export function DiagnosePanel({
         </div>
 
         {/* Body */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-3">
+        <div
+          ref={scrollRef}
+          className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
+        >
           {phase === "consent" && (
             <ConsentCard
               agentName={agentName}
@@ -294,7 +305,7 @@ function ActivityLog({
       {/* Live reasoning trace — only while running; the structured result cards
           replace it once done (otherwise it duplicates the answer + raw json). */}
       {running && narration && (
-        <div className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-theme-border bg-theme-base/50 p-2 font-mono text-[11px] leading-relaxed text-theme-text-tertiary">
+        <div className="mt-2 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-theme-border bg-theme-base/50 p-2 font-mono text-[11px] leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere]">
           {stripJsonBlock(narration)}
         </div>
       )}
@@ -318,9 +329,9 @@ function ResultCard({ diagnosis }: { diagnosis: Diagnosis }) {
           )}
         </div>
         <div className="flex items-start justify-between gap-2">
-          <p className="text-sm leading-relaxed text-theme-text-primary">
+          <Markdown className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_p]:text-theme-text-primary">
             {diagnosis.rootCause}
-          </p>
+          </Markdown>
           <CopyButton text={diagnosis.rootCause} />
         </div>
       </div>
@@ -337,12 +348,14 @@ function ResultCard({ diagnosis }: { diagnosis: Diagnosis }) {
                 key={i}
                 className="flex items-start justify-between gap-2 text-sm text-theme-text-secondary"
               >
-                <span className="leading-relaxed">
-                  <span className="mr-1.5 text-theme-text-tertiary">
+                <div className="flex min-w-0 flex-1 gap-1.5">
+                  <span className="shrink-0 text-theme-text-tertiary">
                     {i + 1}.
                   </span>
-                  {r}
-                </span>
+                  <Markdown className="min-w-0 flex-1 text-sm [overflow-wrap:anywhere] [&_ol]:my-0 [&_p]:my-0 [&_pre]:my-1.5 [&_ul]:my-0">
+                    {r}
+                  </Markdown>
+                </div>
                 <CopyButton text={r} />
               </li>
             ))}
@@ -350,13 +363,15 @@ function ResultCard({ diagnosis }: { diagnosis: Diagnosis }) {
         </div>
       )}
 
-      <div className="flex items-center justify-between px-0.5 text-[11px] text-theme-text-tertiary">
-        <span className="flex items-center gap-1">
-          <ShieldCheck className="h-3 w-3" /> Read-only · AI-generated — verify
-          before acting
+      <div className="flex items-center justify-between gap-2 px-0.5 text-[11px] text-theme-text-tertiary">
+        <span className="flex min-w-0 items-center gap-1">
+          <ShieldCheck className="h-3 w-3 shrink-0" />
+          <span className="truncate">
+            Read-only · AI-generated — verify before acting
+          </span>
         </span>
         {diagnosis.costUsd != null && (
-          <span>${diagnosis.costUsd.toFixed(3)}</span>
+          <span className="shrink-0">${diagnosis.costUsd.toFixed(3)}</span>
         )}
       </div>
     </div>
