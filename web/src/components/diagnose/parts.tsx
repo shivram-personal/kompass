@@ -538,53 +538,48 @@ function DiagnosisResult({
                       : ""
                   }
                 >
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex min-w-0 flex-1 gap-2">
-                      <span
-                        className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
-                          isRec
-                            ? "bg-accent/20 text-accent"
-                            : "bg-theme-base text-theme-text-tertiary"
-                        }`}
-                      >
-                        {i + 1}
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        {isRec && (
-                          <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
-                            <Sparkles className="h-3 w-3" />
-                            Recommended
-                          </div>
-                        )}
-                        <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
-                          {r}
-                        </AIMarkdown>
-                      </div>
+                  <div className="flex items-start gap-2">
+                    <span
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[10px] ${
+                        isRec
+                          ? "bg-accent/20 text-accent"
+                          : "bg-theme-base text-theme-text-tertiary"
+                      }`}
+                    >
+                      {i + 1}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      {isRec && (
+                        <div className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent">
+                          <Sparkles className="h-3 w-3" />
+                          Recommended
+                        </div>
+                      )}
+                      <AIMarkdown className="text-sm [overflow-wrap:anywhere] [&_p]:my-0 [&_pre]:my-1.5">
+                        {r}
+                      </AIMarkdown>
                     </div>
-                    <CopyButton text={r} />
+                    {/* Action cluster: compact Apply (recommended = subtly
+                        filled, others = ghost) sits next to Copy so each row's
+                        actions stay together. The ellipsis signals a confirm
+                        dialog follows — it doesn't apply immediately. */}
+                    <div className="flex shrink-0 items-center gap-0.5">
+                      {canApply && (
+                        <button
+                          onClick={() => onApply!(r)}
+                          className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-accent transition-colors ${
+                            isRec
+                              ? "border border-accent/40 bg-accent/10 hover:bg-accent/20"
+                              : "hover:bg-accent/10"
+                          }`}
+                        >
+                          <Wand2 className="h-3 w-3" />
+                          Apply…
+                        </button>
+                      )}
+                      <CopyButton text={r} />
+                    </div>
                   </div>
-                  {/* Apply lives inside its step so the association is clear.
-                      The ellipsis signals a confirmation dialog follows (it
-                      doesn't apply immediately). Recommended = filled primary;
-                      the rest = accent-outlined buttons, clearly clickable. */}
-                  {canApply &&
-                    (isRec ? (
-                      <button
-                        onClick={() => onApply!(r)}
-                        className="mt-2.5 flex w-full items-center justify-center gap-1.5 rounded-lg btn-brand py-2 text-sm font-medium"
-                      >
-                        <Wand2 className="h-4 w-4" />
-                        Apply recommended fix…
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => onApply!(r)}
-                        className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/5 px-3 py-1.5 text-sm font-medium text-accent transition-colors hover:bg-accent/10"
-                      >
-                        <Wand2 className="h-3.5 w-3.5" />
-                        Apply…
-                      </button>
-                    ))}
                 </li>
               );
             })}
@@ -737,7 +732,12 @@ function tidyFences(md: string): string {
     .replace(/```([A-Za-z0-9_-]*)[ \t]+(\S)/g, "```$1\n$2"); // content off the opener line
 }
 
-// Markdown for agent-generated text — normalizes flaky fences first.
+// Diagnosis output is dense with inline `code`; the shared chip's brand tint is
+// too loud at that density, so neutralize it (border/bg only) for this surface.
+const SOFT_INLINE_CODE =
+  "[&_.inline-code]:border-theme-border/60 [&_.inline-code]:bg-theme-base [&_.inline-code]:font-normal";
+
+// Markdown for agent-generated text — normalizes flaky fences + softens code.
 function AIMarkdown({
   className,
   children,
@@ -745,5 +745,9 @@ function AIMarkdown({
   className?: string;
   children: string;
 }) {
-  return <Markdown className={className}>{tidyFences(children)}</Markdown>;
+  return (
+    <Markdown className={`${SOFT_INLINE_CODE} ${className ?? ""}`}>
+      {tidyFences(children)}
+    </Markdown>
+  );
 }

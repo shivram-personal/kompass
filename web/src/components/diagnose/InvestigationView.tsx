@@ -350,7 +350,7 @@ export function InvestigationView({
     <div className="flex min-h-0 flex-1 flex-col">
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
+        className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3 [scrollbar-gutter:stable]"
       >
         <div className={maximized ? "mx-auto max-w-3xl" : ""}>
           {!consented ? (
