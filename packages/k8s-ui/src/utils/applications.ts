@@ -57,6 +57,10 @@ export interface AppIdentity {
    *  explicit | argo-path | argo-appset | flux-source (declared origins, portable)
    *  · label | name-stem | namespace (NAMEs, per-cluster). */
   source?: string
+  /** Declared source-path stem (argo-path / flux-source only). The display `key`
+   *  is the name stem; this disambiguates same-name/different-path apps in the
+   *  portable cross-cluster fold. */
+  pathKey?: string
 }
 
 /** The user-set annotation that forces cross-cluster grouping — the canonical
@@ -548,7 +552,10 @@ export function foldAppGroups<T extends AppGroupFoldEntry>(
     if (!id) return null
     const scope = options.localScope?.(e)
     if (!scope) return id.key
-    return id.portable ? `portable:${id.key}` : `local:${scope}:${id.key}`
+    // A declared-PATH identity displays its name stem as the key but carries the
+    // path stem in pathKey; two different apps can share a name while declaring
+    // different paths, so disambiguate the portable cross-cluster fold by pathKey.
+    return id.portable ? `portable:${id.key}${id.pathKey ? `:${id.pathKey}` : ''}` : `local:${scope}:${id.key}`
   }
   const byGroup = new Map<string, T[]>()
   for (const e of entries) {

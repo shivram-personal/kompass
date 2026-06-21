@@ -66,6 +66,13 @@ type appIdentity struct {
 	// shared upstream and are collision-free across clusters; NAMES (label,
 	// name-stem, namespace) collide (two teams' "redis") and stay per-cluster.
 	Source string `json:"source,omitempty"`
+	// PathKey is the declared source-PATH stem (argo-path / flux-source only). The
+	// display Key is the NAME stem (so a declared-path instance folds with a
+	// raw-but-corroborated sibling WITHIN a cluster), but two different apps can
+	// share a name while declaring different paths — so the fleet fold disambiguates
+	// portable rows by PathKey, keeping same-name/different-path apps apart across
+	// clusters. Empty for non-path tiers (their own Key is already collision-safe).
+	PathKey string `json:"pathKey,omitempty"`
 }
 
 // App identity provenance tiers (appIdentity.Source). The declaredOrigin set is
@@ -571,12 +578,13 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appS
 			}
 		}
 		for _, c := range members {
-			conf, why, portable, source := "medium", "", false, SourceNameStem
+			conf, why, portable, source, pathKey := "medium", "", false, SourceNameStem, ""
 			switch {
 			case c.pathStem != "":
 				conf = "high"
 				portable = true
 				source = c.pathSource
+				pathKey = c.pathStem
 				origin := "Argo CD source path"
 				if c.pathSource == SourceFluxSource {
 					origin = "Flux source path"
@@ -592,7 +600,7 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, appS
 			default:
 				continue
 			}
-			c.row.Identity = &appIdentity{Key: stem, Env: c.env, Confidence: conf, Evidence: why, Portable: portable, Source: source}
+			c.row.Identity = &appIdentity{Key: stem, Env: c.env, Confidence: conf, Evidence: why, Portable: portable, Source: source, PathKey: pathKey}
 		}
 	}
 

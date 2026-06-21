@@ -223,3 +223,22 @@ describe('appGroupingExplainer', () => {
     }
   })
 })
+
+describe('foldAppGroups pathKey disambiguation', () => {
+  const fleetEntry = (key: string, env: string, pathKey: string): AppGroupFoldEntry => ({
+    row: { key, name: 'billing', identity: { key: 'billing', env, confidence: 'high', evidence: 'e', portable: true, source: 'argo-path', pathKey } },
+    health: 'healthy', versions: [], ready: 1, desired: 1, kinds: { Deployment: 1 }, classComposition: [{ cls: 'service', count: 1 }],
+  })
+  const opts = { localScope: (e: AppGroupFoldEntry) => e.row.key }
+
+  it('folds same-name portable rows that share a pathKey', () => {
+    const rows = foldAppGroups([fleetEntry('cl-a', 'dev', 'apps/billing'), fleetEntry('cl-b', 'prod', 'apps/billing')], new Set(), false, opts)
+    expect(rows.filter((r) => r.kind === 'group').length).toBe(1)
+  })
+
+  it('does NOT fold same-name portable rows with different pathKeys (two teams, two paths)', () => {
+    const rows = foldAppGroups([fleetEntry('cl-a', 'dev', 'teamA/billing'), fleetEntry('cl-b', 'prod', 'teamB/billing')], new Set(), false, opts)
+    expect(rows.filter((r) => r.kind === 'group').length).toBe(0)
+    expect(rows.filter((r) => r.kind === 'instance').length).toBe(2)
+  })
+})

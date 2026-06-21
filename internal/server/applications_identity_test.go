@@ -887,7 +887,7 @@ func TestIdentities_FluxSourcePathIsPortable(t *testing.T) {
 		// Key is the name stem (the join key that unifies a declared-path instance
 		// with a raw-but-corroborated sibling); the path is the declared SIGNAL that
 		// makes it portable, cited in the evidence.
-		if id == nil || id.Key != "billing" || id.Source != SourceFluxSource || !id.Portable {
+		if id == nil || id.Key != "billing" || id.Source != SourceFluxSource || !id.Portable || id.PathKey != "apps/billing" {
 			t.Fatalf("row %d flux identity = %+v, want key=billing source=flux-source portable", i, id)
 		}
 		if !strings.Contains(id.Evidence, "Flux source path") {
