@@ -914,16 +914,22 @@ func collectArgoClaims(ctx context.Context, cache resourceLister, sourcePaths ma
 			nsKey = ns + "/" + name
 		}
 
-		// Declared identity: ApplicationSet fan-out first (a set declares the
-		// sibling relationship), else an env-bearing source path.
+		// Declared identity: an env-bearing source path FIRST, else an
+		// ApplicationSet fan-out. This MUST match resolveAppIdentities' row-level
+		// precedence (argo-path outranks argo-appset) — otherwise a co-located row
+		// keyed by its path and the claim keyed by its set would disagree and fail
+		// to fold.
 		var id *appIdentity
-		if fan, ok := appSetByKey[nsKey]; ok {
-			id = &appIdentity{Key: fan.stem, Env: fan.env, Confidence: "high", Portable: true, Source: SourceArgoAppSet,
-				Evidence: fmt.Sprintf("ApplicationSet fan-out %q (env %s)", fan.stem, fan.env)}
-		} else if path, ok := sourcePaths[nsKey]; ok {
+		if path, ok := sourcePaths[nsKey]; ok {
 			if stem, env := pathStemEnv(path); stem != "" {
 				id = &appIdentity{Key: stem, Env: env, Confidence: "high", Portable: true, Source: SourceArgoPath,
 					Evidence: "Argo CD source path " + stem + " (env overlay " + env + ")"}
+			}
+		}
+		if id == nil {
+			if fan, ok := appSetByKey[nsKey]; ok {
+				id = &appIdentity{Key: fan.stem, Env: fan.env, Confidence: "high", Portable: true, Source: SourceArgoAppSet,
+					Evidence: fmt.Sprintf("ApplicationSet fan-out %q (env %s)", fan.stem, fan.env)}
 			}
 		}
 		if id == nil {

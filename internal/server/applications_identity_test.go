@@ -816,3 +816,52 @@ func TestCollectArgoClaims_NamespaceScoped(t *testing.T) {
 		t.Fatalf("unscoped claims = %d, want 2", len(all))
 	}
 }
+
+// A claim's declared identity must use the same precedence as the row resolver:
+// an env-bearing Argo source path outranks an ApplicationSet fan-out, so a
+// co-located row (keyed by path) and a hub-spoke claim agree.
+func TestCollectArgoClaims_PrefersPathOverAppSet(t *testing.T) {
+	// An Application that is BOTH appset-owned AND has an env-overlay source path.
+	item := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":            "billing-prod",
+			"ownerReferences": []any{map[string]any{"kind": "ApplicationSet", "name": "billing"}},
+		},
+		"spec": map[string]any{
+			"source":      map[string]any{"path": "apps/billing/overlays/prod"},
+			"destination": map[string]any{"name": "prod", "namespace": "billing"},
+		},
+		"status": map[string]any{"resources": []any{
+			map[string]any{"kind": "Deployment", "namespace": "billing", "name": "billing-api"},
+		}},
+	}}
+	// A sibling so the appset is a recognized fan-out.
+	sib := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"name":            "billing-dev",
+			"ownerReferences": []any{map[string]any{"kind": "ApplicationSet", "name": "billing"}},
+		},
+		"spec": map[string]any{"source": map[string]any{"path": "apps/billing/overlays/dev"}},
+	}}
+	lister := &stubLister{items: []*unstructured.Unstructured{item, sib}}
+	sp, asc := argoApplicationFacts(context.Background(), lister)
+	claims := collectArgoClaims(context.Background(), lister, sp, appSetFanouts(asc), nil)
+	for _, c := range claims {
+		if c.Identity != nil && c.Identity.Key == "billing-api" {
+			continue
+		}
+		if c.Identity != nil && c.Identity.Source == SourceArgoAppSet {
+			t.Fatalf("claim used appset over argo-path: %+v", c.Identity)
+		}
+	}
+	// The billing-prod claim specifically must be argo-path (apps/billing), not appset (billing).
+	var found *appIdentity
+	for _, c := range claims {
+		if len(c.Workloads) == 1 && c.Workloads[0].Name == "billing-api" {
+			found = c.Identity
+		}
+	}
+	if found == nil || found.Source != SourceArgoPath || found.Key != "apps/billing" {
+		t.Fatalf("billing-prod claim = %+v, want argo-path key=apps/billing", found)
+	}
+}
