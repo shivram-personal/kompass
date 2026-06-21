@@ -568,10 +568,21 @@ func resolveAppIdentities(rows []appRow, argoSourcePaths map[string]string, nsEn
 		case info.pathEnv != "":
 			env = canonicalEnvToken(info.pathEnv)
 		default:
+			// Prefer a trio token over a discovered one (the universal ladder
+			// outranks affix tokens — same precedence as phase 2's better()), so
+			// e.g. a `prod` namespace wins over a stray `staging` name affix.
 			for _, rd := range info.readings {
-				if _, isTrio := trioEnv(rd.token); isTrio || qualified[rd.token] {
+				if _, isTrio := trioEnv(rd.token); isTrio {
 					env = canonicalEnvToken(rd.token)
 					break
+				}
+			}
+			if env == "" {
+				for _, rd := range info.readings {
+					if qualified[rd.token] {
+						env = canonicalEnvToken(rd.token)
+						break
+					}
 				}
 			}
 		}
