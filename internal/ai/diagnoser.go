@@ -36,13 +36,19 @@ import (
 // disabled (the HTTP layer returns 501) rather than failing per-request.
 var ErrNoCLI = errors.New("no agent CLI available")
 
-// Request is one investigation target.
+// Request is one investigation target (or a follow-up turn).
 type Request struct {
 	Kind      string
 	Namespace string
 	Name      string
 	// MCPPort is the port Radar's own MCP server listens on (localhost).
 	MCPPort int
+	// SessionID, when set, resumes a prior CLI session (multi-turn) so the agent
+	// keeps full context (prior tool results + reasoning) without re-investigating.
+	SessionID string
+	// Question is the user's prompt for this turn. Empty on the first turn (we
+	// auto-generate the investigate prompt); set for follow-ups.
+	Question string
 }
 
 // Diagnosis is the engine's final result.
@@ -53,6 +59,9 @@ type Diagnosis struct {
 	Confidence  *float64 `json:"confidence"`
 	CostUSD     *float64 `json:"costUsd"`
 	Turns       int      `json:"turns"`
+	// SessionID is the CLI session this turn ran in — pass it back as
+	// Request.SessionID to continue the conversation.
+	SessionID string `json:"sessionId"`
 }
 
 // StreamEvent is one normalized event emitted during an investigation.
@@ -159,8 +168,12 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	}
 	defer cleanup()
 
+	prompt := taskPrompt(req)
+	if strings.TrimSpace(req.Question) != "" {
+		prompt = req.Question // follow-up turn
+	}
 	args := []string{
-		"-p", taskPrompt(req),
+		"-p", prompt,
 		"--mcp-config", cfgPath, "--strict-mcp-config",
 		// Disable ALL built-in tools — --allowedTools only pre-approves, it does
 		// NOT restrict the built-in set, so without this the agent could run Bash
@@ -173,11 +186,18 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		args = append(args, "mcp__radar__"+t)
 	}
 	args = append(args,
-		"--append-system-prompt", systemPrompt,
 		"--permission-mode", "acceptEdits",
 		"--max-turns", strconv.Itoa(maxTurns()),
 		"--output-format", "stream-json", "--include-partial-messages", "--verbose",
 	)
+	if req.SessionID != "" {
+		// Resume the prior session: keeps full context (tool results + reasoning)
+		// so a follow-up continues the conversation instead of re-investigating.
+		args = append(args, "--resume", req.SessionID)
+	} else {
+		// First turn: establish the SRE + security framing for the whole session.
+		args = append(args, "--append-system-prompt", systemPrompt)
+	}
 
 	cmd := exec.CommandContext(ctx, d.bin, args...)
 	cmd.Env = scrubbedEnv()
@@ -358,6 +378,7 @@ type cliEvent struct {
 	Result       string   `json:"result"`
 	TotalCostUSD *float64 `json:"total_cost_usd"`
 	NumTurns     int      `json:"num_turns"`
+	SessionID    string   `json:"session_id"`
 }
 
 func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
@@ -367,6 +388,7 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	var finalText string
 	var cost *float64
 	var turns int
+	var sessionID string
 
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
@@ -421,12 +443,14 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 			finalText = ev.Result
 			cost = ev.TotalCostUSD
 			turns = ev.NumTurns
+			sessionID = ev.SessionID
 		}
 	}
 
 	d := diagnosisFromText(finalText)
 	d.CostUSD = cost
 	d.Turns = turns
+	d.SessionID = sessionID
 	return d
 }
 

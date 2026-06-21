@@ -33,6 +33,7 @@ export interface Diagnosis {
   confidence?: number;
   costUsd?: number;
   turns?: number;
+  sessionId?: string;
 }
 
 export interface DiagnoseStreamEvent {
@@ -66,7 +67,13 @@ export interface DiagnoseHandlers {
  * process group on disconnect).
  */
 export function streamDiagnose(
-  params: { kind: string; namespace: string; name: string },
+  params: {
+    kind: string;
+    namespace: string;
+    name: string;
+    sessionId?: string; // resume a prior session (multi-turn follow-up)
+    question?: string; // the follow-up question (absent on the first turn)
+  },
   handlers: DiagnoseHandlers,
 ): () => void {
   const q = new URLSearchParams({
@@ -74,6 +81,8 @@ export function streamDiagnose(
     namespace: params.namespace,
     name: params.name,
   });
+  if (params.sessionId) q.set("session", params.sessionId);
+  if (params.question) q.set("q", params.question);
   const url = `${getApiBase()}/diagnose/stream?${q.toString()}`;
   const es = new EventSource(url, {
     withCredentials: getCredentialsMode() === "include",

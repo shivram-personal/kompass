@@ -29,6 +29,9 @@ func (s *Server) handleDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "kind and name are required")
 		return
 	}
+	// Multi-turn: a follow-up resumes the prior CLI session with the user's question.
+	session := strings.TrimSpace(r.URL.Query().Get("session"))
+	question := strings.TrimSpace(r.URL.Query().Get("q"))
 
 	if s.aiDiagnoser == nil {
 		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code to enable AI diagnosis")
@@ -69,6 +72,7 @@ func (s *Server) handleDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 	// writing to w here is race-free.
 	diag, err := s.aiDiagnoser.DiagnoseStream(r.Context(), ai.Request{
 		Kind: kind, Namespace: namespace, Name: name, MCPPort: s.port,
+		SessionID: session, Question: question,
 	}, send)
 	if err != nil {
 		if r.Context().Err() != nil {
