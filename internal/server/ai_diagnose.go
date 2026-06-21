@@ -12,8 +12,11 @@ import (
 // handleListAgents reports the local agent CLIs detected on PATH, for the OSS
 // "AI Agent" picker. Safe: only fixed known names are probed (see ai.DetectAgents).
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	// Version probing is slow (execs `<cli> --version`); only do it when asked
+	// (e.g. a settings/picker view) so the Diagnose button's check stays instant.
+	withVersions := r.URL.Query().Get("versions") == "1"
 	s.writeJSON(w, map[string]any{
-		"agents":  ai.DetectAgents(r.Context()),
+		"agents":  ai.DetectAgents(r.Context(), withVersions),
 		"enabled": s.aiDiagnoser != nil,
 	})
 }

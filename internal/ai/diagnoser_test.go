@@ -99,7 +99,7 @@ func TestDetectAgents_OnlyKnownNames(t *testing.T) {
 	for _, n := range knownAgents {
 		known[n] = true
 	}
-	for _, a := range DetectAgents(context.Background()) {
+	for _, a := range DetectAgents(context.Background(), false) {
 		if !known[a.Name] {
 			t.Errorf("detected unknown agent name %q (would mean we ran an unexpected binary)", a.Name)
 		}

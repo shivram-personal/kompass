@@ -39,24 +39,31 @@ func isSupportedAgent(name string) bool {
 }
 
 // DetectAgents probes for known agent CLIs on PATH. Safe by construction: only
-// the fixed knownAgents names are resolved + run, each `--version` is hard
-// timeout-bounded, and we never trigger auth/network side effects (no login
-// probes — just `--version`). Returns one entry per present CLI.
-func DetectAgents(ctx context.Context) []AgentInfo {
+// the fixed knownAgents names are resolved + run.
+//
+// withVersions controls whether each CLI's `--version` is executed. That exec is
+// SLOW (~hundreds of ms per CLI, several seconds total) and is NOT needed to show
+// the Diagnose button (which only needs to know an agent is present) — so it's
+// opt-in (the settings/picker passes it; the button's hot path does not). Version
+// probing never triggers auth/network side effects — just `--version`.
+func DetectAgents(ctx context.Context, withVersions bool) []AgentInfo {
 	var out []AgentInfo
 	for _, name := range knownAgents {
 		path, err := exec.LookPath(name)
 		if err != nil {
 			continue
 		}
-		out = append(out, AgentInfo{
+		info := AgentInfo{
 			Name:      name,
 			Label:     agentLabels[name],
 			Path:      path,
-			Version:   probeVersion(ctx, path),
 			Present:   true,
 			Supported: isSupportedAgent(name),
-		})
+		}
+		if withVersions {
+			info.Version = probeVersion(ctx, path)
+		}
+		out = append(out, info)
 	}
 	return out
 }
