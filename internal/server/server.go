@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
+	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
@@ -89,6 +90,10 @@ type Server struct {
 	// burst. Index is a pure projection of four cached listers — TTL has
 	// no semantic effect.
 	rbacMemo *rbac.Memoizer
+
+	// aiDiagnoser drives a local agent CLI for "Diagnose with AI" (nil when no
+	// CLI is on PATH — the endpoints then 501). Resolved once at startup.
+	aiDiagnoser *ai.Diagnoser
 }
 
 // Config holds server configuration
@@ -119,6 +124,15 @@ func New(cfg Config) *Server {
 		authConfig:      cfg.AuthConfig,
 		topoMemo:        topology.NewMemoizer(5 * time.Second),
 		rbacMemo:        rbac.NewMemoizer(5 * time.Second),
+	}
+
+	// Resolve a local agent CLI for AI diagnosis (keyless, on the user's own
+	// subscription). nil when none is found — the feature stays disabled.
+	if bin := ai.ResolveCLI(); bin != "" {
+		if d, err := ai.New(bin); err == nil {
+			s.aiDiagnoser = d
+			log.Printf("[ai] diagnose enabled (agent CLI: %s)", bin)
+		}
 	}
 
 	// Register a single context-switch callback so every PerformContextSwitch
@@ -253,6 +267,9 @@ func (s *Server) setupRoutes() {
 		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
+		// AI investigation streams via SSE — runs for tens of seconds to minutes,
+		// so it lives outside the 60s timeout group.
+		r.Get("/diagnose/stream", s.handleDiagnoseStream)
 
 		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
 		r.Post("/nodes/{name}/drain", s.handleDrainNode)
@@ -262,6 +279,7 @@ func (s *Server) setupRoutes() {
 			r.Use(middleware.Timeout(60 * time.Second))
 
 			r.Get("/health", s.handleHealth)
+			r.Get("/agents", s.handleListAgents)
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)
