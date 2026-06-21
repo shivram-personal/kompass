@@ -36,8 +36,10 @@ func (s *Server) handleDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 	session := strings.TrimSpace(r.URL.Query().Get("session"))
 	question := strings.TrimSpace(r.URL.Query().Get("q"))
 	// Apply: a user-confirmed remediation turn (write tools enabled). Requires a
-	// session to resume (the investigation it's applying the fix from).
+	// session to resume (the investigation it's applying the fix from). fix is the
+	// exact recommended-fix text the user confirmed, so the apply is bound to it.
 	apply := r.URL.Query().Get("apply") == "1" && session != ""
+	fix := strings.TrimSpace(r.URL.Query().Get("fix"))
 
 	if s.aiDiagnoser == nil {
 		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code to enable AI diagnosis")
@@ -78,7 +80,7 @@ func (s *Server) handleDiagnoseStream(w http.ResponseWriter, r *http.Request) {
 	// writing to w here is race-free.
 	diag, err := s.aiDiagnoser.DiagnoseStream(r.Context(), ai.Request{
 		Kind: kind, Namespace: namespace, Name: name, MCPPort: s.port,
-		SessionID: session, Question: question, Apply: apply,
+		SessionID: session, Question: question, Apply: apply, Fix: fix,
 	}, send)
 	if err != nil {
 		if r.Context().Err() != nil {

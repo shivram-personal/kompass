@@ -59,7 +59,11 @@ export function DiagnoseSurface({
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       setWidth((w) => {
-        localStorage.setItem(widthKey, String(w));
+        try {
+          localStorage.setItem(widthKey, String(w));
+        } catch {
+          /* storage disabled — width just won't persist */
+        }
         return w;
       });
     };

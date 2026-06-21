@@ -54,6 +54,10 @@ type Request struct {
 	// by the caller (an explicit user confirmation) — the read-only investigation
 	// path never sets this.
 	Apply bool
+	// Fix is the exact recommended-fix text the user saw and confirmed. On an
+	// apply turn the agent is told to apply THIS specific change, so the operation
+	// is bound to what was confirmed rather than the session's own recollection.
+	Fix string
 }
 
 // Diagnosis is the engine's final result.
@@ -112,12 +116,23 @@ var radarWriteTools = []string{
 	"manage_cronjob", "manage_node", "manage_gitops",
 }
 
-const applyPrompt = "Apply the single change you stated as recommended_fix — and ONLY that change. " +
-	"Use the Radar write tools to make the minimal patch; do not do anything beyond the recommended " +
-	"fix. If the resource is GitOps-managed (Argo/Flux) or Helm-managed, a direct change will be " +
-	"reverted on the next reconcile — say so and prefer the GitOps/Helm-aware path (or explain what " +
-	"to change in Git) instead of patching live. When done, briefly confirm exactly what you changed " +
-	"(the resource, field, and new value)."
+const applyGuidance = "Use the Radar write tools to make the minimal patch; do not do anything beyond " +
+	"this fix. If the resource is GitOps-managed (Argo/Flux) or Helm-managed, a direct change will be " +
+	"reverted on the next reconcile — say so and prefer the GitOps/Helm-aware path (or explain what to " +
+	"change in Git) instead of patching live. When done, briefly confirm exactly what you changed (the " +
+	"resource, field, and new value)."
+
+// applyPrompt builds the remediation-turn prompt. When the caller passes the
+// exact fix the user confirmed, the agent is bound to apply THAT change (not its
+// own re-derivation of "the recommended fix"), so the operation matches what was
+// shown in the confirmation dialog.
+func applyPrompt(fix string) string {
+	if fix = strings.TrimSpace(fix); fix != "" {
+		return "Apply EXACTLY this fix that the user just confirmed — and ONLY this change, do not " +
+			"substitute a different one:\n\n" + fix + "\n\n" + applyGuidance
+	}
+	return "Apply the single change you stated as recommended_fix — and ONLY that change. " + applyGuidance
+}
 
 const systemPrompt = "You are a senior Kubernetes SRE investigating an unhealthy resource. " +
 	"Investigate methodically and SHOW YOUR WORK: make several specific, targeted tool calls " +
@@ -193,7 +208,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 
 	prompt := taskPrompt(req)
 	if req.Apply {
-		prompt = applyPrompt // explicit, user-confirmed remediation turn
+		prompt = applyPrompt(req.Fix) // explicit, user-confirmed remediation turn
 	} else if strings.TrimSpace(req.Question) != "" {
 		prompt = req.Question // follow-up turn
 	}

@@ -5,8 +5,9 @@
 // Design (per review): schema-versioned key, hard per-field caps, cap on entry
 // count, QuotaExceeded handling, and NO raw tool results stored (only tool
 // names) — investigation output can contain logs/identifiers, so we keep it
-// bounded and offer a Clear control. Restore is VIEW-ONLY ("saved report") — the
-// live CLI session is gone after the run, so a saved entry can't be resumed.
+// bounded and offer a Clear control. The stored id is the agent's session id, so
+// reopening an entry can resume that session (claude --resume) for follow-ups /
+// apply — best-effort: resume fails gracefully if the CLI no longer has it.
 
 const KEY = "radar-ai-history-v1"; // bump suffix on shape change → old data ignored
 const CAP = 20;

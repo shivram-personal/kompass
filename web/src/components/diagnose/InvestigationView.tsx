@@ -4,7 +4,7 @@
 // the shell (dock/resize/maximize) lives in DiagnoseSurface, the controller in
 // DiagnoseContext.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Send } from "lucide-react";
+import { Send, AlertTriangle } from "lucide-react";
 import {
   streamDiagnose,
   type Diagnosis,
@@ -24,6 +24,19 @@ import {
 } from "./parts";
 
 const CONSENT_KEY = "radar-ai-consent-v1";
+
+// localStorage can throw (Safari private mode / disabled storage); never let that
+// crash the surface — this component renders inside the always-mounted provider.
+function readConsent(): boolean {
+  try {
+    return (
+      typeof window !== "undefined" &&
+      localStorage.getItem(CONSENT_KEY) === "1"
+    );
+  } catch {
+    return false;
+  }
+}
 
 // Rebuild a live Turn from a persisted one so a reopened investigation shows its
 // transcript and can be continued. Saved tool entries keep only names (never raw
@@ -68,9 +81,10 @@ export function InvestigationView({
 }) {
   const { kind, namespace, name } = target;
   const { close } = useDiagnose();
-  const hasConsent =
-    typeof window !== "undefined" && localStorage.getItem(CONSENT_KEY) === "1";
-  const [consented, setConsented] = useState(hasConsent || !!seed);
+  const [consented, setConsented] = useState(readConsent() || !!seed);
+  // The kube-context this view is connected to now. A seeded (reopened) entry
+  // may have run against a different context; we guard Apply on a mismatch.
+  const [currentCtx, setCurrentCtx] = useState("");
   const [turns, setTurns] = useState<Turn[]>(() =>
     seed ? seed.turns.map(turnFromSaved) : [],
   );
@@ -91,8 +105,11 @@ export function InvestigationView({
     setTurns((prev) => prev.map((t, i) => (i === prev.length - 1 ? fn(t) : t)));
 
   const runTurn = useCallback(
-    (question?: string, apply?: boolean) => {
+    (question?: string, apply?: boolean, fix?: string) => {
       mutatedRef.current = true;
+      // Close any stream still open from a prior turn before starting a new one,
+      // so its late events can't land on this turn.
+      cancelRef.current?.();
       setTurns((prev) => [
         ...prev,
         {
@@ -113,6 +130,7 @@ export function InvestigationView({
           sessionId: sessionIdRef.current || undefined,
           question: apply ? undefined : question,
           apply,
+          fix,
         },
         {
           onEvent: (ev: DiagnoseStreamEvent) => {
@@ -175,7 +193,11 @@ export function InvestigationView({
     fetch(`${getApiBase()}/connection`, { credentials: getCredentialsMode() })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d) ctxRef.current = d.contextName || d.context || d.cluster || "";
+        if (d) {
+          const ctx = d.contextName || d.context || d.cluster || "";
+          ctxRef.current = ctx;
+          setCurrentCtx(ctx);
+        }
       })
       .catch(() => {});
   }, []);
@@ -214,7 +236,11 @@ export function InvestigationView({
   }, [turns, kind, namespace, name]);
 
   const approve = () => {
-    localStorage.setItem(CONSENT_KEY, "1");
+    try {
+      localStorage.setItem(CONSENT_KEY, "1");
+    } catch {
+      /* storage disabled — consent holds for this session only */
+    }
     setConsented(true);
   };
   const stop = () => {
@@ -238,8 +264,16 @@ export function InvestigationView({
   const [confirmApply, setConfirmApply] = useState(false);
   const runApply = () => {
     setConfirmApply(false);
-    runTurn("Apply the recommended fix", true);
+    // Bind the apply to the exact fix the user confirmed (not the session's own
+    // recollection of "the recommended fix").
+    runTurn("Apply the recommended fix", true, lastRecommendedFix);
   };
+
+  // A reopened investigation that ran against a different kube-context than the
+  // one we're connected to now: its reasoning is about the old cluster, so
+  // applying it here could mutate the wrong cluster. Block Apply and warn.
+  const ctxMismatch =
+    !!seed && !!seed.ctx && !!currentCtx && seed.ctx !== currentCtx;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -256,6 +290,23 @@ export function InvestigationView({
             />
           ) : (
             <div className="space-y-4">
+              {ctxMismatch && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-theme-text-secondary">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                  <span>
+                    This investigation ran against{" "}
+                    <span className="font-medium text-theme-text-primary">
+                      {seed!.ctx}
+                    </span>
+                    , but you&apos;re now connected to{" "}
+                    <span className="font-medium text-theme-text-primary">
+                      {currentCtx}
+                    </span>
+                    . Apply is disabled — re-run Diagnose to analyze the current
+                    cluster.
+                  </span>
+                </div>
+              )}
               {turns.map((t, i) => {
                 // Apply is offered only on the latest result that carries a
                 // concrete recommended fix — that's what the one click executes.
@@ -263,6 +314,7 @@ export function InvestigationView({
                   i === turns.length - 1 &&
                   t.status === "done" &&
                   !t.apply &&
+                  !ctxMismatch &&
                   !!t.diagnosis?.recommendedFix?.trim();
                 return (
                   <TurnView

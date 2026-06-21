@@ -64,8 +64,14 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [target, setTarget] = useState<Target | null>(null);
   const [saved, setSaved] = useState<HistoryEntry | null>(null);
   const [width, setWidth] = useState<number>(() => {
-    const v = Number(localStorage.getItem(WIDTH_KEY));
-    return v >= MIN_W && v <= MAX_W ? v : 560;
+    // localStorage can throw (private mode / disabled). This provider wraps the
+    // whole app, so a throw here would take down all of Radar — fail to default.
+    try {
+      const v = Number(localStorage.getItem(WIDTH_KEY));
+      return v >= MIN_W && v <= MAX_W ? v : 560;
+    } catch {
+      return 560;
+    }
   });
   const [maximized, setMaximized] = useState(false);
   const [narrow, setNarrow] = useState(
