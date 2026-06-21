@@ -20,6 +20,9 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  Clock,
+  Trash2,
+  ArrowLeft,
 } from "lucide-react";
 import {
   streamDiagnose,
@@ -27,7 +30,16 @@ import {
   type DiagnoseStep,
   type DiagnoseStreamEvent,
 } from "../../api/diagnose";
+import { getApiBase, getCredentialsMode } from "../../api/config";
 import { Markdown } from "../ui/Markdown";
+import {
+  loadHistory,
+  saveEntry,
+  clearHistory,
+  forResource,
+  relativeTime,
+  type HistoryEntry,
+} from "./history";
 
 const CONSENT_KEY = "radar-ai-consent-v1";
 const PANEL_WIDTH_KEY = "radar-ai-panel-width";
@@ -72,6 +84,11 @@ export function DiagnosePanel({
   const [maximized, setMaximized] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [topOffset, setTopOffset] = useState(0);
+  // History (view-only saved reports).
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [viewing, setViewing] = useState<HistoryEntry | null>(null);
+  const [historyList, setHistoryList] = useState<HistoryEntry[]>([]);
+  const ctxRef = useRef("");
   // The CLI session id of the latest turn — resumed by the next follow-up so the
   // agent keeps full context. Kept in a ref to avoid stale closures in onEvent.
   const sessionIdRef = useRef("");
@@ -184,6 +201,57 @@ export function DiagnosePanel({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  // Best-effort cluster/context label for history entries (avoids ambiguity when
+  // the same kind/ns/name exists across contexts).
+  useEffect(() => {
+    fetch(`${getApiBase()}/connection`, { credentials: getCredentialsMode() })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d) ctxRef.current = d.contextName || d.context || d.cluster || "";
+      })
+      .catch(() => {});
+  }, []);
+
+  // Persist the thread to local history whenever its latest turn finishes.
+  useEffect(() => {
+    const last = turns[turns.length - 1];
+    if (!last || last.status === "running" || !sessionIdRef.current) return;
+    saveEntry({
+      id: sessionIdRef.current,
+      ctx: ctxRef.current,
+      kind,
+      namespace,
+      name,
+      ts: Date.now(),
+      status: last.status === "error" ? "error" : "done",
+      turns: turns.map((t) => ({
+        question: t.question,
+        rootCause: t.diagnosis?.rootCause || "",
+        report: t.diagnosis?.report || "",
+        remediation: t.diagnosis?.remediation || [],
+        confidence: t.diagnosis?.confidence,
+        costUsd: t.diagnosis?.costUsd,
+        tools: t.timeline
+          .filter(
+            (it): it is Extract<TimelineItem, { kind: "tool" }> =>
+              it.kind === "tool",
+          )
+          .map((it) => it.tool),
+      })),
+    });
+  }, [turns, kind, namespace, name]);
+
+  const openHistory = () => {
+    setHistoryList(loadHistory());
+    setViewing(null);
+    setHistoryOpen(true);
+  };
+  const backToLive = () => {
+    setHistoryOpen(false);
+    setViewing(null);
+  };
+  const inHistory = historyOpen || viewing !== null;
+
   const approve = () => {
     localStorage.setItem(CONSENT_KEY, "1");
     setConsented(true);
@@ -283,6 +351,18 @@ export function DiagnosePanel({
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <button
+            onClick={inHistory ? backToLive : openHistory}
+            className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+            aria-label={inHistory ? "Back to current" : "History"}
+            title={inHistory ? "Back to current" : "History"}
+          >
+            {inHistory ? (
+              <ArrowLeft className="h-4 w-4" />
+            ) : (
+              <Clock className="h-4 w-4" />
+            )}
+          </button>
+          <button
             onClick={() => setMaximized((v) => !v)}
             className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
             aria-label={maximized ? "Restore" : "Maximize"}
@@ -323,6 +403,27 @@ export function DiagnosePanel({
             onApprove={approve}
             onCancel={onClose}
           />
+        ) : viewing ? (
+          <div className={maximized ? "mx-auto max-w-3xl" : ""}>
+            <SavedReportView entry={viewing} />
+          </div>
+        ) : historyOpen ? (
+          <div className={maximized ? "mx-auto max-w-3xl" : ""}>
+            <HistoryList
+              list={historyList}
+              kind={kind}
+              namespace={namespace}
+              name={name}
+              onPick={(e) => {
+                setViewing(e);
+                setHistoryOpen(false);
+              }}
+              onClear={() => {
+                clearHistory();
+                setHistoryList([]);
+              }}
+            />
+          </div>
         ) : (
           <div className={`space-y-4 ${maximized ? "mx-auto max-w-3xl" : ""}`}>
             {turns.map((t, i) => (
@@ -332,8 +433,8 @@ export function DiagnosePanel({
         )}
       </div>
 
-      {/* Footer — follow-up composer (or Stop while running) */}
-      {consented && (
+      {/* Footer — follow-up composer (or Stop while running); hidden in history */}
+      {consented && !inHistory && (
         <div
           className={`border-t border-theme-border px-3 py-2.5 ${maximized ? "[&>*]:mx-auto [&>*]:max-w-3xl" : ""}`}
         >
@@ -605,6 +706,120 @@ function compactArgs(raw: string): string {
   } catch {
     return raw;
   }
+}
+
+function HistoryList({
+  list,
+  kind,
+  namespace,
+  name,
+  onPick,
+  onClear,
+}: {
+  list: HistoryEntry[];
+  kind: string;
+  namespace: string;
+  name: string;
+  onPick: (e: HistoryEntry) => void;
+  onClear: () => void;
+}) {
+  const now = Date.now();
+  const thisResource = forResource(list, kind, namespace, name);
+  const thisIds = new Set(thisResource.map((e) => e.id));
+  const others = list.filter((e) => !thisIds.has(e.id));
+
+  if (list.length === 0) {
+    return (
+      <div className="py-10 text-center text-sm text-theme-text-tertiary">
+        No past investigations yet.
+      </div>
+    );
+  }
+
+  const row = (e: HistoryEntry) => (
+    <button
+      key={e.id}
+      onClick={() => onPick(e)}
+      className="flex w-full items-center gap-2 rounded-md border border-theme-border/60 bg-theme-base/40 px-2.5 py-2 text-left hover:bg-theme-hover"
+    >
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${e.status === "error" ? "bg-red-400" : "bg-emerald-400"}`}
+      />
+      <span className="min-w-0 flex-1 truncate text-sm text-theme-text-primary">
+        {e.kind} {e.namespace}/{e.name}
+      </span>
+      <span className="shrink-0 text-[11px] text-theme-text-tertiary">
+        {relativeTime(e.ts, now)}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="space-y-3">
+      {thisResource.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+            This resource
+          </div>
+          {thisResource.map(row)}
+        </div>
+      )}
+      {others.length > 0 && (
+        <div className="space-y-1.5">
+          <div className="text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+            All recent
+          </div>
+          {others.map(row)}
+        </div>
+      )}
+      <button
+        onClick={onClear}
+        className="flex items-center gap-1.5 pt-1 text-xs text-theme-text-tertiary hover:text-red-400"
+      >
+        <Trash2 className="h-3.5 w-3.5" /> Clear history
+      </button>
+    </div>
+  );
+}
+
+function SavedReportView({ entry }: { entry: HistoryEntry }) {
+  const now = Date.now();
+  return (
+    <div className="space-y-4">
+      <div className="text-[11px] text-theme-text-tertiary">
+        Saved report · {relativeTime(entry.ts, now)}
+        {entry.ctx ? ` · ${entry.ctx}` : ""}
+      </div>
+      {entry.turns.map((t, i) => (
+        <div key={i} className="space-y-2">
+          {t.question && (
+            <div className="flex justify-end">
+              <div className="max-w-[85%] rounded-lg rounded-br-sm bg-accent/10 px-3 py-1.5 text-sm text-theme-text-primary [overflow-wrap:anywhere]">
+                {t.question}
+              </div>
+            </div>
+          )}
+          {t.tools.length > 0 && (
+            <div className="text-[11px] text-theme-text-tertiary">
+              <span className="font-medium uppercase tracking-wide">
+                Investigation
+              </span>{" "}
+              {t.tools.map(prettyTool).join(" · ")}
+            </div>
+          )}
+          <ResultCard
+            diagnosis={{
+              rootCause: t.rootCause,
+              report: t.report,
+              remediation: t.remediation,
+              confidence: t.confidence,
+              costUsd: t.costUsd,
+            }}
+          />
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ResultCard({ diagnosis }: { diagnosis: Diagnosis }) {
