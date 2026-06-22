@@ -716,6 +716,30 @@ func TestReviseVerdictWithProbes_SkippedRowsIgnored(t *testing.T) {
 	}
 }
 
+// TestHasUnverifiableEndpoints_UpstreamsAreCounted pins that a marker
+// placed on an Upstream hop (e.g. an unreadable parent Gateway on a
+// Route trace) reaches the verdict downgrade. The earlier downstream-
+// only walk left the marker visible on the hop but invisible to the
+// verdict computation, producing healthy/degraded over an explicitly
+// unverifiable path.
+func TestHasUnverifiableEndpoints_UpstreamsAreCounted(t *testing.T) {
+	tr := &Trace{
+		Downstream: []Hop{{Resource: ResourceRef{Kind: "Service", Name: "api"}}},
+		Upstreams: []Hop{
+			{
+				Resource: ResourceRef{Kind: "Gateway", Name: "edge"},
+				Meta:     map[string]any{"endpointSource": "unknown"},
+			},
+		},
+	}
+	if !hasUnverifiableEndpoints(tr) {
+		t.Errorf("hasUnverifiableEndpoints with upstream endpointSource=unknown = false, want true")
+	}
+	if got := classifyUnknown(tr); got != UnknownClassInvestigate {
+		t.Errorf("classifyUnknown with upstream endpointSource=unknown = %q, want %q", got, UnknownClassInvestigate)
+	}
+}
+
 // TestClassifyUnknown_SelectorlessIsByDesign pins that a selectorless
 // Service (manually-managed endpoints) classifies the unknown verdict as
 // by-design, so the UI can render an informational banner rather than a

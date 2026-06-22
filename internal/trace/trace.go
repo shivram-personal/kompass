@@ -527,7 +527,7 @@ func computeVerdict(t *Trace) (string, int) {
 // behind a selectorless Service still wants operator attention.
 func classifyUnknown(t *Trace) string {
 	hasByDesign := false
-	for _, hop := range t.Downstream {
+	for _, hop := range allHops(t) {
 		if hop.Meta == nil {
 			continue
 		}
@@ -544,8 +544,20 @@ func classifyUnknown(t *Trace) string {
 	return UnknownClassInvestigate
 }
 
+// allHops yields every hop in the trace (downstream + upstreams) so the
+// unverifiability scans see signals attached anywhere in the path. The
+// downstream-only walk dropped markers placed on upstream Gateway hops
+// (the route → parent-Gateway path) and left the verdict reading clean
+// while the trace explicitly carried an unverifiable hop.
+func allHops(t *Trace) []Hop {
+	out := make([]Hop, 0, len(t.Downstream)+len(t.Upstreams))
+	out = append(out, t.Downstream...)
+	out = append(out, t.Upstreams...)
+	return out
+}
+
 func hasUnverifiableEndpoints(t *Trace) bool {
-	for _, hop := range t.Downstream {
+	for _, hop := range allHops(t) {
 		if hop.Meta == nil {
 			continue
 		}
@@ -562,7 +574,7 @@ func hasUnverifiableEndpoints(t *Trace) bool {
 // unknownReason names the dominant cause for an unknown verdict so the
 // banner can be specific instead of "we don't know".
 func unknownReason(t *Trace) string {
-	for _, hop := range t.Downstream {
+	for _, hop := range allHops(t) {
 		if hop.Meta == nil {
 			continue
 		}
@@ -570,7 +582,7 @@ func unknownReason(t *Trace) string {
 			return "Service has no selector. Endpoints are managed manually, so we can't confirm a target is reachable."
 		}
 		if src, _ := hop.Meta["endpointSource"].(string); src == "unknown" {
-			return "Pod state couldn't be read. RBAC may be blocking the pods listing, or the cache is still syncing."
+			return "Backing state couldn't be read on at least one hop. RBAC may be blocking the listing, or the cache is still syncing."
 		}
 	}
 	return "Path can't be verified from declared config alone."
