@@ -40,6 +40,9 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 		"--max-turns", strconv.Itoa(s.maxTurns),
 		"--output-format", "stream-json", "--include-partial-messages", "--verbose",
 	)
+	if s.model != "" {
+		args = append(args, "--model", s.model) // Claude has no separate effort knob
+	}
 	if s.sessionID != "" {
 		args = append(args, "--resume", s.sessionID)
 	} else {

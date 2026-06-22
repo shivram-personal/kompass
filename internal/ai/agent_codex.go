@@ -44,6 +44,12 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	if s.isolated {
 		base = append(base, "--ignore-user-config")
 	}
+	if s.model != "" {
+		base = append(base, "-m", s.model)
+	}
+	if s.effort != "" {
+		base = append(base, "-c", fmt.Sprintf("model_reasoning_effort=%q", s.effort))
+	}
 
 	var args []string
 	if s.sessionID != "" {

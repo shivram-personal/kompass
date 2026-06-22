@@ -37,6 +37,16 @@ func (s *Server) aiReady(w http.ResponseWriter) bool {
 	return s.requireConnected(w)
 }
 
+// validReasoningEffort allows the empty (default) value or one of Codex's
+// reasoning-effort levels — never an arbitrary string passed into CLI config.
+func validReasoningEffort(e string) bool {
+	switch e {
+	case "", "minimal", "low", "medium", "high":
+		return true
+	}
+	return false
+}
+
 // localOriginOK rejects cross-origin POSTs to these state-changing, process-
 // spawning endpoints. Same-origin (no Origin header) passes; otherwise the Origin
 // must parse to an exact loopback host — substring checks would let
@@ -71,6 +81,8 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		Kind, Namespace, Name string
 		Agent                 string `json:"agent"`
 		Isolated              *bool  `json:"isolated"` // pointer: default ISOLATED when omitted
+		Model                 string `json:"model"`
+		Effort                string `json:"effort"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
@@ -91,7 +103,17 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	}
 	agent := s.aiRuns.AgentName(strings.TrimSpace(body.Agent))
 	isolated := body.Isolated == nil || *body.Isolated
-	run, err := s.aiRuns.Start(kind, namespace, name, agent, isolated)
+	model := strings.TrimSpace(body.Model)
+	if len(model) > 100 {
+		s.writeError(w, http.StatusBadRequest, "model name too long")
+		return
+	}
+	effort := strings.TrimSpace(body.Effort)
+	if !validReasoningEffort(effort) {
+		s.writeError(w, http.StatusBadRequest, "invalid reasoning effort")
+		return
+	}
+	run, err := s.aiRuns.Start(kind, namespace, name, agent, isolated, model, effort)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {
 			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")

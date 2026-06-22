@@ -67,6 +67,8 @@ export interface RunSummary {
   context: string;
   agent?: string; // backend CLI that drove this run ("claude"/"codex")
   isolated?: boolean;
+  model?: string;
+  effort?: string;
   status: "running" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;
@@ -114,7 +116,12 @@ export async function createRun(
     namespace: string;
     name: string;
   },
-  opts?: { agent?: string; isolated?: boolean },
+  opts?: {
+    agent?: string;
+    isolated?: boolean;
+    model?: string;
+    effort?: string;
+  },
 ): Promise<RunSummary> {
   const res = await fetch(RUNS(), {
     method: "POST",

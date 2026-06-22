@@ -61,28 +61,100 @@ function Segmented<T extends string | boolean>({
   );
 }
 
-// AgentControls lets the user pick which installed CLI drives investigations and,
-// for Codex, whether to run isolated or with their own setup. It renders nothing
-// in the common single-agent + non-Codex case, so the surface stays frictionless.
+// Per-agent model options (curated; the CLI validates the actual slug). "" means
+// the agent's own default. Claude aliases are forward-stable; Codex slugs may need
+// occasional updates.
+const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  claude: [
+    { value: "", label: "Default" },
+    { value: "opus", label: "Opus" },
+    { value: "sonnet", label: "Sonnet" },
+    { value: "haiku", label: "Haiku" },
+  ],
+  codex: [
+    { value: "", label: "Default" },
+    { value: "gpt-5-codex", label: "GPT-5 Codex" },
+    { value: "gpt-5", label: "GPT-5" },
+    { value: "o3", label: "o3" },
+  ],
+};
+const EFFORT_OPTIONS = [
+  { value: "", label: "Default" },
+  { value: "minimal", label: "Minimal" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
+
+function Dropdown({
+  label,
+  value,
+  options,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+        {label}
+      </div>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-theme-border bg-theme-base px-2 py-1.5 text-xs text-theme-text-primary"
+      >
+        {options.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {hint && (
+        <p className="mt-1 text-[11px] leading-snug text-theme-text-tertiary">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// AgentControls is the full AI-diagnosis config block (agent, isolation, model,
+// effort) — pure + prop-driven. It lives in Settings, not the investigation panel,
+// since these are set-once preferences rather than per-run knobs.
 export function AgentControls({
   agents,
   selectedAgent,
   onSelectAgent,
   isolated,
   onSetIsolated,
+  model,
+  onSetModel,
+  effort,
+  onSetEffort,
 }: {
   agents: AgentInfo[];
   selectedAgent: string;
   onSelectAgent: (name: string) => void;
   isolated: boolean;
   onSetIsolated: (v: boolean) => void;
+  model: string;
+  onSetModel: (v: string) => void;
+  effort: string;
+  onSetEffort: (v: string) => void;
 }) {
-  const showPicker = agents.length >= 2;
-  const showIsolation = selectedAgent === "codex";
-  if (!showPicker && !showIsolation) return null;
+  const isCodex = selectedAgent === "codex";
+  const modelOptions = MODEL_OPTIONS[selectedAgent] ?? [
+    { value: "", label: "Default" },
+  ];
   return (
-    <div className="mb-3 space-y-3 rounded-lg border border-theme-border/60 bg-theme-base/40 p-3">
-      {showPicker && (
+    <div className="space-y-3">
+      {agents.length >= 2 && (
         <Segmented
           label="Agent"
           value={selectedAgent}
@@ -93,7 +165,7 @@ export function AgentControls({
           }))}
         />
       )}
-      {showIsolation && (
+      {isCodex && (
         <div>
           <Segmented<boolean>
             label="Environment"
@@ -110,6 +182,25 @@ export function AgentControls({
               : "Runs Codex with your full setup (your other MCP servers + guidelines). It can also read local files."}
           </p>
         </div>
+      )}
+      <Dropdown
+        label="Model"
+        value={model}
+        options={modelOptions}
+        onChange={onSetModel}
+        hint={
+          !isolated && isCodex
+            ? "“My setup” uses the model from your own Codex config; this overrides it."
+            : "Default uses the agent's built-in model."
+        }
+      />
+      {isCodex && (
+        <Dropdown
+          label="Reasoning effort"
+          value={effort}
+          options={EFFORT_OPTIONS}
+          onChange={onSetEffort}
+        />
       )}
     </div>
   );
@@ -231,13 +322,13 @@ export function TurnView({
 export function ConsentCard({
   agentName,
   isolated = true,
-  controls,
+  onOpenSettings,
   onApprove,
   onCancel,
 }: {
   agentName: string;
   isolated?: boolean;
-  controls?: ReactNode;
+  onOpenSettings?: () => void;
   onApprove: () => void;
   onCancel: () => void;
 }) {
@@ -278,7 +369,14 @@ export function ConsentCard({
           </li>
         )}
       </ul>
-      {controls && <div className="mt-3">{controls}</div>}
+      {onOpenSettings && (
+        <button
+          onClick={onOpenSettings}
+          className="mt-3 text-xs text-accent hover:underline"
+        >
+          Change the agent and how it runs in Settings
+        </button>
+      )}
       <div className="mt-4 flex gap-2">
         <button
           onClick={onCancel}

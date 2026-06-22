@@ -66,6 +66,12 @@ type Request struct {
 	// runs with the user's full environment. Only the Codex backend distinguishes
 	// the two; Claude is always strict-MCP-config contained.
 	Isolated bool
+	// Model optionally overrides the CLI's default model (e.g. "opus", "sonnet" for
+	// Claude; a model slug for Codex). Empty leaves the agent's own default.
+	Model string
+	// Effort optionally sets the reasoning effort (Codex only: minimal/low/medium/
+	// high). Empty leaves the default. Ignored by backends that don't support it.
+	Effort string
 }
 
 // Diagnosis is the engine's final result.
@@ -319,7 +325,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	cmd, cleanup, err := agent.command(ctx, turnSpec{
 		mcpURL: mcpURL, prompt: prompt, systemPrompt: sys,
 		sessionID: sessionID, apply: req.Apply, isolated: req.Isolated,
-		maxTurns: maxTurns(),
+		model: req.Model, effort: req.Effort, maxTurns: maxTurns(),
 	})
 	if err != nil {
 		return Diagnosis{}, err

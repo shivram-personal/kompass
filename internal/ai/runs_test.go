@@ -126,18 +126,24 @@ func TestEvictKeepsRunning(t *testing.T) {
 func TestRunMatchesTarget(t *testing.T) {
 	r := &Run{
 		Kind: "Deployment", Namespace: "ns", Name: "app",
-		Context: "ctx", Agent: "codex", Isolated: true,
+		Context: "ctx", Agent: "codex", Isolated: true, Model: "o3", Effort: "high",
 	}
-	if !r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true) {
+	if !r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true, "o3", "high") {
 		t.Error("identical target+mode should match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "ctx", "claude", true) {
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "claude", true, "o3", "high") {
 		t.Error("different agent must NOT match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", false) {
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", false, "o3", "high") {
 		t.Error("different isolation mode must NOT match")
 	}
-	if r.matchesTarget("Deployment", "ns", "app", "other", "codex", true) {
+	if r.matchesTarget("Deployment", "ns", "app", "other", "codex", true, "o3", "high") {
 		t.Error("different cluster context must NOT match")
+	}
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true, "", "high") {
+		t.Error("different model must NOT match")
+	}
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true, "o3", "low") {
+		t.Error("different effort must NOT match")
 	}
 }

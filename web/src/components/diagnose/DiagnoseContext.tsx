@@ -36,6 +36,10 @@ interface DiagnoseCtx {
   setSelectedAgent: (name: string) => void;
   isolated: boolean; // run the agent without the user's own CLI config
   setIsolated: (v: boolean) => void;
+  model: string; // optional model override ("" = the agent's own default)
+  setModel: (v: string) => void;
+  effort: string; // optional Codex reasoning effort ("" = default)
+  setEffort: (v: string) => void;
   open: boolean;
   view: DiagnoseView;
   activeRunId: string | null;
@@ -67,6 +71,8 @@ const WIDTH_KEY = "radar-ai-panel-width";
 const CONSENT_KEY = "radar-ai-consent-v2"; // v2: agent picker + isolation choice
 const AGENT_KEY = "radar-ai-agent";
 const ISOLATED_KEY = "radar-ai-isolated";
+const MODEL_KEY = "radar-ai-model";
+const EFFORT_KEY = "radar-ai-effort";
 const PUSH_MIN_VIEWPORT = 1024; // below this, overlay instead of pushing
 
 const AGENT_LABELS: Record<string, string> = {
@@ -78,6 +84,12 @@ const AGENT_LABELS: Record<string, string> = {
 
 export function agentLabelFor(name: string, fallbackLabel?: string): string {
   return AGENT_LABELS[name] || fallbackLabel || name || "your AI agent";
+}
+
+// openDiagnoseSettings opens the Settings dialog (App.tsx listens for this DOM
+// event) — the canonical home for AI-diagnosis config.
+export function openDiagnoseSettings() {
+  window.dispatchEvent(new CustomEvent("radar:open-settings"));
 }
 
 // localStorage can throw (private mode); never let it crash the always-mounted provider.
@@ -112,6 +124,12 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   );
   const [isolated, setIsolatedState] = useState<boolean>(
     () => readStored(ISOLATED_KEY) !== "0", // default isolated
+  );
+  const [model, setModelState] = useState<string>(
+    () => readStored(MODEL_KEY) || "",
+  );
+  const [effort, setEffortState] = useState<string>(
+    () => readStored(EFFORT_KEY) || "",
   );
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<DiagnoseView>("home");
@@ -156,10 +174,25 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const setSelectedAgent = useCallback((name: string) => {
-    setSelectedAgentState(name);
-    writeStored(AGENT_KEY, name);
+  const setModel = useCallback((v: string) => {
+    setModelState(v);
+    writeStored(MODEL_KEY, v);
   }, []);
+  const setEffort = useCallback((v: string) => {
+    setEffortState(v);
+    writeStored(EFFORT_KEY, v);
+  }, []);
+  const setSelectedAgent = useCallback(
+    (name: string) => {
+      setSelectedAgentState(name);
+      writeStored(AGENT_KEY, name);
+      // Model + effort are agent-specific (Claude aliases vs Codex slugs); reset
+      // to the new agent's default rather than carry an invalid value across.
+      setModel("");
+      setEffort("");
+    },
+    [setModel, setEffort],
+  );
   const setIsolated = useCallback((v: boolean) => {
     setIsolatedState(v);
     writeStored(ISOLATED_KEY, v ? "1" : "0");
@@ -194,7 +227,12 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
 
   const startRunRef = useRef<(t: Target) => void>(() => {});
   startRunRef.current = (t: Target) => {
-    createRun(t, { agent: selectedAgent || undefined, isolated })
+    createRun(t, {
+      agent: selectedAgent || undefined,
+      isolated,
+      model: model || undefined,
+      effort: effort || undefined,
+    })
       .then((run) => {
         setActiveRunId(run.id);
         setView("investigation");
@@ -258,6 +296,10 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
     setSelectedAgent,
     isolated,
     setIsolated,
+    model,
+    setModel,
+    effort,
+    setEffort,
     open,
     view,
     activeRunId,

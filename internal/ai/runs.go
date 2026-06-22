@@ -47,6 +47,8 @@ type Run struct {
 	Context   string // immutable — kube-context the run is about (baseline)
 	Agent     string // immutable — backend CLI driving this run ("claude"/"codex")
 	Isolated  bool   // immutable — isolation mode chosen at Start
+	Model     string // immutable — optional model override ("" = agent default)
+	Effort    string // immutable — optional reasoning effort (Codex; "" = default)
 	CreatedAt time.Time
 
 	mu        sync.Mutex
@@ -76,6 +78,8 @@ type RunSummary struct {
 	Context   string    `json:"context"`
 	Agent     string    `json:"agent,omitempty"`
 	Isolated  bool      `json:"isolated"`
+	Model     string    `json:"model,omitempty"`
+	Effort    string    `json:"effort,omitempty"`
 	Status    string    `json:"status"`
 	SessionID string    `json:"sessionId,omitempty"`
 	Preview   string    `json:"preview,omitempty"`
@@ -190,13 +194,13 @@ func (m *RunManager) ctx() string {
 // Start creates and launches an investigation, or focuses an existing live run for
 // the same target+context instead of duplicating it. Returns ErrAtCapacity when
 // the concurrent-running cap is reached.
-func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool) (RunSummary, error) {
+func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool, model, effort string) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
 	// Focus an existing live run for this exact target+mode rather than duplicate it.
 	for _, id := range m.order {
 		r := m.runs[id]
-		if r.matchesTarget(kind, namespace, name, cur, agent, isolated) &&
+		if r.matchesTarget(kind, namespace, name, cur, agent, isolated, model, effort) &&
 			r.snapshotStatus() == "running" {
 			m.mu.Unlock()
 			return r.Summary(), nil
@@ -209,7 +213,8 @@ func (m *RunManager) Start(kind, namespace, name, agent string, isolated bool) (
 	m.nextID++
 	r := &Run{
 		ID: fmt.Sprintf("run-%d", m.nextID), Kind: kind, Namespace: namespace,
-		Name: name, Context: cur, Agent: agent, Isolated: isolated, CreatedAt: nowUTC(),
+		Name: name, Context: cur, Agent: agent, Isolated: isolated,
+		Model: model, Effort: effort, CreatedAt: nowUTC(),
 		status: "running", inFlight: true, updatedAt: nowUTC(),
 		subs: map[int]chan RunEvent{},
 	}
@@ -254,7 +259,7 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, sessio
 			Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
 			MCPPort: m.mcpPort(), SessionID: session,
 			Question: question, Apply: apply, Fix: fix,
-			Agent: r.Agent, Isolated: r.Isolated,
+			Agent: r.Agent, Isolated: r.Isolated, Model: r.Model, Effort: r.Effort,
 		}, func(ev StreamEvent) { r.append(ev) })
 
 		r.mu.Lock()
@@ -381,6 +386,7 @@ func (r *Run) Summary() RunSummary {
 	return RunSummary{
 		ID: r.ID, Kind: r.Kind, Namespace: r.Namespace, Name: r.Name,
 		Context: r.Context, Agent: r.Agent, Isolated: r.Isolated,
+		Model: r.Model, Effort: r.Effort,
 		Status: r.status, SessionID: r.sessionID,
 		Preview: r.preview, CreatedAt: r.CreatedAt, UpdatedAt: r.updatedAt,
 	}
@@ -390,9 +396,10 @@ func (r *Run) Summary() RunSummary {
 // same resource + cluster AND same agent/isolation mode. The mode is part of the
 // key so starting codex-isolated never silently focuses a live claude or my-setup
 // run for the same resource. Immutable fields, so no lock needed.
-func (r *Run) matchesTarget(kind, namespace, name, ctx, agent string, isolated bool) bool {
+func (r *Run) matchesTarget(kind, namespace, name, ctx, agent string, isolated bool, model, effort string) bool {
 	return r.Kind == kind && r.Namespace == namespace && r.Name == name &&
-		r.Context == ctx && r.Agent == agent && r.Isolated == isolated
+		r.Context == ctx && r.Agent == agent && r.Isolated == isolated &&
+		r.Model == model && r.Effort == effort
 }
 
 func (r *Run) snapshotStatus() string {

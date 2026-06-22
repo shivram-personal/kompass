@@ -31,6 +31,8 @@ type turnSpec struct {
 	sessionID    string // resume target; empty means a fresh session
 	apply        bool   // user-confirmed remediation turn (write tools allowed)
 	isolated     bool   // run without the user's own CLI config (Codex only)
+	model        string // optional model override; empty = the CLI's default
+	effort       string // optional reasoning effort (Codex only); empty = default
 	maxTurns     int
 }
 

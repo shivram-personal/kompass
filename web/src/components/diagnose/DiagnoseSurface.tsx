@@ -5,12 +5,23 @@
 //    selected investigation/report on the right.
 import { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Sparkles, X, Maximize2, Minimize2, ChevronLeft } from "lucide-react";
+import {
+  Sparkles,
+  X,
+  Maximize2,
+  Minimize2,
+  ChevronLeft,
+  Settings2,
+} from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
-import { useDiagnose, agentLabelFor } from "./DiagnoseContext";
+import {
+  useDiagnose,
+  agentLabelFor,
+  openDiagnoseSettings,
+} from "./DiagnoseContext";
 import { InvestigationView } from "./InvestigationView";
 import { RecentList } from "./Home";
-import { ConsentCard, AgentControls } from "./parts";
+import { ConsentCard } from "./parts";
 
 export function DiagnoseSurface({
   width,
@@ -72,21 +83,17 @@ export function DiagnoseSurface({
     document.addEventListener("mouseup", onUp);
   };
 
-  const agentControls = (
-    <AgentControls
-      agents={d.agents}
-      selectedAgent={d.selectedAgent}
-      onSelectAgent={d.setSelectedAgent}
-      isolated={d.isolated}
-      onSetIsolated={d.setIsolated}
-    />
-  );
-
   const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
   // A focused run shows the agent it actually ran with; Home reflects the current pick.
   const activeAgentLabel = activeRun?.agent
     ? agentLabelFor(activeRun.agent)
     : d.agentLabel;
+  // The header subtitle: "via <agent>" plus the run's/selected mode. Isolation
+  // only differs for Codex, so only annotate it there.
+  const modeAgent = activeRun?.agent ?? d.selectedAgent;
+  const modeIsolated = activeRun ? activeRun.isolated !== false : d.isolated;
+  const modeSuffix =
+    modeAgent === "codex" ? (modeIsolated ? " · Isolated" : " · My setup") : "";
   const detailTitle = activeRun
     ? `${activeRun.kind} ${activeRun.namespace ? `${activeRun.namespace}/` : ""}${activeRun.name}`
     : "AI investigations";
@@ -103,7 +110,7 @@ export function DiagnoseSurface({
         <ConsentCard
           agentName={d.agentLabel}
           isolated={d.isolated}
-          controls={agentControls}
+          onOpenSettings={openDiagnoseSettings}
           onApprove={d.approveConsent}
           onCancel={d.cancelConsent}
         />
@@ -171,8 +178,21 @@ export function DiagnoseSurface({
             <div className="truncate text-sm font-medium text-theme-text-primary">
               {detailTitle}
             </div>
-            <div className="truncate text-xs text-theme-text-tertiary">
-              {d.view === "home" ? `via ${d.agentLabel}` : activeAgentLabel}
+            <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
+              <span className="truncate">
+                {d.view === "home"
+                  ? `via ${d.agentLabel}${modeSuffix}`
+                  : `${activeAgentLabel}${modeSuffix}`}
+              </span>
+              <Tooltip content="AI settings" position="bottom">
+                <button
+                  onClick={openDiagnoseSettings}
+                  className="shrink-0 rounded p-0.5 text-theme-text-tertiary hover:text-theme-text-primary"
+                  aria-label="AI settings"
+                >
+                  <Settings2 className="h-3 w-3" />
+                </button>
+              </Tooltip>
             </div>
           </div>
         </div>
@@ -213,7 +233,6 @@ export function DiagnoseSurface({
             key="recent"
             className="w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3"
           >
-            {agentControls}
             <RecentList
               agentLabel={d.agentLabel}
               runs={d.runs}
@@ -227,7 +246,6 @@ export function DiagnoseSurface({
             key="main"
             className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
           >
-            {agentControls}
             <RecentList
               agentLabel={d.agentLabel}
               runs={d.runs}
