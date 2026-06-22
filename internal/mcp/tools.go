@@ -2268,41 +2268,41 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	} else {
 		username, groups := userFromContext(ctx)
 		namespaces := resolveHelmListNamespaces(ctx, namespace)
-		var releases []helm.HelmRelease
-		var err error
-		if namespaces == nil || len(namespaces) > 0 {
-			releases, err = helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
-		}
-		if err != nil {
-			// Not fatal for the dashboard — a viewer with no helm access
-			// still sees everything else. Surface to LLM consumers via
-			// Unavailable so they don't confidently report "Total=0
-			// releases" when in fact the read failed.
-			log.Printf("[mcp] Dashboard helm list failed: %v", err)
-			d.HelmReleases.Unavailable = true
-			if helm.IsForbiddenError(err) {
-				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope."
-			} else {
-				d.HelmReleases.UnavailableReason = "Helm read failed: " + err.Error()
-			}
+		if namespaces != nil && len(namespaces) == 0 {
+			// No namespace access: leave the zero-value Helm summary.
 		} else {
-			d.HelmReleases.Total = len(releases)
+			releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
+			if err != nil {
+				// Not fatal for the dashboard — a viewer with no helm access
+				// still sees everything else. Surface to LLM consumers via
+				// Unavailable so they don't confidently report "Total=0
+				// releases" when in fact the read failed.
+				log.Printf("[mcp] Dashboard helm list failed: %v", err)
+				d.HelmReleases.Unavailable = true
+				if helm.IsForbiddenError(err) {
+					d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope."
+				} else {
+					d.HelmReleases.UnavailableReason = "Helm read failed: " + err.Error()
+				}
+			} else {
+				d.HelmReleases.Total = len(releases)
 
-			// Sort: failed/pending-install first, then unhealthy/degraded
-			sort.SliceStable(releases, func(i, j int) bool {
-				return helm.StatusPriority(releases[i].Status, releases[i].ResourceHealth) < helm.StatusPriority(releases[j].Status, releases[j].ResourceHealth)
-			})
-
-			limit := min(len(releases), 5)
-			for _, r := range releases[:limit] {
-				d.HelmReleases.Releases = append(d.HelmReleases.Releases, mcpHelmRelease{
-					Name:           r.Name,
-					Namespace:      r.Namespace,
-					Chart:          r.Chart,
-					ChartVersion:   r.ChartVersion,
-					Status:         r.Status,
-					ResourceHealth: r.ResourceHealth,
+				// Sort: failed/pending-install first, then unhealthy/degraded
+				sort.SliceStable(releases, func(i, j int) bool {
+					return helm.StatusPriority(releases[i].Status, releases[i].ResourceHealth) < helm.StatusPriority(releases[j].Status, releases[j].ResourceHealth)
 				})
+
+				limit := min(len(releases), 5)
+				for _, r := range releases[:limit] {
+					d.HelmReleases.Releases = append(d.HelmReleases.Releases, mcpHelmRelease{
+						Name:           r.Name,
+						Namespace:      r.Namespace,
+						Chart:          r.Chart,
+						ChartVersion:   r.ChartVersion,
+						Status:         r.Status,
+						ResourceHealth: r.ResourceHealth,
+					})
+				}
 			}
 		}
 	}

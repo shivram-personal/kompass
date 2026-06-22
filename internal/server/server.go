@@ -44,7 +44,6 @@ import (
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/rbac"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -870,7 +869,7 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 		// above, and Helm lists impersonate them directly; narrowing them with
 		// the backend client's fallback namespaces would under-list users whose
 		// RBAC is wider than Radar's own ServiceAccount.
-		if fallback := noAuthHelmNamespaces(r.Context()); len(fallback) > 0 {
+		if fallback := helm.ResolveNoAuthListNamespaces(r.Context()); len(fallback) > 0 {
 			return fallback, true
 		}
 	}
@@ -891,20 +890,6 @@ func dedupeStrings(values []string) []string {
 		out = append(out, v)
 	}
 	return out
-}
-
-func noAuthHelmNamespaces(ctx context.Context) []string {
-	accessible, authoritative := k8s.GetAccessibleNamespaces(ctx)
-	if !authoritative && len(accessible) > 0 {
-		return accessible
-	}
-	if authoritative && len(accessible) > 0 {
-		allowed, apiErr := k8score.CanI(ctx, k8s.GetClient(), "", "", "secrets", "list")
-		if !apiErr && !allowed {
-			return accessible
-		}
-	}
-	return nil
 }
 
 // noNamespaceAccess returns true when a namespace filter explicitly grants no access

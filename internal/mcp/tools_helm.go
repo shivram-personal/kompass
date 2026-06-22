@@ -9,9 +9,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/helm"
-	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
-	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // userFromContext extracts the auth user attached by the HTTP middleware,
@@ -70,21 +68,7 @@ func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
 	if pkgauth.UserFromContext(ctx) != nil {
 		return filterNamespacesForUser(ctx, nil)
 	}
-	return noAuthHelmListNamespaces(ctx)
-}
-
-func noAuthHelmListNamespaces(ctx context.Context) []string {
-	accessible, authoritative := k8s.GetAccessibleNamespaces(ctx)
-	if !authoritative && len(accessible) > 0 {
-		return accessible
-	}
-	if authoritative && len(accessible) > 0 {
-		allowed, apiErr := k8score.CanI(ctx, k8s.GetClient(), "", "", "secrets", "list")
-		if !apiErr && !allowed {
-			return accessible
-		}
-	}
-	return nil
+	return helm.ResolveNoAuthListNamespaces(ctx)
 }
 
 func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input getHelmReleaseInput) (*mcp.CallToolResult, any, error) {
