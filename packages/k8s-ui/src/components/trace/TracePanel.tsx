@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { clsx } from 'clsx'
 import {
   AlertTriangle,
@@ -76,9 +76,25 @@ export function TracePanel({ trace, isLoading, error, onRefresh, probeRequested,
   const brokenHop = trace.brokenAt >= 0 && trace.brokenAt < downstream.length
     ? downstream[trace.brokenAt]
     : undefined
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  // jumpToBroken locates the broken hop's DOM node within the panel and
+  // scrolls + pulses it. Scoping the query to containerRef avoids
+  // matching another panel's broken hop when multiple TracePanels are
+  // mounted (e.g. dock + drawer). The data-broken-target attribute is
+  // set on whichever HopRow is currently rendered as broken; the
+  // attribute moves automatically when brokenAt changes.
+  const jumpToBroken = useCallback(() => {
+    const root = containerRef.current
+    if (!root) return
+    const el = root.querySelector<HTMLElement>('[data-broken-target="true"]')
+    if (!el) return
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('trace-broken-pulse')
+    window.setTimeout(() => el.classList.remove('trace-broken-pulse'), 1200)
+  }, [])
   return (
-    <div className="flex flex-col gap-3">
-      <VerdictBanner verdict={trace.verdict} reason={trace.reason} brokenHop={brokenHop} onRefresh={onRefresh} />
+    <div ref={containerRef} className="flex flex-col gap-3">
+      <VerdictBanner verdict={trace.verdict} reason={trace.reason} brokenHop={brokenHop} unknownClass={trace.unknownClass} onRefresh={onRefresh} onJumpToBroken={brokenHop && brokenHop.resource.name ? jumpToBroken : undefined} />
       {onRunProbes && hasPath && (
         <ReachabilitySection
           feasibility={feasibility}
@@ -125,13 +141,17 @@ const VERDICT_TITLE: Record<Verdict, string> = {
   unknown: "Traffic path can't be verified",
 }
 
+const VERDICT_TITLE_BY_DESIGN = 'Auto-verification not applicable for this kind'
+
+// Default variant per verdict. The unknown case is overridden at render
+// time by unknownClass: by-design unknowns render as informational
+// rather than warning since nothing is broken — the shape just isn't
+// auto-verifiable (ExternalName, selectorless, manually-managed
+// endpoints).
 const VERDICT_VARIANT: Record<Verdict, 'success' | 'warning' | 'error' | 'info'> = {
   healthy: 'success',
   degraded: 'warning',
   broken: 'error',
-  // Unknown is an investigate state, not an informational one — operators
-  // opening the panel mid-incident need a visual cue that something needs
-  // attention. The warning variant matches that intent.
   unknown: 'warning',
 }
 
@@ -142,7 +162,7 @@ const VERDICT_ICON: Record<Verdict, React.ComponentType<{ className?: string }>>
   unknown: AlertTriangle,
 }
 
-function VerdictBanner({ verdict, reason, brokenHop, onRefresh }: { verdict: Verdict; reason?: string; brokenHop?: Hop; onRefresh?: () => void }) {
+function VerdictBanner({ verdict, reason, brokenHop, unknownClass, onRefresh, onJumpToBroken }: { verdict: Verdict; reason?: string; brokenHop?: Hop; unknownClass?: 'by-design' | 'investigate'; onRefresh?: () => void; onJumpToBroken?: () => void }) {
   // When a single hop is the locus of the break/degrade, name it in the
   // banner title — a generic "Traffic path is degraded" leaves the
   // operator without a starting point. Synthetic collection hops (Pods,
@@ -150,6 +170,8 @@ function VerdictBanner({ verdict, reason, brokenHop, onRefresh }: { verdict: Ver
   // since "Pods is broken" is grammatically off and the row below
   // already carries the same identity.
   let title = VERDICT_TITLE[verdict]
+  let variant = VERDICT_VARIANT[verdict]
+  let icon = VERDICT_ICON[verdict]
   if (brokenHop && brokenHop.resource.name && (verdict === 'broken' || verdict === 'degraded')) {
     const ref = brokenHop.resource
     const label = `${ref.kind} ${ref.name}`
@@ -157,14 +179,32 @@ function VerdictBanner({ verdict, reason, brokenHop, onRefresh }: { verdict: Ver
       ? `${label} is broken - traffic can't pass`
       : `${label} is degraded`
   }
+  if (verdict === 'unknown' && unknownClass === 'by-design') {
+    // Steady-state unverifiable shapes (selectorless, ExternalName) read
+    // as informational, not investigate. Switch to a calm info banner
+    // so housekeeping browsers don't see false alarms on every such
+    // Service.
+    title = VERDICT_TITLE_BY_DESIGN
+    variant = 'info'
+    icon = CheckCircle2
+  }
   return (
     <AlertBanner
-      variant={VERDICT_VARIANT[verdict]}
-      icon={VERDICT_ICON[verdict]}
+      variant={variant}
+      icon={icon}
       title={title}
       message={reason}
     >
-      {onRefresh && verdict === 'unknown' && (
+      {onJumpToBroken && (verdict === 'broken' || verdict === 'degraded') && brokenHop && brokenHop.resource.name && (
+        <button
+          type="button"
+          onClick={onJumpToBroken}
+          className="mt-2 mr-2 text-xs px-2 py-1 rounded border border-current/30 hover:bg-current/10 transition-colors"
+        >
+          Show me
+        </button>
+      )}
+      {onRefresh && verdict === 'unknown' && unknownClass !== 'by-design' && (
         <button
           type="button"
           onClick={onRefresh}
@@ -263,6 +303,7 @@ function HopRow({ hop, broken, compact, isSubject, onNavigate }: { hop: Hop; bro
         'relative transition-colors',
         broken && 'bg-red-500/5 -mx-2 px-2 rounded-md',
       )}
+      data-broken-target={broken ? 'true' : undefined}
     >
       <div className="flex items-stretch">
         <button
@@ -768,14 +809,25 @@ function SeverityChip({ severity, count, probes }: { severity: FindingSeverity |
     }
     return <Badge severity="info" size="sm" title="Static configuration is consistent; no live probe reached this hop">not probed</Badge>
   }
-  if (severity === 'critical') return <Badge severity="error" size="sm">{count} critical</Badge>
-  if (severity === 'warning') return <Badge severity="warning" size="sm">{count} warning{count > 1 ? 's' : ''}</Badge>
-  // info-only findings: a live probe failure outranks them.
-  if (probeFailed > 0) {
-    return <Badge severity="warning" size="sm" title={`${probeFailed} of ${real.length} probes failed`}>{probeFailed === real.length ? 'probe failed' : `${probeFailed}/${real.length} probes failed`}</Badge>
+  // When both static findings AND live probe failures exist on the same
+  // hop, stack two chips so the operator sees both signals at a glance.
+  // Showing only the static count silently swallowed the probe failure
+  // and led to "I expected one issue, found two" surprises.
+  const probeChip = probeFailed > 0 ? (
+    <Badge severity="warning" size="sm" title={`${probeFailed} of ${real.length} probes failed`}>{probeFailed === real.length ? 'probe failed' : `${probeFailed}/${real.length} probes failed`}</Badge>
+  ) : probeDegraded > 0 ? (
+    <Badge severity="warning" size="sm" title={`${probeDegraded} of ${real.length} probes responded with a degraded HTTP status`}>probe degraded</Badge>
+  ) : null
+  if (severity === 'critical') {
+    return <span className="inline-flex items-center gap-1.5"><Badge severity="error" size="sm">{count} critical</Badge>{probeChip}</span>
   }
-  if (probeDegraded > 0) {
-    return <Badge severity="warning" size="sm" title={`${probeDegraded} of ${real.length} probes responded with a degraded HTTP status`}>probe degraded</Badge>
+  if (severity === 'warning') {
+    return <span className="inline-flex items-center gap-1.5"><Badge severity="warning" size="sm">{count} warning{count > 1 ? 's' : ''}</Badge>{probeChip}</span>
+  }
+  // info-only findings: a live probe failure outranks them when alone,
+  // otherwise stack so both are visible.
+  if (probeChip) {
+    return <span className="inline-flex items-center gap-1.5"><Badge severity="info" size="sm">{count} info</Badge>{probeChip}</span>
   }
   return <Badge severity="info" size="sm">{count} info</Badge>
 }

@@ -716,6 +716,52 @@ func TestReviseVerdictWithProbes_SkippedRowsIgnored(t *testing.T) {
 	}
 }
 
+// TestClassifyUnknown_SelectorlessIsByDesign pins that a selectorless
+// Service (manually-managed endpoints) classifies the unknown verdict as
+// by-design, so the UI can render an informational banner rather than a
+// warning. Selectorless is a legitimate config shape, not a problem.
+func TestClassifyUnknown_SelectorlessIsByDesign(t *testing.T) {
+	tr := &Trace{
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service"}, Meta: map[string]any{"selectorless": true}},
+		},
+	}
+	if got := classifyUnknown(tr); got != UnknownClassByDesign {
+		t.Errorf("classifyUnknown(selectorless) = %q, want %q", got, UnknownClassByDesign)
+	}
+}
+
+// TestClassifyUnknown_EndpointSourceUnknownIsInvestigate pins that a hop
+// whose endpoint state couldn't be read (pod lister error, RBAC denial,
+// cache cold) classifies the unknown verdict as investigate — the trace
+// tried and couldn't, which merits operator attention.
+func TestClassifyUnknown_EndpointSourceUnknownIsInvestigate(t *testing.T) {
+	tr := &Trace{
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Pods"}, Meta: map[string]any{"endpointSource": "unknown"}},
+		},
+	}
+	if got := classifyUnknown(tr); got != UnknownClassInvestigate {
+		t.Errorf("classifyUnknown(endpointSource=unknown) = %q, want %q", got, UnknownClassInvestigate)
+	}
+}
+
+// TestClassifyUnknown_InvestigateBeatsByDesign pins that when both signals
+// are present (e.g. selectorless Service whose endpoint lister also failed),
+// investigate wins — the operator needs to know about the lister failure
+// regardless of the by-design shape.
+func TestClassifyUnknown_InvestigateBeatsByDesign(t *testing.T) {
+	tr := &Trace{
+		Downstream: []Hop{
+			{Resource: ResourceRef{Kind: "Service"}, Meta: map[string]any{"selectorless": true}},
+			{Resource: ResourceRef{Kind: "Pods"}, Meta: map[string]any{"endpointSource": "unknown"}},
+		},
+	}
+	if got := classifyUnknown(tr); got != UnknownClassInvestigate {
+		t.Errorf("classifyUnknown(both signals) = %q, want %q (investigate wins)", got, UnknownClassInvestigate)
+	}
+}
+
 // TestIsEntryKind_CaseInsensitive pins that normalizeKind accepts every
 // casing the apiserver and MCP layer might hand it. REST handlers see
 // whatever the URL carried; MCP normalises via strings.ToLower. Without

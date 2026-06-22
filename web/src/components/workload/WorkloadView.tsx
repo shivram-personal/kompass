@@ -2,7 +2,7 @@ import { useMemo, useEffect, useCallback, useRef, useState } from 'react'
 import { useQueries } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { clsx } from 'clsx'
-import { Terminal } from 'lucide-react'
+import { Terminal, Stethoscope } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
   EditableYamlView,
@@ -521,24 +521,28 @@ export function WorkloadView({
       rendererOverrides={rendererOverrides}
       resolvedEnvFrom={resolvedEnvFrom}
       renderOverviewExtra={({ kind: k, namespace: ns, name: n, context }) => {
-        // Diagnose renders first only for network entry kinds (Service,
-        // Ingress, Route, Gateway) — drawer opens on those kinds are
-        // typically driven by a diagnosis intent, so Diagnose belongs
-        // above Audit/Flux. For other kinds the drawer is opened for
-        // Audit/Flux reasons; Diagnose renders below to preserve the
-        // expected reading order. The kind list matches isDiagnoseKind,
-        // so DiagnoseInlineSection only produces content where it is
-        // applicable.
-        const diagnoseFirst = context === 'drawer' && isDiagnoseKind(k)
-        const diagnose = context === 'drawer' ? (
+        // Diagnose-related sections per kind:
+        //   * Network entry kinds (Service, Ingress, Route, Gateway) ARE
+        //     the diagnosis target. DiagnoseInlineSection renders first;
+        //     no hint is shown because the panel is already here.
+        //   * Workload kinds (Deployment, Pod, etc.) lead with the
+        //     DiagnoseFromWorkloadHint shortcut so an app developer who
+        //     opened the drawer on a failing workload finds the diagnose
+        //     entry without having to know which Service fronts it.
+        //   * Other kinds render neither (both components self-gate).
+        const isNetworkKind = isDiagnoseKind(k)
+        const diagnoseInline = context === 'drawer' && isNetworkKind ? (
           <DiagnoseInlineSection kind={k} namespace={ns} name={n} onNavigate={rest.onNavigateToResource} />
+        ) : null
+        const diagnoseHint = context === 'drawer' && !isNetworkKind ? (
+          <DiagnoseFromWorkloadHint kind={k} namespace={ns} name={n} onNavigate={rest.onNavigateToResource} />
         ) : null
         return (
           <>
-            {diagnoseFirst && diagnose}
+            {diagnoseInline}
+            {diagnoseHint}
             <AuditSection kind={k} namespace={ns} name={n} />
             <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
-            {!diagnoseFirst && diagnose}
           </>
         )
       }}
@@ -835,6 +839,51 @@ function AuditSection({ kind, namespace, name }: { kind: string; namespace: stri
   const { data: findings } = useResourceAudit(kind, namespace, name)
   if (!findings || findings.length === 0) return null
   return <AuditAlerts findings={findings} onViewAll={() => navigate('/checks')} />
+}
+
+// DiagnoseFromWorkloadHint surfaces the Diagnose entry point for app
+// developers who open a failing workload (Deployment, StatefulSet, Pod,
+// etc.) and don't know that diagnosis lives on the fronting Service.
+// Without this card the operator has to navigate the topology themselves
+// to find the right Service. Renders only when the workload has at
+// least one Service in its relationships; on isolated workloads (no
+// Service in front) the card stays hidden because no entry-point exists
+// to link to. The relationships fetch is the same query the drawer
+// infrastructure already uses, so React Query dedupes — no extra
+// network cost.
+function DiagnoseFromWorkloadHint({ kind, namespace, name, onNavigate }: { kind: string; namespace: string; name: string; onNavigate?: NavigateToResource }) {
+  const { relationships } = useResource<unknown>(kind, namespace, name)
+  const services = relationships?.services ?? []
+  if (services.length === 0 || !onNavigate) return null
+  const open = (svc: ResourceRef) => onNavigate({
+    kind: 'services',
+    namespace: svc.namespace ?? '',
+    name: svc.name,
+    group: '',
+  })
+  return (
+    <Section title="Diagnose network path">
+      <div className="flex items-start gap-2 text-xs text-theme-text-secondary">
+        <Stethoscope className="w-4 h-4 mt-0.5 shrink-0 text-theme-text-tertiary" aria-hidden />
+        <div className="flex-1 min-w-0">
+          {services.length === 1 ? 'Exposed by Service ' : 'Exposed by Services '}
+          {services.map((svc, i) => (
+            <span key={`${svc.namespace ?? ''}/${svc.name}`}>
+              <button
+                type="button"
+                onClick={() => open(svc)}
+                className="text-theme-accent-primary hover:underline font-medium"
+              >
+                {svc.name}
+              </button>
+              {i < services.length - 1 ? <span className="text-theme-text-tertiary">{', '}</span> : null}
+            </span>
+          ))}
+          <span className="text-theme-text-tertiary">. Open to trace the traffic path and run probes.</span>
+        </div>
+      </div>
+    </Section>
+  )
 }
 
 // DiagnoseTabContent binds the static-trace polling hook + the one-shot

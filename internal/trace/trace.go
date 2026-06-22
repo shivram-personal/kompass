@@ -216,10 +216,27 @@ type Trace struct {
 	// Reason explains an unknown/degraded verdict in a single sentence; the
 	// UI shows it under the verdict banner without expansion.
 	Reason string `json:"reason,omitempty"`
+	// UnknownClass distinguishes the two flavors of an unknown verdict so
+	// the UI can pick the right visual register. by-design covers Services
+	// whose shape inherently can't be auto-verified (selectorless,
+	// manually-managed endpoints) — these read as informational because
+	// nothing is broken. investigate covers cases where the trace tried
+	// and couldn't read state (cache cold, RBAC denied, lookup error,
+	// transient API failure) — these read as warning because something
+	// merits operator attention. Empty for non-unknown verdicts.
+	UnknownClass string `json:"unknownClass,omitempty"`
 	// Truncated is set when fan-out (e.g. Gateway attached routes) exceeded
 	// the cap, so the UI can surface "showing N of M".
 	Truncated bool `json:"truncated,omitempty"`
 }
+
+// UnknownClass enumerates the two distinct flavors of an unknown verdict.
+// Kept as string constants on the wire so the UI can switch on the value
+// without sharing a typed enum across the language boundary.
+const (
+	UnknownClassByDesign    = "by-design"
+	UnknownClassInvestigate = "investigate"
+)
 
 // Options shape what BuildTrace does beyond the static walk. Probe is opt-in
 // because active checks cost wall time and generate traffic external systems
@@ -244,12 +261,13 @@ func BuildTraceWithOptions(ctx context.Context, deps Deps, kind, namespace, name
 
 	if !cacheReady(deps) {
 		return &Trace{
-			Subject:    subject,
-			Downstream: []Hop{},
-			Upstreams:  []Hop{},
-			Verdict:    VerdictUnknown,
-			BrokenAt:   -1,
-			Reason:     "cache syncing - initial informer sync has not completed yet",
+			Subject:      subject,
+			Downstream:   []Hop{},
+			Upstreams:    []Hop{},
+			Verdict:      VerdictUnknown,
+			BrokenAt:     -1,
+			Reason:       "cache syncing - initial informer sync has not completed yet",
+			UnknownClass: UnknownClassInvestigate,
 		}, nil
 	}
 
@@ -271,6 +289,7 @@ func BuildTraceWithOptions(ctx context.Context, deps Deps, kind, namespace, name
 		t.Upstreams = []Hop{}
 		t.Verdict = VerdictUnknown
 		t.Reason = "trace not supported for kind " + kind
+		t.UnknownClass = UnknownClassInvestigate
 		return t, nil
 	}
 
@@ -289,6 +308,15 @@ func BuildTraceWithOptions(ctx context.Context, deps Deps, kind, namespace, name
 		if t.Verdict == VerdictUnknown && t.Reason == "" {
 			t.Reason = unknownReason(t)
 		}
+	}
+	// Classify the unknown verdict once, after both the entry-handler path
+	// and computeVerdict have run. Entry handlers set unknown on lookup
+	// failures (NotFound, RBAC, lookup error) which are investigate-class.
+	// computeVerdict's path downgrades degraded → unknown when endpoints
+	// are unverifiable; that's where the by-design vs investigate split
+	// matters.
+	if t.Verdict == VerdictUnknown && t.UnknownClass == "" {
+		t.UnknownClass = classifyUnknown(t)
 	}
 
 	// Probes augment the static verdict, never override it: a successful
@@ -487,6 +515,33 @@ func computeVerdict(t *Trace) (string, int) {
 	}
 
 	return verdict, brokenAt
+}
+
+// classifyUnknown decides whether an unknown verdict is by-design (the
+// resource shape inherently can't be auto-verified, e.g. selectorless
+// Service) or investigate (the trace tried and couldn't read state — RBAC
+// denied, lister error, cache cold, lookup failure). The two classes ride
+// the same verdict word but get different visual register in the UI:
+// by-design reads as informational; investigate reads as warning.
+// When the trace contains both signals, investigate wins — a cold cache
+// behind a selectorless Service still wants operator attention.
+func classifyUnknown(t *Trace) string {
+	hasByDesign := false
+	for _, hop := range t.Downstream {
+		if hop.Meta == nil {
+			continue
+		}
+		if src, _ := hop.Meta["endpointSource"].(string); src == "unknown" {
+			return UnknownClassInvestigate
+		}
+		if v, _ := hop.Meta["selectorless"].(bool); v {
+			hasByDesign = true
+		}
+	}
+	if hasByDesign {
+		return UnknownClassByDesign
+	}
+	return UnknownClassInvestigate
 }
 
 func hasUnverifiableEndpoints(t *Trace) bool {

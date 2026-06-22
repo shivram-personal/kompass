@@ -125,6 +125,8 @@ export interface HopConfig {
   podNames?: string[]
 }
 
+export type UnknownClass = 'by-design' | 'investigate'
+
 export interface Trace {
   subject: ResourceRef
   upstreams: Hop[]
@@ -132,5 +134,13 @@ export interface Trace {
   verdict: Verdict
   brokenAt: number
   reason?: string
+  /** Distinguishes the two flavors of the unknown verdict so the UI can
+   *  pick the right visual register. 'by-design' covers configurations
+   *  where auto-verification doesn't apply (e.g. selectorless Service);
+   *  the banner renders as informational. 'investigate' covers cases
+   *  where the trace tried and couldn't read state (RBAC, cache cold,
+   *  lookup failure); the banner renders as warning. Absent on
+   *  non-unknown verdicts. */
+  unknownClass?: UnknownClass
   truncated?: boolean
 }
