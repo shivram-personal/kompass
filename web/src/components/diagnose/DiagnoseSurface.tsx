@@ -15,6 +15,7 @@ import {
   MoreVertical,
   TerminalSquare,
   Copy,
+  Check,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
 import {
@@ -28,22 +29,36 @@ import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary } from "../../api/diagnose";
 
-// InvestigationMenu is the secondary "hand off to your own agent" action. It opens
-// the user's full interactive CLI (their config + MCPs + approvals) in Radar's
-// local terminal, seeded with this investigation — the escape hatch from the
-// contained in-panel engine to the real agent.
+// InvestigationMenu hands an investigation off to the user's own full agent. The
+// PRIMARY action copies a resume command they can paste wherever they actually
+// work (terminal, tmux, IDE) — destination-agnostic. Running it in Radar's built-in
+// terminal is the secondary "run it here" convenience.
 function InvestigationMenu({ run }: { run: RunSummary }) {
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const label = launchAgentLabel(run);
   const command = buildLaunchCommand(run, `${window.location.origin}/mcp`);
   // No resumable session yet (or stale run) → nothing to hand off.
   if (!command) return null;
 
+  const toggle = () => {
+    setCopied(false);
+    setOpen((v) => !v);
+  };
+  const copy = () => {
+    void navigator.clipboard?.writeText(command);
+    setCopied(true);
+    setTimeout(() => {
+      setCopied(false);
+      setOpen(false);
+    }, 1100);
+  };
+
   return (
     <div className="relative">
       <Tooltip content="More" position="bottom">
         <button
-          onClick={() => setOpen((v) => !v)}
+          onClick={toggle}
           className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
           aria-label="More actions"
           aria-haspopup="menu"
@@ -55,32 +70,35 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full z-20 mt-1 w-60 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
+          <div className="absolute right-0 top-full z-20 mt-1 w-64 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
+            <button
+              onClick={copy}
+              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
+            >
+              {copied ? (
+                <Check className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+              ) : (
+                <Copy className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
+              )}
+              <span>
+                {copied ? "Copied ✓" : `Copy command to continue in ${label}`}
+                {!copied && (
+                  <span className="block text-[11px] text-theme-text-tertiary">
+                    Paste it wherever you run {label} — resumes this exact
+                    session.
+                  </span>
+                )}
+              </span>
+            </button>
             <button
               onClick={() => {
                 openInTerminal(command, "Diagnose");
                 setOpen(false);
               }}
-              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
-            >
-              <TerminalSquare className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              <span>
-                Resume in {label}
-                <span className="block text-[11px] text-theme-text-tertiary">
-                  Continues this exact session in your full {label} (write
-                  access — it asks before changes).
-                </span>
-              </span>
-            </button>
-            <button
-              onClick={() => {
-                void navigator.clipboard?.writeText(command);
-                setOpen(false);
-              }}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
             >
-              <Copy className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
-              Copy command
+              <TerminalSquare className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
+              Run in a Radar terminal
             </button>
           </div>
         </>
