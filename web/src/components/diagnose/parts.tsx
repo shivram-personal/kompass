@@ -42,15 +42,15 @@ function Segmented<T extends string | boolean>({
       <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
         {label}
       </div>
-      <div className="flex gap-1 rounded-md bg-theme-base p-0.5">
+      <div className="flex gap-1 rounded-lg border border-theme-border bg-theme-base p-1">
         {options.map((o) => (
           <button
             key={String(o.value)}
             onClick={() => onChange(o.value)}
-            className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+            className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium transition-colors ${
               o.value === value
-                ? "bg-theme-elevated text-theme-text-primary shadow-theme-sm"
-                : "text-theme-text-secondary hover:text-theme-text-primary"
+                ? "selection-strong selection-text selection-ring"
+                : "text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
             }`}
           >
             {o.label}
@@ -61,23 +61,18 @@ function Segmented<T extends string | boolean>({
   );
 }
 
-// Per-agent model options (curated; the CLI validates the actual slug). "" means
-// the agent's own default. Claude aliases are forward-stable; Codex slugs may need
-// occasional updates.
-const MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
-  claude: [
-    { value: "", label: "Default" },
-    { value: "opus", label: "Opus" },
-    { value: "sonnet", label: "Sonnet" },
-    { value: "haiku", label: "Haiku" },
-  ],
-  codex: [
-    { value: "", label: "Default" },
-    { value: "gpt-5-codex", label: "GPT-5 Codex" },
-    { value: "gpt-5", label: "GPT-5" },
-    { value: "o3", label: "o3" },
-  ],
-};
+// Claude Code's --model takes version-stable ALIASES that always resolve to the
+// user's installed latest of that tier (per `claude --help`), so this list never
+// rots across model updates. "" = the agent's own default.
+const CLAUDE_MODEL_OPTIONS = [
+  { value: "", label: "Default" },
+  { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "haiku", label: "Haiku" },
+  { value: "fable", label: "Fable" },
+];
+// Codex has no stable alias set and no way to enumerate models, and slugs change
+// across versions — so we take a free-text override rather than a list that rots.
 const EFFORT_OPTIONS = [
   { value: "", label: "Default" },
   { value: "minimal", label: "Minimal" },
@@ -85,6 +80,40 @@ const EFFORT_OPTIONS = [
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
 ];
+
+function TextField({
+  label,
+  value,
+  placeholder,
+  onChange,
+  hint,
+}: {
+  label: string;
+  value: string;
+  placeholder?: string;
+  onChange: (v: string) => void;
+  hint?: string;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+        {label}
+      </div>
+      <input
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-md border border-theme-border bg-theme-base px-2 py-1.5 text-xs text-theme-text-primary placeholder:text-theme-text-tertiary"
+      />
+      {hint && (
+        <p className="mt-1 text-[11px] leading-snug text-theme-text-tertiary">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function Dropdown({
   label,
@@ -149,9 +178,6 @@ export function AgentControls({
   onSetEffort: (v: string) => void;
 }) {
   const isCodex = selectedAgent === "codex";
-  const modelOptions = MODEL_OPTIONS[selectedAgent] ?? [
-    { value: "", label: "Default" },
-  ];
   return (
     <div className="space-y-3">
       {agents.length >= 2 && (
@@ -183,17 +209,27 @@ export function AgentControls({
           </p>
         </div>
       )}
-      <Dropdown
-        label="Model"
-        value={model}
-        options={modelOptions}
-        onChange={onSetModel}
-        hint={
-          !isolated && isCodex
-            ? "“My setup” uses the model from your own Codex config; this overrides it."
-            : "Default uses the agent's built-in model."
-        }
-      />
+      {isCodex ? (
+        <TextField
+          label="Model"
+          value={model}
+          placeholder="Default (e.g. gpt-5-codex, o3)"
+          onChange={onSetModel}
+          hint={
+            !isolated
+              ? "“My setup” uses your own Codex config's model; set a slug here to override it."
+              : "Leave empty for Codex's default, or enter a model your Codex version supports."
+          }
+        />
+      ) : (
+        <Dropdown
+          label="Model"
+          value={model}
+          options={CLAUDE_MODEL_OPTIONS}
+          onChange={onSetModel}
+          hint="Aliases always resolve to the latest of that tier; Default uses Claude Code's own."
+        />
+      )}
       {isCodex && (
         <Dropdown
           label="Reasoning effort"

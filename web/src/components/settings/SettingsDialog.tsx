@@ -183,7 +183,7 @@ export function SettingsDialog({
         className={clsx(
           "relative bg-theme-surface border border-theme-border shadow-theme-lg w-full outline-none flex flex-col",
           "max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0",
-          "sm:rounded-xl sm:max-w-xl sm:mx-4 sm:max-h-[85vh]",
+          "sm:rounded-xl sm:max-w-2xl sm:mx-4 sm:max-h-[85vh]",
           TRANSITION_PANEL,
           isOpen ? "opacity-100 scale-100" : "opacity-0 scale-95",
         )}
