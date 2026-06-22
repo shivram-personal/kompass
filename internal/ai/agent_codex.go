@@ -1,0 +1,183 @@
+package ai
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+)
+
+// codexAgent drives the Codex CLI (`codex exec`). Codex has no per-MCP-tool
+// allowlist and its shell can't be disabled, so containment differs from Claude:
+//   - cluster access is gated by the read-only MCP MOUNT (radar-side), not flags;
+//   - --sandbox read-only blocks the model's shell from network + filesystem
+//     writes (verified: no loopback, no kubectl), though it can still READ local
+//     files into context — disclosed to the user;
+//   - --ignore-user-config keeps the user's other MCP servers out of an isolated
+//     run; cmd.Dir is an empty temp dir so it doesn't read the launch directory.
+type codexAgent struct{ bin string }
+
+func (a *codexAgent) Name() string { return "codex" }
+
+func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
+	// Empty working dir so the model's shell can't read radar's source / AGENTS.md.
+	dir, err := os.MkdirTemp("", "radar-codex-")
+	if err != nil {
+		return nil, nil, fmt.Errorf("ai: codex workdir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+
+	// Codex has no system-prompt flag; the framing rides on the first turn's
+	// prompt (the resumed session already carries it).
+	prompt := s.prompt
+	if s.systemPrompt != "" {
+		prompt = s.systemPrompt + "\n\n" + prompt
+	}
+	mcpCfg := fmt.Sprintf("mcp_servers.radar.url=%q", s.mcpURL)
+
+	var args []string
+	if s.sessionID != "" {
+		// resume lacks --sandbox/--cd; set sandbox via -c (cwd via cmd.Dir below).
+		args = []string{
+			"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config",
+			"-c", mcpCfg, "-c", `sandbox_mode="read-only"`, s.sessionID, prompt,
+		}
+	} else {
+		args = []string{
+			"exec", "--json", "--skip-git-repo-check", "--ignore-user-config",
+			"--sandbox", "read-only", "-c", mcpCfg, prompt,
+		}
+	}
+
+	cmd := exec.CommandContext(ctx, a.bin, args...)
+	cmd.Dir = dir
+	cmd.Env = codexEnv()
+	return cmd, cleanup, nil
+}
+
+// codexEnv is the minimal environment Codex needs (auth via HOME/CODEX_HOME, PATH
+// to exec, locale). Cloud-provider secrets are deliberately omitted — the shell
+// can read env into context, and the agent reaches the cluster only via MCP.
+func codexEnv() []string {
+	keep := map[string]bool{
+		"HOME": true, "PATH": true, "CODEX_HOME": true, "TMPDIR": true,
+		"TERM": true, "LANG": true, "USER": true, "LOGNAME": true, "SHELL": true,
+	}
+	var out []string
+	for _, kv := range os.Environ() {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if keep[k] || strings.HasPrefix(k, "LC_") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// Codex JSONL event shapes (codex exec --json). Only the fields we consume.
+type codexEvent struct {
+	Type     string     `json:"type"`
+	ThreadID string     `json:"thread_id"`
+	Item     *codexItem `json:"item"`
+}
+
+type codexItem struct {
+	ID        string          `json:"id"`
+	Type      string          `json:"type"` // mcp_tool_call | agent_message | reasoning | ...
+	Text      string          `json:"text"`
+	Tool      string          `json:"tool"`
+	Arguments json.RawMessage `json:"arguments"`
+	Result    *struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"result"`
+}
+
+func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
+	var sessionID string
+	var answer strings.Builder
+
+	for sc.Scan() {
+		line := bytes.TrimSpace(sc.Bytes())
+		if len(line) == 0 || line[0] != '{' {
+			continue
+		}
+		var e codexEvent
+		if json.Unmarshal(line, &e) != nil {
+			continue
+		}
+		switch e.Type {
+		case "thread.started":
+			if e.ThreadID != "" {
+				sessionID = e.ThreadID
+			}
+		case "item.started":
+			if e.Item != nil && e.Item.Type == "mcp_tool_call" {
+				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
+					ID: e.Item.ID, Tool: e.Item.Tool, Status: "running",
+					Summary: codexArgsPreview(e.Item.Arguments),
+				}})
+			}
+		case "item.completed":
+			if e.Item == nil {
+				continue
+			}
+			switch e.Item.Type {
+			case "mcp_tool_call":
+				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
+					ID: e.Item.ID, Tool: e.Item.Tool, Status: "done",
+					Result: codexToolResultPreview(e.Item),
+				}})
+			case "reasoning":
+				if e.Item.Text != "" {
+					onEvent(StreamEvent{Type: "thinking", Token: e.Item.Text})
+				}
+			case "agent_message":
+				if e.Item.Text != "" {
+					answer.WriteString(e.Item.Text)
+					answer.WriteString("\n")
+				}
+			}
+		}
+	}
+
+	d := diagnosisFromText(answer.String())
+	d.SessionID = sessionID
+	return d
+}
+
+func codexArgsPreview(raw json.RawMessage) string {
+	s := strings.TrimSpace(string(raw))
+	if s == "" || s == "null" || s == "{}" {
+		return ""
+	}
+	return capPreview(s, 400)
+}
+
+func codexToolResultPreview(it *codexItem) string {
+	if it.Result == nil {
+		return ""
+	}
+	var b strings.Builder
+	for _, c := range it.Result.Content {
+		b.WriteString(c.Text)
+	}
+	return capPreview(b.String(), 2000)
+}
+
+func capPreview(s string, n int) string {
+	if r := []rune(s); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return s
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 // Agent abstracts a coding CLI radar drives for AI diagnosis. Each backend knows
@@ -31,9 +33,11 @@ type turnSpec struct {
 	maxTurns     int
 }
 
-// resolveAgent picks a backend from the CLI binary name. Codex is added in a
-// follow-up (it switches on filepath.Base(bin)); until then everything resolves
-// to the Claude backend.
+// resolveAgent picks a backend from the CLI binary name (e.g. RADAR_AI_CLI_BIN or
+// the detected CLI): "codex" → Codex, anything else → Claude.
 func resolveAgent(bin string) Agent {
+	if strings.Contains(strings.ToLower(filepath.Base(bin)), "codex") {
+		return &codexAgent{bin: bin}
+	}
 	return &claudeAgent{bin: bin}
 }
