@@ -69,6 +69,7 @@ export interface RunSummary {
   isolated?: boolean;
   model?: string;
   effort?: string;
+  managedBy?: string; // GitOps/Helm owner of the target ("Argo CD"/"Flux"/"Helm"), for the Apply warning
   status: "running" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;

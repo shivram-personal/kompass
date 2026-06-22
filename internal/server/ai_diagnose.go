@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,9 +11,44 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/ai"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+// detectManagedBy reports which GitOps/Helm controller owns the target resource
+// (or "" if none), from the resource's own labels/annotations — the markers Argo,
+// Flux, and Helm stamp on what they manage. Used to warn before an Apply that a
+// direct change will be reverted on the next reconcile. Best effort: a fetch miss
+// or unknown kind yields "" (no warning), never an error to the caller.
+func (s *Server) detectManagedBy(ctx context.Context, kind, namespace, name string) string {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return ""
+	}
+	obj, err := cache.GetDynamic(ctx, kind, namespace, name)
+	if err != nil || obj == nil {
+		return ""
+	}
+	return managedByFromMeta(obj)
+}
+
+func managedByFromMeta(obj *unstructured.Unstructured) string {
+	labels, ann := obj.GetLabels(), obj.GetAnnotations()
+	has := func(m map[string]string, k string) bool { _, ok := m[k]; return ok }
+	switch {
+	// Argo first (it can own a Helm-installed chart); then Flux (it owns the
+	// HelmRelease even when Helm stamped the object), then plain Helm.
+	case has(ann, "argocd.argoproj.io/tracking-id") || has(labels, "argocd.argoproj.io/instance"):
+		return "Argo CD"
+	case has(labels, "kustomize.toolkit.fluxcd.io/name") || has(labels, "helm.toolkit.fluxcd.io/name"):
+		return "Flux"
+	case has(ann, "meta.helm.sh/release-name") || labels["app.kubernetes.io/managed-by"] == "Helm":
+		return "Helm"
+	}
+	return ""
+}
 
 // handleListAgents reports the local agent CLIs detected on PATH, for the OSS
 // "AI Agent" picker. Safe: only fixed known names are probed (see ai.DetectAgents).
@@ -113,7 +149,11 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid reasoning effort")
 		return
 	}
-	run, err := s.aiRuns.Start(kind, namespace, name, agent, isolated, model, effort)
+	// Authoritatively detect whether a GitOps/Helm controller owns this resource, so
+	// the Apply confirmation can warn that a direct change will be reverted — rather
+	// than relying on the agent to self-report it. Best effort: "" (unknown) on miss.
+	managedBy := s.detectManagedBy(r.Context(), kind, namespace, name)
+	run, err := s.aiRuns.Start(kind, namespace, name, agent, isolated, model, effort, managedBy)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {
 			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")

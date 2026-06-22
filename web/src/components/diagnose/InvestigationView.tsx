@@ -246,6 +246,8 @@ export function InvestigationView({
         agentLabel={agentLabel}
         resourceLabel={`${kind} ${namespace ? `${namespace}/` : ""}${name}`}
         fix={pendingFix}
+        managedBy={run.managedBy}
+        confidence={turns[lastRemediationIdx]?.diagnosis?.confidence}
       />
 
       <div
@@ -272,7 +274,9 @@ export function InvestigationView({
               rows={1}
               disabled={stale}
               placeholder={
-                stale ? "Cluster changed — re-run Diagnose" : "Ask a follow-up or refine…"
+                stale
+                  ? "Cluster changed — re-run Diagnose"
+                  : "Ask a follow-up or refine…"
               }
               className="max-h-32 min-h-[38px] flex-1 resize-none rounded-lg border border-theme-border bg-theme-base px-3 py-2 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:border-accent focus:outline-none disabled:opacity-50"
             />

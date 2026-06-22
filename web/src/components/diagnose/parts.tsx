@@ -440,6 +440,8 @@ export function ApplyDialog({
   agentLabel,
   resourceLabel,
   fix,
+  managedBy,
+  confidence,
 }: {
   open: boolean;
   onClose: () => void;
@@ -447,8 +449,11 @@ export function ApplyDialog({
   agentLabel: string;
   resourceLabel: string;
   fix?: string;
+  managedBy?: string; // GitOps/Helm owner of the resource, if any
+  confidence?: number;
 }) {
   const fixText = fix?.trim();
+  const lowConfidence = confidence != null && confidence < 0.5;
   return (
     <DialogPortal open={open} onClose={onClose} className="max-w-lg w-full">
       <div className="flex items-start gap-3 border-b border-theme-border p-4">
@@ -481,15 +486,36 @@ export function ApplyDialog({
         </div>
       )}
 
-      <div className="p-4">
-        <div className="flex items-start gap-2 rounded border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-theme-text-secondary">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+      <div className="space-y-2 p-4">
+        {/* The star warning: when we KNOW a controller owns this resource, a live
+            change reverts on the next reconcile — say so authoritatively. */}
+        {managedBy && (
+          <div className="flex items-start gap-2 rounded border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-theme-text-primary">
+            <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+            <span>
+              <span className="font-medium">Managed by {managedBy}.</span> A
+              direct change will be reverted on the next reconcile — change it
+              in Git (the {managedBy} source) instead, or expect it to be
+              undone.
+            </span>
+          </div>
+        )}
+        {lowConfidence && (
+          <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-elevated p-3 text-sm text-theme-text-secondary">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
+            <span>
+              The agent had <span className="font-medium">low confidence</span>{" "}
+              in this diagnosis — consider asking a follow-up to verify before
+              applying.
+            </span>
+          </div>
+        )}
+        <div className="flex items-start gap-2 rounded border border-theme-border bg-theme-base/50 p-3 text-sm text-theme-text-secondary">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
           <span>
-            Review the change above before applying. {agentLabel} will change
-            your cluster using your kubeconfig credentials; if you&apos;re not
-            sure, ask a follow-up first. For GitOps/Helm-managed resources a
-            direct change may be reverted — the agent will flag that and prefer
-            the managed path.
+            {agentLabel} will change your cluster using your kubeconfig
+            credentials. Review the change above; if you&apos;re not sure, ask a
+            follow-up first.
           </span>
         </div>
       </div>
