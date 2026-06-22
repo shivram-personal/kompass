@@ -1,4 +1,4 @@
-# Edge Image
+# Dev Image
 #
 # Publishes a single-arch dev image on every GREEN main build so a downstream
 # staging deployment can track main ahead of releases. Deliberately separate
@@ -7,9 +7,9 @@
 # `full` target) rather than promoting GoReleaser binaries.
 #
 # Tags pushed:
-#   :edge            mutable, always the newest green main build (what staging tracks)
-#   :edge-<shortsha> immutable, per-commit handle for rollback / future promotion
-name: Edge Image
+#   :dev            mutable, always the newest green main build (what staging tracks)
+#   :dev-<shortsha> immutable, per-commit handle for rollback / future promotion
+name: Dev Image
 
 on:
   workflow_run:
@@ -24,13 +24,13 @@ permissions:
 env:
   DOCKER_REPO: ghcr.io/skyhook-io/radar
 
-# Serialize edge builds so two runs can't race on the mutable :edge tag.
+# Serialize dev builds so two runs can't race on the mutable :dev tag.
 concurrency:
-  group: edge-image
+  group: dev-image
   cancel-in-progress: false
 
 jobs:
-  edge:
+  dev:
     # Only publish for a green CI run that came from a push to this repo's own
     # main branch. The repo/branch/event guards stop a fork PR (whose CI run
     # could carry a head branch named "main") from triggering a privileged build.
@@ -47,17 +47,17 @@ jobs:
 
       - name: Compute tags
         id: tags
-        # Always publish the immutable :edge-<sha>. Only move the mutable :edge
+        # Always publish the immutable :dev-<sha>. Only move the mutable :dev
         # when this commit is still main's tip, so a slow CI run for an older
-        # commit finishing after a newer one can't roll :edge backwards.
+        # commit finishing after a newer one can't roll :dev backwards.
         run: |
           SHA="$(git rev-parse --short HEAD)"
-          TAGS="${DOCKER_REPO}:edge-${SHA}"
+          TAGS="${DOCKER_REPO}:dev-${SHA}"
           git fetch --quiet origin main
           if [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ]; then
-            TAGS="${TAGS}"$'\n'"${DOCKER_REPO}:edge"
+            TAGS="${TAGS}"$'\n'"${DOCKER_REPO}:dev"
           else
-            echo "::notice::superseded by a newer commit on main - publishing :edge-${SHA} only, not moving :edge"
+            echo "::notice::superseded by a newer commit on main - publishing :dev-${SHA} only, not moving :dev"
           fi
           {
             echo "sha=${SHA}"
@@ -74,7 +74,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push edge image
+      - name: Build and push dev image
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -82,7 +82,7 @@ jobs:
           platforms: linux/amd64
           push: true
           build-args: |
-            VERSION=edge-${{ steps.tags.outputs.sha }}
+            VERSION=dev-${{ steps.tags.outputs.sha }}
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
