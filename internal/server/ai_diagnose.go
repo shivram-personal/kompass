@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -37,14 +38,23 @@ func (s *Server) aiReady(w http.ResponseWriter) bool {
 }
 
 // localOriginOK rejects cross-origin POSTs to these state-changing, process-
-// spawning endpoints. Same-origin (no Origin header) and localhost origins pass;
-// anything else is refused so a random web page can't drive the local agent.
+// spawning endpoints. Same-origin (no Origin header) passes; otherwise the Origin
+// must parse to an exact loopback host — substring checks would let
+// "localhost.evil.com" through.
 func localOriginOK(r *http.Request) bool {
 	o := r.Header.Get("Origin")
 	if o == "" {
 		return true // same-origin / non-browser
 	}
-	return strings.Contains(o, "://localhost") || strings.Contains(o, "://127.0.0.1")
+	u, err := url.Parse(o)
+	if err != nil {
+		return false
+	}
+	switch u.Hostname() {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return false
 }
 
 // handleDiagnoseStart begins an investigation (or focuses a live one for the same

@@ -157,6 +157,13 @@ func New(cfg Config) *Server {
 	k8s.OnContextSwitch(func(_ string) {
 		s.finalizePostContextSwitch()
 	})
+	// Cancel + stale AI investigations BEFORE the client repoints at the new
+	// cluster, so an in-flight agent (especially an apply) can't write to it.
+	k8s.OnBeforeContextSwitch(func(_ string) {
+		if s.aiRuns != nil {
+			s.aiRuns.OnContextSwitch()
+		}
+	})
 
 	// Initialize auth components when auth is enabled
 	if s.authConfig.Enabled() {
@@ -673,6 +680,9 @@ func (s *Server) Handler() http.Handler {
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
 	StopAllLocalTermSessions()
+	if s.aiRuns != nil {
+		s.aiRuns.Shutdown() // cancel investigations so agent children don't outlive us
+	}
 	s.broadcaster.Stop()
 	if s.listener != nil {
 		s.listener.Close()

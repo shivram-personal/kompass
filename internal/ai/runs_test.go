@@ -52,6 +52,50 @@ func TestSubscribeAfterFinalize(t *testing.T) {
 	}
 }
 
+// TestBeginTurnCapAndRace: a turn is gated by the concurrency cap and can't be
+// double-started (the AddTurn race) — beginTurn reserves the slot atomically.
+func TestBeginTurnCapAndRace(t *testing.T) {
+	m := &RunManager{runs: map[string]*Run{}, maxConcurrent: 1}
+	mk := func(id, status string, inFlight bool, session string) *Run {
+		r := &Run{ID: id, status: status, inFlight: inFlight, sessionID: session,
+			subs: map[int]chan RunEvent{}}
+		m.runs[id] = r
+		m.order = append(m.order, id)
+		return r
+	}
+	mk("busy", "running", true, "s1") // occupies the only slot
+	idle := mk("idle", "done", false, "s2")
+
+	if _, err := m.beginTurn(idle, true); err != ErrAtCapacity {
+		t.Fatalf("at cap: want ErrAtCapacity, got %v", err)
+	}
+	m.runs["busy"].inFlight = false // free the slot
+	if _, err := m.beginTurn(idle, true); err != nil {
+		t.Fatalf("free slot: want success, got %v", err)
+	}
+	if !idle.inFlight {
+		t.Error("beginTurn must mark the run in-flight")
+	}
+
+	// Below the cap, a second begin on an already-in-flight run is rejected as
+	// in-flight (no double agent on the same run).
+	m.maxConcurrent = 5
+	if _, err := m.beginTurn(idle, true); err != ErrTurnInFlight {
+		t.Fatalf("double-start: want ErrTurnInFlight, got %v", err)
+	}
+}
+
+// TestBeginTurnRequiresSession: follow-ups can't run before a resumable session.
+func TestBeginTurnRequiresSession(t *testing.T) {
+	m := &RunManager{runs: map[string]*Run{}, maxConcurrent: 3}
+	r := &Run{ID: "a", status: "done", subs: map[int]chan RunEvent{}}
+	m.runs["a"] = r
+	m.order = append(m.order, "a")
+	if _, err := m.beginTurn(r, true); err != ErrNoSession {
+		t.Fatalf("want ErrNoSession, got %v", err)
+	}
+}
+
 // TestEvictKeepsRunning: the retention cap never drops a running investigation;
 // it evicts the oldest finished one.
 func TestEvictKeepsRunning(t *testing.T) {

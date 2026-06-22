@@ -26,12 +26,15 @@ type RunManager struct {
 	mcpPort  func() int    // resolved lazily — the listener port isn't known at construction
 	ctxLabel func() string // current kube-context label, for the run's baseline
 
+	baseCtx    context.Context    // parent of every run ctx; cancelled on Shutdown
+	baseCancel context.CancelFunc
+
 	mu            sync.Mutex
 	runs          map[string]*Run
 	order         []string // insertion order, for eviction
 	nextID        int
 	maxRetained   int // total runs kept in memory (running + finished)
-	maxConcurrent int // concurrent running cap
+	maxConcurrent int // concurrent IN-FLIGHT turns (= live agent processes)
 }
 
 // Run is one investigation: identity, status, the agent session to resume, and the
@@ -98,14 +101,75 @@ const (
 // NewRunManager builds a manager over a resolved Diagnoser. mcpPort/ctxLabel are
 // callbacks because the listener port and kube-context are only known at runtime.
 func NewRunManager(d *Diagnoser, mcpPort func() int, ctxLabel func() string) *RunManager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &RunManager{
 		d:             d,
 		mcpPort:       mcpPort,
 		ctxLabel:      ctxLabel,
+		baseCtx:       ctx,
+		baseCancel:    cancel,
 		runs:          map[string]*Run{},
 		maxRetained:   defaultMaxRetained,
 		maxConcurrent: defaultMaxConcurrent,
 	}
+}
+
+// Shutdown cancels every run (killing agent child processes) — called on server
+// stop so local agents don't outlive radar.
+func (m *RunManager) Shutdown() {
+	m.baseCancel()
+	m.mu.Lock()
+	runs := make([]*Run, 0, len(m.runs))
+	for _, r := range m.runs {
+		runs = append(runs, r)
+	}
+	m.mu.Unlock()
+	for _, r := range runs {
+		r.mu.Lock()
+		c := r.cancel
+		r.mu.Unlock()
+		if c != nil {
+			c()
+		}
+	}
+}
+
+// countInFlightLocked counts runs with a live agent turn. Caller holds m.mu.
+func (m *RunManager) countInFlightLocked() int {
+	n := 0
+	for _, r := range m.runs {
+		r.mu.Lock()
+		if r.inFlight {
+			n++
+		}
+		r.mu.Unlock()
+	}
+	return n
+}
+
+// beginTurn atomically reserves a turn slot for r: enforces the concurrency cap
+// and the run's preconditions, then marks it in-flight — so two concurrent turn
+// requests can't both spawn an agent. Returns the session to resume.
+func (m *RunManager) beginTurn(r *Run, requireSession bool) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.countInFlightLocked() >= m.maxConcurrent {
+		return "", ErrAtCapacity
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	switch {
+	case r.inFlight:
+		return "", ErrTurnInFlight
+	case r.status == "stale":
+		return "", ErrStale
+	case requireSession && r.sessionID == "":
+		return "", ErrNoSession
+	}
+	r.inFlight = true
+	r.status = "running"
+	r.updatedAt = nowUTC()
+	return r.sessionID, nil
 }
 
 func (m *RunManager) ctx() string {
@@ -121,19 +185,16 @@ func (m *RunManager) ctx() string {
 func (m *RunManager) Start(kind, namespace, name string) (RunSummary, error) {
 	cur := m.ctx()
 	m.mu.Lock()
-	running := 0
+	// Focus an existing live run for this exact target rather than duplicate it.
 	for _, id := range m.order {
 		r := m.runs[id]
-		st := r.snapshotStatus()
-		if st == "running" {
-			running++
-			if r.Kind == kind && r.Namespace == namespace && r.Name == name && r.Context == cur {
-				m.mu.Unlock()
-				return r.Summary(), nil
-			}
+		if r.Kind == kind && r.Namespace == namespace && r.Name == name &&
+			r.Context == cur && r.snapshotStatus() == "running" {
+			m.mu.Unlock()
+			return r.Summary(), nil
 		}
 	}
-	if running >= m.maxConcurrent {
+	if m.countInFlightLocked() >= m.maxConcurrent {
 		m.mu.Unlock()
 		return RunSummary{}, ErrAtCapacity
 	}
@@ -141,52 +202,40 @@ func (m *RunManager) Start(kind, namespace, name string) (RunSummary, error) {
 	r := &Run{
 		ID: fmt.Sprintf("run-%d", m.nextID), Kind: kind, Namespace: namespace,
 		Name: name, Context: cur, CreatedAt: nowUTC(),
-		status: "running", updatedAt: nowUTC(), subs: map[int]chan RunEvent{},
+		status: "running", inFlight: true, updatedAt: nowUTC(),
+		subs: map[int]chan RunEvent{},
 	}
 	m.runs[r.ID] = r
 	m.order = append(m.order, r.ID)
 	m.evictLocked()
 	m.mu.Unlock()
 
-	m.launchTurn(r, "", false, "")
+	m.launchTurn(r, "", false, "", "")
 	return r.Summary(), nil
 }
 
 // AddTurn runs a follow-up (question) or an apply turn (with the confirmed fix).
-// Requires a resumable session + no in-flight turn + a non-stale run.
+// beginTurn atomically enforces the cap + preconditions and marks the run in-flight.
 func (m *RunManager) AddTurn(id, question string, apply bool, fix string) error {
 	r := m.get(id)
 	if r == nil {
 		return ErrRunNotFound
 	}
-	r.mu.Lock()
-	switch {
-	case r.inFlight:
-		r.mu.Unlock()
-		return ErrTurnInFlight
-	case r.status == "stale":
-		r.mu.Unlock()
-		return ErrStale
-	case r.sessionID == "":
-		r.mu.Unlock()
-		return ErrNoSession
+	session, err := m.beginTurn(r, true)
+	if err != nil {
+		return err
 	}
-	r.mu.Unlock()
-	m.launchTurn(r, question, apply, fix)
+	m.launchTurn(r, question, apply, fix, session)
 	return nil
 }
 
 // launchTurn emits a turn marker then runs the agent in a manager-owned goroutine.
-// Subscribers stay attached across turns — only an explicit stop / stale / evict
-// closes them.
-func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix string) {
-	ctx, cancel := context.WithCancel(context.Background())
+// The caller has already marked the run in-flight (atomically with the cap check).
+// Subscribers stay attached across turns — only stop / stale / evict closes them.
+func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix, session string) {
+	ctx, cancel := context.WithCancel(m.baseCtx)
 	r.mu.Lock()
-	r.inFlight = true
-	r.status = "running"
-	r.updatedAt = nowUTC()
 	r.cancel = cancel
-	session := r.sessionID
 	r.mu.Unlock()
 
 	r.append(StreamEvent{Type: "turn", Question: question, Apply: apply})
@@ -202,27 +251,27 @@ func (m *RunManager) launchTurn(r *Run, question string, apply bool, fix string)
 		r.mu.Lock()
 		r.inFlight = false
 		r.updatedAt = nowUTC()
-		stopped := r.status == "stopped"
-		stale := r.status == "stale"
-		switch {
-		case err != nil && (stopped || stale):
-			// Status already set by Stop/OnContextSwitch; nothing more to record.
+		// If Stop/OnContextSwitch already terminalized the run, don't overwrite its
+		// status or append after the sentinel — even when the agent exited cleanly.
+		if r.status == "stopped" || r.status == "stale" {
 			r.mu.Unlock()
-		case err != nil:
+			return
+		}
+		if err != nil {
 			r.status = "error"
 			r.mu.Unlock()
 			r.append(StreamEvent{Type: "error", Error: err.Error()})
-		default:
-			if diag.SessionID != "" {
-				r.sessionID = diag.SessionID
-			}
-			if diag.RootCause != "" {
-				r.preview = diag.RootCause
-			}
-			r.status = "done"
-			r.mu.Unlock()
-			r.append(StreamEvent{Type: "done", Diag: &diag})
+			return
 		}
+		if diag.SessionID != "" {
+			r.sessionID = diag.SessionID
+		}
+		if diag.RootCause != "" {
+			r.preview = diag.RootCause
+		}
+		r.status = "done"
+		r.mu.Unlock()
+		r.append(StreamEvent{Type: "done", Diag: &diag})
 	}()
 }
 
