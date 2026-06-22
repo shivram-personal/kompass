@@ -184,16 +184,17 @@ func ResolveCLI() string {
 	return ""
 }
 
-// Diagnoser drives a resolved agent CLI.
-type Diagnoser struct{ bin string }
+// Diagnoser drives a resolved agent CLI via an Agent backend (Claude, Codex, …).
+type Diagnoser struct{ agent Agent }
 
-// New returns a Diagnoser for the given binary, or ErrNoCLI if empty.
+// New returns a Diagnoser for the given binary, or ErrNoCLI if empty. The agent
+// backend is chosen from the binary name (see resolveAgent).
 func New(bin string) (*Diagnoser, error) {
 	if strings.TrimSpace(bin) == "" {
 		return nil, ErrNoCLI
 	}
 	sweepStaleMCPConfigs()
-	return &Diagnoser{bin: bin}, nil
+	return &Diagnoser{agent: resolveAgent(bin)}, nil
 }
 
 func maxTurns() int {
@@ -215,11 +216,13 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		return Diagnosis{}, errors.New("ai: MCP port not set")
 	}
 
-	cfgPath, cleanup, err := writeMCPConfig(req.MCPPort, !req.Apply)
-	if err != nil {
-		return Diagnosis{}, fmt.Errorf("ai: write mcp config: %w", err)
+	// Read-only investigation turns get the read-only MCP mount; an apply turn
+	// (user-confirmed) gets the full mount with write tools.
+	path := "/mcp"
+	if !req.Apply {
+		path = "/mcp-readonly"
 	}
-	defer cleanup()
+	mcpURL := fmt.Sprintf("http://localhost:%d%s", req.MCPPort, path)
 
 	prompt := taskPrompt(req)
 	if req.Apply {
@@ -227,42 +230,22 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	} else if strings.TrimSpace(req.Question) != "" {
 		prompt = req.Question // follow-up turn
 	}
-	args := []string{
-		"-p", prompt,
-		"--mcp-config", cfgPath, "--strict-mcp-config",
-		// Disable ALL built-in tools — --allowedTools only pre-approves, it does
-		// NOT restrict the built-in set, so without this the agent could run Bash
-		// (arbitrary exec) or WebFetch (exfiltrate cluster data). Fail-closed +
-		// future-proof. The agent reaches the cluster ONLY via the MCP tools below.
-		"--tools", "",
-		"--allowedTools",
-	}
-	for _, t := range radarReadTools {
-		args = append(args, "mcp__radar__"+t)
-	}
-	// Apply turns also get the Radar write tools (gated by the caller's explicit
-	// confirmation). Investigation/follow-up turns stay read-only.
-	if req.Apply {
-		for _, t := range radarWriteTools {
-			args = append(args, "mcp__radar__"+t)
-		}
-	}
-	args = append(args,
-		"--permission-mode", "acceptEdits",
-		"--max-turns", strconv.Itoa(maxTurns()),
-		"--output-format", "stream-json", "--include-partial-messages", "--verbose",
-	)
-	if req.SessionID != "" {
-		// Resume the prior session: keeps full context (tool results + reasoning)
-		// so a follow-up continues the conversation instead of re-investigating.
-		args = append(args, "--resume", req.SessionID)
-	} else {
-		// First turn: establish the SRE + security framing for the whole session.
-		args = append(args, "--append-system-prompt", systemPrompt)
+	sys := ""
+	if req.SessionID == "" {
+		sys = systemPrompt // first turn establishes the SRE + security framing
 	}
 
-	cmd := exec.CommandContext(ctx, d.bin, args...)
-	cmd.Env = scrubbedEnv()
+	cmd, cleanup, err := d.agent.command(ctx, turnSpec{
+		mcpURL: mcpURL, prompt: prompt, systemPrompt: sys,
+		sessionID: req.SessionID, apply: req.Apply, maxTurns: maxTurns(),
+	})
+	if err != nil {
+		return Diagnosis{}, err
+	}
+	defer cleanup()
+
+	// Process-group lifecycle is agent-agnostic: kill the whole group on cancel so
+	// no child agent process outlives the run.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
 		if cmd.Process != nil {
@@ -279,18 +262,18 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	stderr.limit = 8 << 10
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return Diagnosis{}, fmt.Errorf("ai: start %s: %w", d.bin, err)
+		return Diagnosis{}, fmt.Errorf("ai: start %s: %w", d.agent.Name(), err)
 	}
 
 	onEvent(StreamEvent{Type: "phase", Phase: "investigating"})
-	diag := parseStream(stdout, onEvent)
+	diag := d.agent.parseStream(stdout, onEvent)
 
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
 			return Diagnosis{}, ctx.Err()
 		}
 		if diag.RootCause == "" && diag.Report == "" {
-			return Diagnosis{}, fmt.Errorf("ai: %s exited: %w%s", d.bin, err, formatStderr(stderr.String()))
+			return Diagnosis{}, fmt.Errorf("ai: %s exited: %w%s", d.agent.Name(), err, formatStderr(stderr.String()))
 		}
 	}
 	return diag, nil
@@ -335,16 +318,9 @@ func sweepStaleMCPConfigs() {
 
 // writeMCPConfig points the CLI at Radar's own local MCP. No auth header — the
 // endpoint is loopback-only in standalone mode.
-func writeMCPConfig(port int, readOnly bool) (string, func(), error) {
-	// Read-only turns get the read-only MCP mount (no write tools exposed at all),
-	// so the agent can't discover or call a mutating tool — server-side enforcement
-	// on top of the CLI's own allowlist.
-	path := "/mcp"
-	if readOnly {
-		path = "/mcp-readonly"
-	}
+func writeMCPConfig(mcpURL string) (string, func(), error) {
 	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{
-		"type": "http", "url": fmt.Sprintf("http://localhost:%d%s", port, path),
+		"type": "http", "url": mcpURL,
 	}}}
 	b, err := json.Marshal(cfg)
 	if err != nil {
