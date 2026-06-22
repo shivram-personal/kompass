@@ -30,6 +30,7 @@ type turnSpec struct {
 	systemPrompt string // SRE+security framing; set only on the first turn (empty on resume)
 	sessionID    string // resume target; empty means a fresh session
 	apply        bool   // user-confirmed remediation turn (write tools allowed)
+	isolated     bool   // run without the user's own CLI config (Codex only)
 	maxTurns     int
 }
 

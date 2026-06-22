@@ -17,8 +17,103 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
-import { type Diagnosis, type DiagnoseStep } from "../../api/diagnose";
+import {
+  type Diagnosis,
+  type DiagnoseStep,
+  type AgentInfo,
+} from "../../api/diagnose";
 import { Markdown } from "../ui/Markdown";
+
+// Segmented two-or-more-way selector — shared shape for the agent picker and the
+// isolation toggle.
+function Segmented<T extends string | boolean>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+        {label}
+      </div>
+      <div className="flex gap-1 rounded-md bg-theme-base p-0.5">
+        {options.map((o) => (
+          <button
+            key={String(o.value)}
+            onClick={() => onChange(o.value)}
+            className={`flex-1 rounded px-2 py-1 text-xs font-medium transition-colors ${
+              o.value === value
+                ? "bg-theme-elevated text-theme-text-primary shadow-theme-sm"
+                : "text-theme-text-secondary hover:text-theme-text-primary"
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// AgentControls lets the user pick which installed CLI drives investigations and,
+// for Codex, whether to run isolated or with their own setup. It renders nothing
+// in the common single-agent + non-Codex case, so the surface stays frictionless.
+export function AgentControls({
+  agents,
+  selectedAgent,
+  onSelectAgent,
+  isolated,
+  onSetIsolated,
+}: {
+  agents: AgentInfo[];
+  selectedAgent: string;
+  onSelectAgent: (name: string) => void;
+  isolated: boolean;
+  onSetIsolated: (v: boolean) => void;
+}) {
+  const showPicker = agents.length >= 2;
+  const showIsolation = selectedAgent === "codex";
+  if (!showPicker && !showIsolation) return null;
+  return (
+    <div className="mb-3 space-y-3 rounded-lg border border-theme-border/60 bg-theme-base/40 p-3">
+      {showPicker && (
+        <Segmented
+          label="Agent"
+          value={selectedAgent}
+          onChange={onSelectAgent}
+          options={agents.map((a) => ({
+            value: a.name,
+            label: a.label || a.name,
+          }))}
+        />
+      )}
+      {showIsolation && (
+        <div>
+          <Segmented<boolean>
+            label="Environment"
+            value={isolated}
+            onChange={onSetIsolated}
+            options={[
+              { value: true, label: "Isolated" },
+              { value: false, label: "My setup" },
+            ]}
+          />
+          <p className="mt-1.5 text-[11px] leading-snug text-theme-text-tertiary">
+            {isolated
+              ? "Runs Codex on its own — no access to your other MCP servers, guidelines, or project files."
+              : "Runs Codex with your full setup (your other MCP servers + guidelines). It can also read local files."}
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // Turn is one round of the conversation: the initial investigation (no question)
 // or a follow-up, each with its own transcript + result.
@@ -135,10 +230,14 @@ export function TurnView({
 
 export function ConsentCard({
   agentName,
+  isolated = true,
+  controls,
   onApprove,
   onCancel,
 }: {
   agentName: string;
+  isolated?: boolean;
+  controls?: ReactNode;
   onApprove: () => void;
   onCancel: () => void;
 }) {
@@ -154,14 +253,32 @@ export function ConsentCard({
         Radar will send this resource&apos;s spec, recent events, and pod logs
         to{" "}
         <span className="font-medium text-theme-text-primary">{agentName}</span>
-        , running on your own machine and subscription. The agent can only{" "}
-        <span className="font-medium">read</span> — it cannot change your
-        cluster.
+        , running on your own machine and subscription.
+        {isolated && (
+          <>
+            {" "}
+            Through Radar the agent can only{" "}
+            <span className="font-medium">read</span> — it cannot change your
+            cluster.
+          </>
+        )}
       </p>
       <ul className="mt-2 space-y-1 text-xs text-theme-text-tertiary">
         <li>• Runs locally — no Radar cloud, no API key needed.</li>
-        <li>• Read-only: investigation tools only.</li>
+        {isolated ? (
+          <li>
+            • Isolated: only Radar&apos;s read-only investigation tools — your
+            other CLI config and MCP servers are excluded.
+          </li>
+        ) : (
+          <li>
+            • &ldquo;My setup&rdquo;: the agent also runs with your own CLI
+            config + MCP servers and can read local files. Only Radar&apos;s own
+            tools are read-only.
+          </li>
+        )}
       </ul>
+      {controls && <div className="mt-3">{controls}</div>}
       <div className="mt-4 flex gap-2">
         <button
           onClick={onCancel}

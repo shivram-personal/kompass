@@ -31,7 +31,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 // writes the error) when unavailable.
 func (s *Server) aiReady(w http.ResponseWriter) bool {
 	if s.aiRuns == nil {
-		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code to enable AI diagnosis")
+		s.writeError(w, http.StatusNotImplemented, "no agent CLI available — install Claude Code or Codex to enable AI diagnosis")
 		return false
 	}
 	return s.requireConnected(w)
@@ -67,7 +67,11 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 	if !s.aiReady(w) {
 		return
 	}
-	var body struct{ Kind, Namespace, Name string }
+	var body struct {
+		Kind, Namespace, Name string
+		Agent                 string `json:"agent"`
+		Isolated              *bool  `json:"isolated"` // pointer: default ISOLATED when omitted
+	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -85,7 +89,9 @@ func (s *Server) handleDiagnoseStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	run, err := s.aiRuns.Start(kind, namespace, name)
+	agent := s.aiRuns.AgentName(strings.TrimSpace(body.Agent))
+	isolated := body.Isolated == nil || *body.Isolated
+	run, err := s.aiRuns.Start(kind, namespace, name, agent, isolated)
 	if err != nil {
 		if errors.Is(err, ai.ErrAtCapacity) {
 			s.writeError(w, http.StatusConflict, "too many investigations running — stop or finish one first")
@@ -123,6 +129,14 @@ func (s *Server) handleDiagnoseTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// An apply turn runs in a fresh, write-enabled session bound to the confirmed
+	// fix. Without that text the agent would re-derive what to do from live cluster
+	// data inside a write session — exactly the injection path fresh-session apply
+	// is meant to close. Require the confirmed fix.
+	if body.Apply && strings.TrimSpace(body.Fix) == "" {
+		s.writeError(w, http.StatusBadRequest, "apply requires the confirmed fix text")
 		return
 	}
 	err := s.aiRuns.AddTurn(id, strings.TrimSpace(body.Question), body.Apply, body.Fix)

@@ -6,8 +6,8 @@ import "testing"
 // backlog after its last-seen seq, then live events, then a close on terminal.
 func TestRunSubscribeReplay(t *testing.T) {
 	r := &Run{subs: map[int]chan RunEvent{}}
-	r.append(StreamEvent{Type: "turn"})            // seq 1
-	r.append(StreamEvent{Type: "phase"})           // seq 2
+	r.append(StreamEvent{Type: "turn"})              // seq 1
+	r.append(StreamEvent{Type: "phase"})             // seq 2
 	r.append(StreamEvent{Type: "token", Token: "x"}) // seq 3
 
 	backlog, ch, cancel := r.Subscribe(1) // everything after seq 1
@@ -117,5 +117,27 @@ func TestEvictKeepsRunning(t *testing.T) {
 	}
 	if len(m.order) != 2 {
 		t.Errorf("order = %v, want len 2", m.order)
+	}
+}
+
+// TestRunMatchesTarget pins the Start focus-existing key: same resource+cluster
+// focuses only when the agent AND isolation mode also match, so a different mode
+// starts its own run instead of silently reusing one.
+func TestRunMatchesTarget(t *testing.T) {
+	r := &Run{
+		Kind: "Deployment", Namespace: "ns", Name: "app",
+		Context: "ctx", Agent: "codex", Isolated: true,
+	}
+	if !r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", true) {
+		t.Error("identical target+mode should match")
+	}
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "claude", true) {
+		t.Error("different agent must NOT match")
+	}
+	if r.matchesTarget("Deployment", "ns", "app", "ctx", "codex", false) {
+		t.Error("different isolation mode must NOT match")
+	}
+	if r.matchesTarget("Deployment", "ns", "app", "other", "codex", true) {
+		t.Error("different cluster context must NOT match")
 	}
 }

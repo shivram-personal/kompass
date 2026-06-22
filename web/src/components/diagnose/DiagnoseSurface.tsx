@@ -7,10 +7,10 @@ import { useLayoutEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Sparkles, X, Maximize2, Minimize2, ChevronLeft } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
-import { useDiagnose } from "./DiagnoseContext";
+import { useDiagnose, agentLabelFor } from "./DiagnoseContext";
 import { InvestigationView } from "./InvestigationView";
 import { RecentList } from "./Home";
-import { ConsentCard } from "./parts";
+import { ConsentCard, AgentControls } from "./parts";
 
 export function DiagnoseSurface({
   width,
@@ -72,7 +72,21 @@ export function DiagnoseSurface({
     document.addEventListener("mouseup", onUp);
   };
 
+  const agentControls = (
+    <AgentControls
+      agents={d.agents}
+      selectedAgent={d.selectedAgent}
+      onSelectAgent={d.setSelectedAgent}
+      isolated={d.isolated}
+      onSetIsolated={d.setIsolated}
+    />
+  );
+
   const activeRun = d.runs.find((r) => r.id === d.activeRunId) ?? null;
+  // A focused run shows the agent it actually ran with; Home reflects the current pick.
+  const activeAgentLabel = activeRun?.agent
+    ? agentLabelFor(activeRun.agent)
+    : d.agentLabel;
   const detailTitle = activeRun
     ? `${activeRun.kind} ${activeRun.namespace ? `${activeRun.namespace}/` : ""}${activeRun.name}`
     : "AI investigations";
@@ -88,6 +102,8 @@ export function DiagnoseSurface({
       <div className={maximized ? "mx-auto max-w-3xl" : ""}>
         <ConsentCard
           agentName={d.agentLabel}
+          isolated={d.isolated}
+          controls={agentControls}
           onApprove={d.approveConsent}
           onCancel={d.cancelConsent}
         />
@@ -97,7 +113,7 @@ export function DiagnoseSurface({
     <InvestigationView
       key={activeRun.id}
       run={activeRun}
-      agentLabel={d.agentLabel}
+      agentLabel={activeAgentLabel}
       maximized={maximized}
     />
   ) : d.startError ? (
@@ -156,7 +172,7 @@ export function DiagnoseSurface({
               {detailTitle}
             </div>
             <div className="truncate text-xs text-theme-text-tertiary">
-              {d.view === "home" ? `via ${d.agentLabel}` : d.agentLabel}
+              {d.view === "home" ? `via ${d.agentLabel}` : activeAgentLabel}
             </div>
           </div>
         </div>
@@ -197,6 +213,7 @@ export function DiagnoseSurface({
             key="recent"
             className="w-72 shrink-0 overflow-y-auto border-r border-theme-border px-3 py-3"
           >
+            {agentControls}
             <RecentList
               agentLabel={d.agentLabel}
               runs={d.runs}
@@ -210,6 +227,7 @@ export function DiagnoseSurface({
             key="main"
             className="flex-1 overflow-y-auto overflow-x-hidden px-4 py-3"
           >
+            {agentControls}
             <RecentList
               agentLabel={d.agentLabel}
               runs={d.runs}

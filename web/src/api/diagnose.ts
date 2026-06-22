@@ -65,6 +65,8 @@ export interface RunSummary {
   namespace: string;
   name: string;
   context: string;
+  agent?: string; // backend CLI that drove this run ("claude"/"codex")
+  isolated?: boolean;
   status: "running" | "done" | "error" | "stopped" | "stale";
   sessionId?: string;
   preview?: string;
@@ -106,16 +108,19 @@ const RUNS = () => `${getApiBase()}/diagnose/runs`;
 
 // createRun starts a server-side investigation (or focuses a live one for the same
 // target) and returns its run summary.
-export async function createRun(target: {
-  kind: string;
-  namespace: string;
-  name: string;
-}): Promise<RunSummary> {
+export async function createRun(
+  target: {
+    kind: string;
+    namespace: string;
+    name: string;
+  },
+  opts?: { agent?: string; isolated?: boolean },
+): Promise<RunSummary> {
   const res = await fetch(RUNS(), {
     method: "POST",
     credentials: getCredentialsMode(),
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(target),
+    body: JSON.stringify({ ...target, ...opts }),
   });
   if (!res.ok) throw new DiagnoseError(res.status, await errorText(res));
   return res.json();

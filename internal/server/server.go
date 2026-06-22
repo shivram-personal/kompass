@@ -143,12 +143,10 @@ func New(cfg Config) *Server {
 	// Also requires /mcp to be mounted — the agent reaches the cluster only
 	// through it, so with --no-mcp the feature can't work.
 	if !s.authConfig.Enabled() && s.mcpHandler != nil {
-		if bin := ai.ResolveCLI(); bin != "" {
-			if d, err := ai.New(bin); err == nil {
-				s.aiDiagnoser = d
-				s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName)
-				log.Printf("[ai] diagnose enabled (agent CLI: %s)", bin)
-			}
+		if d, err := ai.NewDetected(context.Background()); err == nil {
+			s.aiDiagnoser = d
+			s.aiRuns = ai.NewRunManager(d, s.ActualPort, k8s.GetContextName)
+			log.Printf("[ai] diagnose enabled (default agent: %s)", d.DefaultAgent())
 		}
 	}
 

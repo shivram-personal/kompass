@@ -25,13 +25,6 @@ type codexAgent struct{ bin string }
 func (a *codexAgent) Name() string { return "codex" }
 
 func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(), error) {
-	// Empty working dir so the model's shell can't read radar's source / AGENTS.md.
-	dir, err := os.MkdirTemp("", "radar-codex-")
-	if err != nil {
-		return nil, nil, fmt.Errorf("ai: codex workdir: %w", err)
-	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
-
 	// Codex has no system-prompt flag; the framing rides on the first turn's
 	// prompt (the resumed session already carries it).
 	prompt := s.prompt
@@ -40,23 +33,43 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	}
 	mcpCfg := fmt.Sprintf("mcp_servers.radar.url=%q", s.mcpURL)
 
+	// Always start from the base flags; isolation adds --ignore-user-config, an
+	// empty cwd, and a minimal env. "My setup" keeps the user's config (their other
+	// MCP servers, guidelines), their full env, and their home cwd. The shell stays
+	// --sandbox read-only in BOTH modes — but the "cluster writes go only through
+	// Radar's read-only MCP" containment holds ONLY when isolated. In "my setup"
+	// the agent also gets the user's own MCP servers (possibly write/network/cloud
+	// capable) + local file reads: a deliberate trusted mode, not a contained one.
+	base := []string{"--json", "--skip-git-repo-check", "-c", mcpCfg}
+	if s.isolated {
+		base = append(base, "--ignore-user-config")
+	}
+
 	var args []string
 	if s.sessionID != "" {
-		// resume lacks --sandbox/--cd; set sandbox via -c (cwd via cmd.Dir below).
-		args = []string{
-			"exec", "resume", "--json", "--skip-git-repo-check", "--ignore-user-config",
-			"-c", mcpCfg, "-c", `sandbox_mode="read-only"`, s.sessionID, prompt,
-		}
+		// resume lacks --sandbox; set sandbox via -c (cwd via cmd.Dir below).
+		args = append([]string{"exec", "resume"}, base...)
+		args = append(args, "-c", `sandbox_mode="read-only"`, s.sessionID, prompt)
 	} else {
-		args = []string{
-			"exec", "--json", "--skip-git-repo-check", "--ignore-user-config",
-			"--sandbox", "read-only", "-c", mcpCfg, prompt,
-		}
+		args = append([]string{"exec"}, base...)
+		args = append(args, "--sandbox", "read-only", prompt)
 	}
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
-	cmd.Dir = dir
-	cmd.Env = codexEnv()
+
+	cleanup := func() {}
+	if s.isolated {
+		// Empty working dir so the model's shell can't read radar's source / cwd.
+		dir, err := os.MkdirTemp("", "radar-codex-")
+		if err != nil {
+			return nil, nil, fmt.Errorf("ai: codex workdir: %w", err)
+		}
+		cleanup = func() { _ = os.RemoveAll(dir) }
+		cmd.Dir = dir
+		cmd.Env = codexEnv()
+	}
+	// "My setup": inherit radar's cwd + full env so the user's auth/config/MCPs work.
+
 	return cmd, cleanup, nil
 }
 

@@ -58,6 +58,14 @@ type Request struct {
 	// apply turn the agent is told to apply THIS specific change, so the operation
 	// is bound to what was confirmed rather than the session's own recollection.
 	Fix string
+	// Agent selects which backend CLI drives this turn ("claude"/"codex"). Empty
+	// uses the Diagnoser's default. A run picks once at Start and reuses it.
+	Agent string
+	// Isolated runs the agent without the user's own CLI config (other MCP servers,
+	// guidelines, project files) — the default. When false ("my setup"), the agent
+	// runs with the user's full environment. Only the Codex backend distinguishes
+	// the two; Claude is always strict-MCP-config contained.
+	Isolated bool
 }
 
 // Diagnosis is the engine's final result.
@@ -132,12 +140,17 @@ const applyGuidance = "Use the Radar write tools to make the minimal patch; do n
 // exact fix the user confirmed, the agent is bound to apply THAT change (not its
 // own re-derivation of "the recommended fix"), so the operation matches what was
 // shown in the confirmation dialog.
-func applyPrompt(fix string) string {
-	if fix = strings.TrimSpace(fix); fix != "" {
-		return "Apply EXACTLY this fix that the user just confirmed — and ONLY this change, do not " +
-			"substitute a different one:\n\n" + fix + "\n\n" + applyGuidance
+func applyPrompt(req Request) string {
+	ns := req.Namespace
+	if ns == "" {
+		ns = "(cluster-scoped)"
 	}
-	return "Apply the single remediation step you marked as recommended (recommended_index) — and ONLY " +
+	target := fmt.Sprintf("%s %s/%s", req.Kind, ns, req.Name)
+	if fix := strings.TrimSpace(req.Fix); fix != "" {
+		return "Apply EXACTLY this fix that the user just confirmed for " + target + " — and ONLY this " +
+			"change, do not substitute a different one:\n\n" + fix + "\n\n" + applyGuidance
+	}
+	return "Apply the single most targeted, deterministic remediation for " + target + " — and ONLY " +
 		"that change. " + applyGuidance
 }
 
@@ -161,9 +174,9 @@ const systemPrompt = "You are a senior Kubernetes SRE investigating an unhealthy
 
 const defaultMaxTurns = 15
 
-// agentCLICandidates are CLIs whose stream-json shape we can parse. Claude Code
-// only today; others are added once their parser exists.
-var agentCLICandidates = []string{"claude"}
+// agentCLICandidates are CLIs whose event stream we can parse + drive. Order is
+// the default-selection preference when several are installed.
+var agentCLICandidates = []string{"claude", "codex"}
 
 // Detector / Diagnoser ------------------------------------------------------
 
@@ -184,17 +197,73 @@ func ResolveCLI() string {
 	return ""
 }
 
-// Diagnoser drives a resolved agent CLI via an Agent backend (Claude, Codex, …).
-type Diagnoser struct{ agent Agent }
+// Diagnoser drives one or more resolved agent CLIs via Agent backends (Claude,
+// Codex, …). A run picks a backend by name; defName is used when none is given.
+type Diagnoser struct {
+	agents  map[string]Agent
+	defName string
+}
 
-// New returns a Diagnoser for the given binary, or ErrNoCLI if empty. The agent
-// backend is chosen from the binary name (see resolveAgent).
+func newDiagnoser(backends []Agent) *Diagnoser {
+	d := &Diagnoser{agents: map[string]Agent{}}
+	for _, a := range backends {
+		if d.defName == "" {
+			d.defName = a.Name()
+		}
+		d.agents[a.Name()] = a
+	}
+	return d
+}
+
+// New returns a single-backend Diagnoser for the given binary, or ErrNoCLI if
+// empty. The backend is chosen from the binary name (see resolveAgent). Used by
+// the RADAR_AI_CLI_BIN override path and tests.
 func New(bin string) (*Diagnoser, error) {
 	if strings.TrimSpace(bin) == "" {
 		return nil, ErrNoCLI
 	}
 	sweepStaleMCPConfigs()
-	return &Diagnoser{agent: resolveAgent(bin)}, nil
+	return newDiagnoser([]Agent{resolveAgent(bin)}), nil
+}
+
+// NewDetected builds a Diagnoser over every supported agent CLI present on PATH.
+// The RADAR_AI_CLI_BIN override, when set + present, forces a single backend.
+// Returns ErrNoCLI when nothing usable is found.
+func NewDetected(ctx context.Context) (*Diagnoser, error) {
+	if explicit := strings.TrimSpace(os.Getenv("RADAR_AI_CLI_BIN")); explicit != "" {
+		return New(ResolveCLI())
+	}
+	var backends []Agent
+	for _, info := range DetectAgents(ctx, false) {
+		if info.Supported {
+			backends = append(backends, resolveAgent(info.Path))
+		}
+	}
+	if len(backends) == 0 {
+		return nil, ErrNoCLI
+	}
+	sweepStaleMCPConfigs()
+	return newDiagnoser(backends), nil
+}
+
+// DefaultAgent is the backend chosen when a run doesn't name one.
+func (d *Diagnoser) DefaultAgent() string { return d.defName }
+
+// AgentName normalizes a client-requested backend name to one that actually
+// exists, falling back to the default — so a run records the agent it really used.
+func (d *Diagnoser) AgentName(name string) string {
+	if _, ok := d.agents[name]; ok {
+		return name
+	}
+	return d.defName
+}
+
+// resolveTurnAgent picks the backend for a turn: the named one, else the default.
+func (d *Diagnoser) resolveTurnAgent(name string) Agent {
+	if a, ok := d.agents[name]; ok {
+		return a
+	}
+	return d.agents[d.defName]
 }
 
 func maxTurns() int {
@@ -215,6 +284,10 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	if req.MCPPort == 0 {
 		return Diagnosis{}, errors.New("ai: MCP port not set")
 	}
+	agent := d.resolveTurnAgent(req.Agent)
+	if agent == nil {
+		return Diagnosis{}, ErrNoCLI
+	}
 
 	// Read-only investigation turns get the read-only MCP mount; an apply turn
 	// (user-confirmed) gets the full mount with write tools.
@@ -224,20 +297,29 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	}
 	mcpURL := fmt.Sprintf("http://localhost:%d%s", req.MCPPort, path)
 
+	// An apply turn runs in a FRESH session, not a resume: it acts only on the
+	// user-confirmed fix text + target, so untrusted cluster data ingested during
+	// the read-only investigation can't steer the write-enabled turn (injection).
+	sessionID := req.SessionID
+	if req.Apply {
+		sessionID = ""
+	}
+
 	prompt := taskPrompt(req)
 	if req.Apply {
-		prompt = applyPrompt(req.Fix) // explicit, user-confirmed remediation turn
+		prompt = applyPrompt(req) // explicit, user-confirmed remediation turn
 	} else if strings.TrimSpace(req.Question) != "" {
 		prompt = req.Question // follow-up turn
 	}
 	sys := ""
-	if req.SessionID == "" {
-		sys = systemPrompt // first turn establishes the SRE + security framing
+	if sessionID == "" {
+		sys = systemPrompt // a fresh session establishes the SRE + security framing
 	}
 
-	cmd, cleanup, err := d.agent.command(ctx, turnSpec{
+	cmd, cleanup, err := agent.command(ctx, turnSpec{
 		mcpURL: mcpURL, prompt: prompt, systemPrompt: sys,
-		sessionID: req.SessionID, apply: req.Apply, maxTurns: maxTurns(),
+		sessionID: sessionID, apply: req.Apply, isolated: req.Isolated,
+		maxTurns: maxTurns(),
 	})
 	if err != nil {
 		return Diagnosis{}, err
@@ -262,18 +344,18 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 	stderr.limit = 8 << 10
 	cmd.Stderr = &stderr
 	if err := cmd.Start(); err != nil {
-		return Diagnosis{}, fmt.Errorf("ai: start %s: %w", d.agent.Name(), err)
+		return Diagnosis{}, fmt.Errorf("ai: start %s: %w", agent.Name(), err)
 	}
 
 	onEvent(StreamEvent{Type: "phase", Phase: "investigating"})
-	diag := d.agent.parseStream(stdout, onEvent)
+	diag := agent.parseStream(stdout, onEvent)
 
 	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
 			return Diagnosis{}, ctx.Err()
 		}
 		if diag.RootCause == "" && diag.Report == "" {
-			return Diagnosis{}, fmt.Errorf("ai: %s exited: %w%s", d.agent.Name(), err, formatStderr(stderr.String()))
+			return Diagnosis{}, fmt.Errorf("ai: %s exited: %w%s", agent.Name(), err, formatStderr(stderr.String()))
 		}
 	}
 	return diag, nil

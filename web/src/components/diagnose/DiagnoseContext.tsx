@@ -12,8 +12,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { fetchAgents, listRuns, createRun, DiagnoseError } from "../../api/diagnose";
-import { type RunSummary } from "../../api/diagnose";
+import {
+  fetchAgents,
+  listRuns,
+  createRun,
+  DiagnoseError,
+} from "../../api/diagnose";
+import { type RunSummary, type AgentInfo } from "../../api/diagnose";
 import { DiagnoseSurface } from "./DiagnoseSurface";
 
 export interface Target {
@@ -25,7 +30,12 @@ export type DiagnoseView = "home" | "investigation";
 
 interface DiagnoseCtx {
   available: boolean; // an agent CLI is present (button/entry gate)
-  agentLabel: string; // e.g. "Claude Code"
+  agentLabel: string; // label of the selected agent, e.g. "Claude Code"
+  agents: AgentInfo[]; // supported agents detected on PATH (for the picker)
+  selectedAgent: string; // name of the chosen backend ("claude"/"codex")
+  setSelectedAgent: (name: string) => void;
+  isolated: boolean; // run the agent without the user's own CLI config
+  setIsolated: (v: boolean) => void;
   open: boolean;
   view: DiagnoseView;
   activeRunId: string | null;
@@ -54,7 +64,9 @@ export function useDiagnose(): DiagnoseCtx {
 const MIN_W = 400;
 const MAX_W = 1100;
 const WIDTH_KEY = "radar-ai-panel-width";
-const CONSENT_KEY = "radar-ai-consent-v1";
+const CONSENT_KEY = "radar-ai-consent-v2"; // v2: agent picker + isolation choice
+const AGENT_KEY = "radar-ai-agent";
+const ISOLATED_KEY = "radar-ai-isolated";
 const PUSH_MIN_VIEWPORT = 1024; // below this, overlay instead of pushing
 
 const AGENT_LABELS: Record<string, string> = {
@@ -63,6 +75,10 @@ const AGENT_LABELS: Record<string, string> = {
   gemini: "Gemini CLI",
   "cursor-agent": "Cursor Agent",
 };
+
+export function agentLabelFor(name: string, fallbackLabel?: string): string {
+  return AGENT_LABELS[name] || fallbackLabel || name || "your AI agent";
+}
 
 // localStorage can throw (private mode); never let it crash the always-mounted provider.
 function readConsent(): boolean {
@@ -73,9 +89,30 @@ function readConsent(): boolean {
   }
 }
 
+function readStored(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* storage disabled — holds for this session */
+  }
+}
+
 export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const [available, setAvailable] = useState(false);
-  const [agentLabel, setAgentLabel] = useState("your AI agent");
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [selectedAgent, setSelectedAgentState] = useState<string>(
+    () => readStored(AGENT_KEY) || "",
+  );
+  const [isolated, setIsolatedState] = useState<boolean>(
+    () => readStored(ISOLATED_KEY) !== "0", // default isolated
+  );
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<DiagnoseView>("home");
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -103,17 +140,35 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       .then((r) => {
         if (!live) return;
         setAvailable(r.enabled);
-        const primary = r.agents.find((a) => a.supported) ?? r.agents[0];
-        if (primary)
-          setAgentLabel(
-            primary.label || AGENT_LABELS[primary.name] || primary.name,
-          );
+        const supported = r.agents.filter((a) => a.supported);
+        setAgents(supported);
+        // Keep the stored pick only if it's still installed; else default to the
+        // first supported agent (matches the server's default selection).
+        setSelectedAgentState((prev) =>
+          prev && supported.some((a) => a.name === prev)
+            ? prev
+            : (supported[0]?.name ?? ""),
+        );
       })
       .catch(() => {});
     return () => {
       live = false;
     };
   }, []);
+
+  const setSelectedAgent = useCallback((name: string) => {
+    setSelectedAgentState(name);
+    writeStored(AGENT_KEY, name);
+  }, []);
+  const setIsolated = useCallback((v: boolean) => {
+    setIsolatedState(v);
+    writeStored(ISOLATED_KEY, v ? "1" : "0");
+  }, []);
+
+  const agentLabel = agentLabelFor(
+    selectedAgent,
+    agents.find((a) => a.name === selectedAgent)?.label,
+  );
 
   useEffect(() => {
     const onResize = () => setNarrow(window.innerWidth < PUSH_MIN_VIEWPORT);
@@ -139,7 +194,7 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
 
   const startRunRef = useRef<(t: Target) => void>(() => {});
   startRunRef.current = (t: Target) => {
-    createRun(t)
+    createRun(t, { agent: selectedAgent || undefined, isolated })
       .then((run) => {
         setActiveRunId(run.id);
         setView("investigation");
@@ -156,20 +211,17 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
       });
   };
 
-  const openInvestigation = useCallback(
-    (t: Target) => {
-      setStartError(null);
-      setOpen(true);
-      if (!readConsent()) {
-        setPendingTarget(t);
-        setView("investigation");
-        return;
-      }
+  const openInvestigation = useCallback((t: Target) => {
+    setStartError(null);
+    setOpen(true);
+    if (!readConsent()) {
+      setPendingTarget(t);
       setView("investigation");
-      startRunRef.current(t);
-    },
-    [],
-  );
+      return;
+    }
+    setView("investigation");
+    startRunRef.current(t);
+  }, []);
   const openRun = useCallback((id: string) => {
     setActiveRunId(id);
     setView("investigation");
@@ -201,6 +253,11 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
   const value: DiagnoseCtx = {
     available,
     agentLabel,
+    agents,
+    selectedAgent,
+    setSelectedAgent,
+    isolated,
+    setIsolated,
     open,
     view,
     activeRunId,

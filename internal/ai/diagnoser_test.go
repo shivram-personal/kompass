@@ -44,10 +44,15 @@ func TestDiagnosisFromText_RecommendedIndex(t *testing.T) {
 
 func TestApplyPrompt_BindsConfirmedFix(t *testing.T) {
 	fix := "Set `spec.replicas` to `3` on Deployment `x`"
-	if p := applyPrompt(fix); !strings.Contains(p, fix) {
+	req := Request{Kind: "Deployment", Namespace: "prod", Name: "x", Fix: fix}
+	p := applyPrompt(req)
+	if !strings.Contains(p, fix) {
 		t.Errorf("apply prompt should embed the confirmed fix; got %q", p)
 	}
-	if p := applyPrompt(""); strings.Contains(p, "EXACTLY this fix") {
+	if !strings.Contains(p, "Deployment prod/x") {
+		t.Errorf("apply prompt should name the target resource; got %q", p)
+	}
+	if p := applyPrompt(Request{Kind: "Deployment", Name: "x"}); strings.Contains(p, "EXACTLY this fix") {
 		t.Errorf("empty fix should use the fallback prompt; got %q", p)
 	}
 }
