@@ -162,11 +162,20 @@ export function DiagnoseProvider({ children }: { children: ReactNode }) {
         setAgents(supported);
         // Keep the stored pick only if it's still installed; else default to the
         // first supported agent (matches the server's default selection).
-        setSelectedAgentState((prev) =>
-          prev && supported.some((a) => a.name === prev)
-            ? prev
-            : (supported[0]?.name ?? ""),
-        );
+        const stored = readStored(AGENT_KEY) || "";
+        const next =
+          stored && supported.some((a) => a.name === stored)
+            ? stored
+            : (supported[0]?.name ?? "");
+        setSelectedAgentState(next);
+        // Model/effort are agent-specific; if the stored agent is gone, its values
+        // don't apply to the fallback agent (e.g. a Codex slug under Claude) — drop them.
+        if (next !== stored) {
+          setModelState("");
+          writeStored(MODEL_KEY, "");
+          setEffortState("");
+          writeStored(EFFORT_KEY, "");
+        }
       })
       .catch(() => {});
     return () => {
