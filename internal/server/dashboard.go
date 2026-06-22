@@ -287,21 +287,6 @@ type DashboardHelmRelease struct {
 	ResourceHealth string `json:"resourceHealth,omitempty"`
 }
 
-// mergeHelmSummary appends src into dst. The first non-empty Error / ErrorCode
-// wins so the UI surfaces a real failure rather than swallowing it under a
-// later success. Restricted is OR-merged: restricted in any namespace ⇒ flag.
-func mergeHelmSummary(dst *DashboardHelmSummary, src DashboardHelmSummary) {
-	dst.Total += src.Total
-	dst.Releases = append(dst.Releases, src.Releases...)
-	if src.Restricted {
-		dst.Restricted = true
-	}
-	if dst.Error == "" {
-		dst.Error = src.Error
-		dst.ErrorCode = src.ErrorCode
-	}
-}
-
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -490,18 +475,7 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Iterate per allowed namespace and aggregate. Cluster-wide access
-	// (namespaces == nil) collapses to a single "" call; a namespace-restricted
-	// identity gets its accessible namespaces from resolveHelmNamespaces so the
-	// summary doesn't 403 into a "Restricted" card.
-	var summary DashboardHelmSummary
-	if namespaces == nil {
-		summary = s.getDashboardHelmSummary(r, "")
-	} else {
-		for _, ns := range namespaces {
-			mergeHelmSummary(&summary, s.getDashboardHelmSummary(r, ns))
-		}
-	}
+	summary := s.getDashboardHelmSummary(r, namespaces)
 	s.writeJSON(w, summary)
 }
 
@@ -1371,7 +1345,7 @@ func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []st
 	}
 }
 
-func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) DashboardHelmSummary {
+func (s *Server) getDashboardHelmSummary(r *http.Request, namespaces []string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
 		return DashboardHelmSummary{
@@ -1387,7 +1361,7 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) Dash
 		username = user.Username
 		groups = user.Groups
 	}
-	releases, err := helmClient.ListReleasesAsUser(namespace, username, groups)
+	releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
 	if err != nil {
 		if helm.IsForbiddenError(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
@@ -1400,6 +1374,10 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) Dash
 		}
 	}
 
+	return dashboardHelmSummaryFromReleases(releases)
+}
+
+func dashboardHelmSummaryFromReleases(releases []helm.HelmRelease) DashboardHelmSummary {
 	result := DashboardHelmSummary{
 		Total: len(releases),
 	}
@@ -1415,14 +1393,14 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) Dash
 	limit := min(len(releases), 6)
 
 	result.Releases = make([]DashboardHelmRelease, 0, limit)
-	for _, r := range releases[:limit] {
+	for _, rel := range releases[:limit] {
 		result.Releases = append(result.Releases, DashboardHelmRelease{
-			Name:           r.Name,
-			Namespace:      r.Namespace,
-			Chart:          r.Chart,
-			ChartVersion:   r.ChartVersion,
-			Status:         r.Status,
-			ResourceHealth: r.ResourceHealth,
+			Name:           rel.Name,
+			Namespace:      rel.Namespace,
+			Chart:          rel.Chart,
+			ChartVersion:   rel.ChartVersion,
+			Status:         rel.Status,
+			ResourceHealth: rel.ResourceHealth,
 		})
 	}
 
