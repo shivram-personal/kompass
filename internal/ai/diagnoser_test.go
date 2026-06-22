@@ -142,3 +142,25 @@ func TestDetectAgents_OnlyKnownNames(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentExitError_Classifies pins the best-effort error taxonomy: common
+// actionable failures get a plain-language lead; the rest get a generic line.
+func TestAgentExitError_Classifies(t *testing.T) {
+	cases := []struct{ stderr, want string }{
+		{"Error: Not logged in. Please run claude login", "isn't signed in"},
+		{"request failed: 401 unauthorized", "isn't signed in"},
+		{"API error 429: rate limit exceeded", "rate-limited"},
+		{"overloaded_error: server is overloaded", "rate-limited"},
+		{"reached max turns", "step limit"},
+		{"panic: nil pointer", "stopped unexpectedly"},
+	}
+	for _, c := range cases {
+		if got := agentExitError("claude", c.stderr).Error(); !strings.Contains(got, c.want) {
+			t.Errorf("stderr %q → %q, want substring %q", c.stderr, got, c.want)
+		}
+	}
+	// The raw tail is preserved for debugging.
+	if got := agentExitError("codex", "boom detail").Error(); !strings.Contains(got, "boom detail") {
+		t.Errorf("expected raw stderr tail preserved, got %q", got)
+	}
+}

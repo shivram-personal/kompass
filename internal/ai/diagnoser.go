@@ -361,7 +361,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 			return Diagnosis{}, ctx.Err()
 		}
 		if diag.RootCause == "" && diag.Report == "" {
-			return Diagnosis{}, fmt.Errorf("ai: %s exited: %w%s", agent.Name(), err, formatStderr(stderr.String()))
+			return Diagnosis{}, agentExitError(agent.Name(), stderr.String())
 		}
 	}
 	return diag, nil
@@ -501,6 +501,37 @@ func formatStderr(s string) string {
 		s = string(r[:500]) + "…"
 	}
 	return ": " + s
+}
+
+// agentExitError turns a non-zero agent exit into a user-legible message. Best
+// effort: the common, actionable failures (the CLI isn't signed in; rate-limited)
+// get a plain-language lead; everything else gets a generic line. The raw stderr
+// tail is kept appended so power users can still debug. stderr is the CLI's own
+// diagnostics (the model's output is on stdout), so matching it here is sound.
+func agentExitError(name, stderr string) error {
+	low := strings.ToLower(stderr)
+	contains := func(subs ...string) bool {
+		for _, s := range subs {
+			if strings.Contains(low, s) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case contains("not logged in", "logged out", "not authenticated", "unauthorized",
+		"401", "invalid api key", "no api key", "please log in", "please run", "/login", "authenticate"):
+		return fmt.Errorf("%s isn't signed in — run `%s` in a terminal to log in, then try again%s",
+			name, name, formatStderr(stderr))
+	case contains("rate limit", "rate-limit", "429", "529", "quota", "overloaded", "too many requests"):
+		return fmt.Errorf("%s is rate-limited or over quota right now — wait a moment and try again%s",
+			name, formatStderr(stderr))
+	case contains("max turns", "maximum turns", "turn limit"):
+		return fmt.Errorf("%s hit its step limit before finishing — try a more specific follow-up%s",
+			name, formatStderr(stderr))
+	default:
+		return fmt.Errorf("%s stopped unexpectedly%s", name, formatStderr(stderr))
+	}
 }
 
 // stream-json parsing -------------------------------------------------------
