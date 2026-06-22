@@ -6,6 +6,31 @@ the code lives in the files named at the end.
 
 ---
 
+## 0. The complexity budget — read this before adding anything
+
+This system tends toward complexity (the inputs are a mess), so it has a **hard
+design constraint.** Honor it on every change:
+
+1. **The spine stays three sentences.** An app is a *release unit*; *identity* is
+   "same app elsewhere," distinct from composition; *declared origins fold across
+   clusters, names don't.* If a change makes one of these three harder to state,
+   it's probably wrong. Everything else is edge-case handling around this spine —
+   it must never *become* the model.
+2. **Prefer declaration over inference.** Before adding a heuristic, ask "can the
+   user just *say it*?" The `app.skyhook.io/app` annotation exists precisely so
+   that when inference gets hairy, we hand the user a one-word escape hatch instead
+   of getting cleverer. Reach for that first.
+3. **The explainability test.** Every heuristic must be stateable in **one plain
+   sentence a non-k8s-expert nods at** (it goes in a tooltip). If it can't be —
+   simplify it, or replace it with a declaration. A heuristic you can't explain is
+   a heuristic the operator can't trust.
+
+Heuristics are fine; opacity is not. The current **watch-item is env-token
+discovery** (§12) — the one piece that fails the one-sentence test today and the
+first thing to put on the chopping block if the model needs to lose weight.
+
+---
+
 ## 1. Why this is hard
 
 A "deployable application" is **not a Kubernetes object.** There is no `App` kind.
@@ -313,3 +338,12 @@ then folds the rest only on collision-free declared origins.*
 - **Umbrella Helm charts (§2).** A chart bundling many independently-versioned
   services is one release unit → one app. If that's too coarse, the refinement is
   to split by independently-versioned image — not today's behavior.
+- **⚠️ Complexity watch-item: env-token discovery.** To put a non-trio app on the
+  env ladder, the identity resolver *discovers* whether a token like `loadtest` is
+  an environment by structural inference — "it recurs across ≥3 repo-corroborated
+  name-stem groups spanning ≥2 namespaces." That buys zero-config custom-env
+  detection, but it's the **one heuristic that fails the §0 one-sentence test** —
+  no operator can predict it. It's the first candidate to simplify if the model
+  grows: fall back to the trio (dev/staging/prod) + explicit env labels
+  (`app.kubernetes.io/environment`) + GitOps overlay paths, and make custom envs a
+  label. Flagged, not yet cut (the zero-config value is real).
