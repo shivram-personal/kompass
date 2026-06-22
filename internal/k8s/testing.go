@@ -134,6 +134,16 @@ func SetTestContextName(name string) string {
 	return prev
 }
 
+// SetTestClient overrides the package-level client and returns the previous
+// value so tests in other packages can restore it.
+func SetTestClient(c *kubernetes.Clientset) *kubernetes.Clientset {
+	clientMu.Lock()
+	prev := k8sClient
+	k8sClient = c
+	clientMu.Unlock()
+	return prev
+}
+
 // ResetTestState tears down the resource cache and resets all package-level
 // state so the next test starts clean.
 //

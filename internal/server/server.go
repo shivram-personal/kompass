@@ -44,6 +44,7 @@ import (
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/rbac"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -833,8 +834,8 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 // always namespaced (stored as Secrets/ConfigMaps in a namespace), so unlike
 // cluster-scoped kinds it is always safe to narrow an "all namespaces" request
 // to the identity's accessible namespaces — which is what lets a
-// namespace-restricted user or ServiceAccount read Helm without a cluster-wide
-// `list secrets` (the 403 in issue #925).
+// namespace-restricted ServiceAccount read Helm without a cluster-wide
+// `list secrets`.
 //
 // Returns:
 //   - (nil, true)        cluster-wide: a single AllNamespaces list
@@ -861,18 +862,49 @@ func (s *Server) resolveHelmNamespaces(r *http.Request) ([]string, bool) {
 	if noNamespaceAccess(namespaces) {
 		return nil, false
 	}
-	if namespaces == nil {
-		// "All namespaces". A namespace-restricted identity can't list
-		// cluster-wide; resolve to the namespaces it can actually see so the
-		// Helm list degrades gracefully instead of 403-ing.
-		// GetAccessibleNamespaces is authoritative only when cluster-wide `list
-		// namespaces` succeeds — keep nil in that case for a single cluster-wide
-		// list.
-		if accessible, authoritative := k8s.GetAccessibleNamespaces(r.Context()); !authoritative && len(accessible) > 0 {
-			return accessible, true
+	if namespaces == nil && auth.UserFromContext(r.Context()) == nil {
+		// "All namespaces" in no-auth mode. A namespace-restricted
+		// ServiceAccount can't list cluster-wide; resolve to the namespaces it
+		// can actually see so the Helm list degrades gracefully instead of
+		// 403-ing. Authenticated users are handled by parseNamespacesForUser
+		// above, and Helm lists impersonate them directly; narrowing them with
+		// the backend client's fallback namespaces would under-list users whose
+		// RBAC is wider than Radar's own ServiceAccount.
+		if fallback := noAuthHelmNamespaces(r.Context()); len(fallback) > 0 {
+			return fallback, true
 		}
 	}
 	return namespaces, true
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := values[:0]
+	for _, v := range values {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	return out
+}
+
+func noAuthHelmNamespaces(ctx context.Context) []string {
+	accessible, authoritative := k8s.GetAccessibleNamespaces(ctx)
+	if !authoritative && len(accessible) > 0 {
+		return accessible
+	}
+	if authoritative && len(accessible) > 0 {
+		allowed, apiErr := k8score.CanI(ctx, k8s.GetClient(), "", "", "secrets", "list")
+		if !apiErr && !allowed {
+			return accessible
+		}
+	}
+	return nil
 }
 
 // noNamespaceAccess returns true when a namespace filter explicitly grants no access
@@ -1000,7 +1032,7 @@ func parseNamespaces(query url.Values) []string {
 				result = append(result, trimmed)
 			}
 		}
-		return result
+		return dedupeStrings(result)
 	}
 	// Fall back to "namespace" (singular) for backward compatibility
 	if ns := query.Get("namespace"); ns != "" {

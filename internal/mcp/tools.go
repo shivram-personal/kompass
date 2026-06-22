@@ -2267,7 +2267,12 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		d.HelmReleases.UnavailableReason = "Helm client not initialized."
 	} else {
 		username, groups := userFromContext(ctx)
-		releases, err := helmClient.ListReleasesAsUser(namespace, username, groups)
+		namespaces := resolveHelmListNamespaces(ctx, namespace)
+		var releases []helm.HelmRelease
+		var err error
+		if namespaces == nil || len(namespaces) > 0 {
+			releases, err = helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
+		}
 		if err != nil {
 			// Not fatal for the dashboard — a viewer with no helm access
 			// still sees everything else. Surface to LLM consumers via

@@ -9,7 +9,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
+	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
 // userFromContext extracts the auth user attached by the HTTP middleware,
@@ -46,7 +48,11 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 	}
 
 	username, groups := userFromContext(ctx)
-	releases, err := helmClient.ListReleasesAsUser(input.Namespace, username, groups)
+	namespaces := resolveHelmListNamespaces(ctx, input.Namespace)
+	if namespaces != nil && len(namespaces) == 0 {
+		return toJSONResult([]helm.HelmRelease{})
+	}
+	releases, err := helmClient.ListReleasesAcrossNamespaces(namespaces, username, groups)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -55,6 +61,30 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 	// health fields (ResourceHealth, HealthIssue, HealthSummary) which
 	// provide the AI with actionable status information.
 	return toJSONResult(releases)
+}
+
+func resolveHelmListNamespaces(ctx context.Context, namespace string) []string {
+	if namespace != "" {
+		return []string{namespace}
+	}
+	if pkgauth.UserFromContext(ctx) != nil {
+		return filterNamespacesForUser(ctx, nil)
+	}
+	return noAuthHelmListNamespaces(ctx)
+}
+
+func noAuthHelmListNamespaces(ctx context.Context) []string {
+	accessible, authoritative := k8s.GetAccessibleNamespaces(ctx)
+	if !authoritative && len(accessible) > 0 {
+		return accessible
+	}
+	if authoritative && len(accessible) > 0 {
+		allowed, apiErr := k8score.CanI(ctx, k8s.GetClient(), "", "", "secrets", "list")
+		if !apiErr && !allowed {
+			return accessible
+		}
+	}
+	return nil
 }
 
 func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input getHelmReleaseInput) (*mcp.CallToolResult, any, error) {

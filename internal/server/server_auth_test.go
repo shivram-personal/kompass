@@ -128,6 +128,7 @@ func TestParseNamespaces(t *testing.T) {
 		{"plural takes precedence", "namespaces=dev&namespace=prod", []string{"dev"}, false},
 		{"trims whitespace", "namespaces= dev , staging ", []string{"dev", "staging"}, false},
 		{"filters empty segments", "namespaces=dev,,staging,", []string{"dev", "staging"}, false},
+		{"dedupes namespaces preserving order", "namespaces=dev,staging,dev,prod,staging", []string{"dev", "staging", "prod"}, false},
 	}
 
 	for _, tt := range tests {
