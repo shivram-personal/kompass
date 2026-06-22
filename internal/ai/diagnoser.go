@@ -215,7 +215,7 @@ func (d *Diagnoser) DiagnoseStream(ctx context.Context, req Request, onEvent fun
 		return Diagnosis{}, errors.New("ai: MCP port not set")
 	}
 
-	cfgPath, cleanup, err := writeMCPConfig(req.MCPPort)
+	cfgPath, cleanup, err := writeMCPConfig(req.MCPPort, !req.Apply)
 	if err != nil {
 		return Diagnosis{}, fmt.Errorf("ai: write mcp config: %w", err)
 	}
@@ -335,9 +335,16 @@ func sweepStaleMCPConfigs() {
 
 // writeMCPConfig points the CLI at Radar's own local MCP. No auth header — the
 // endpoint is loopback-only in standalone mode.
-func writeMCPConfig(port int) (string, func(), error) {
+func writeMCPConfig(port int, readOnly bool) (string, func(), error) {
+	// Read-only turns get the read-only MCP mount (no write tools exposed at all),
+	// so the agent can't discover or call a mutating tool — server-side enforcement
+	// on top of the CLI's own allowlist.
+	path := "/mcp"
+	if readOnly {
+		path = "/mcp-readonly"
+	}
 	cfg := map[string]any{"mcpServers": map[string]any{"radar": map[string]any{
-		"type": "http", "url": fmt.Sprintf("http://localhost:%d/mcp", port),
+		"type": "http", "url": fmt.Sprintf("http://localhost:%d%s", port, path),
 	}}}
 	b, err := json.Marshal(cfg)
 	if err != nil {
