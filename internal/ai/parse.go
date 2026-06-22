@@ -34,19 +34,9 @@ func diagnosisFromText(text string) Diagnosis {
 			}
 		}
 	}
-	if d.RootCause == "" {
-		d.RootCause = firstParagraph(text)
-	}
+	// Deliberately NOT fabricating a RootCause from free text: a reply with no
+	// structured root_cause (e.g. "the resource looks healthy", or a clarifying
+	// question) must not render under the alarming "ROOT CAUSE" anchor. The UI
+	// shows such replies as a neutral analysis (Report carries the full text).
 	return d
-}
-
-func firstParagraph(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.Index(s, "\n\n"); i > 0 {
-		s = s[:i]
-	}
-	if r := []rune(s); len(r) > 600 {
-		s = string(r[:600]) + "…"
-	}
-	return s
 }

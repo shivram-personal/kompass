@@ -675,6 +675,13 @@ function ResultCard({
   // Follow-ups are conversational replies, not fresh diagnoses — plain answer.
   if (followup) return <FollowupAnswer diagnosis={diagnosis} />;
 
+  // A turn with no structured root cause and no remediation (e.g. "looks healthy",
+  // or a clarifying question) is not a diagnosis — render it neutrally rather than
+  // forcing the alarming root-cause anchor onto a non-problem.
+  const structured =
+    !!diagnosis.rootCause || (diagnosis.remediation?.length ?? 0) > 0;
+  if (!structured) return <FollowupAnswer diagnosis={diagnosis} />;
+
   return <DiagnosisResult diagnosis={diagnosis} onApply={onApply} />;
 }
 
@@ -688,18 +695,18 @@ function DiagnosisResult({
   onApply?: (fix: string) => void;
 }) {
   const [showAnalysis, setShowAnalysis] = useState(false);
-  const rootCause = diagnosis.rootCause || diagnosis.report;
+  // Only a real structured root cause anchors the amber card; the full prose lives
+  // in "Full analysis" (never relabel the report as a root cause).
+  const rootCause = diagnosis.rootCause;
   const remediation = diagnosis.remediation || [];
   const hasRemediation = remediation.length > 0;
-  // The recommended step is a pointer into the list (1-based) — used to highlight
-  // the suggested default. Any step can be applied, though, so the pointer only
-  // drives emphasis, not whether Apply is offered.
   const recIdx = diagnosis.recommendedIndex;
   const recValid =
     recIdx != null && recIdx >= 1 && recIdx <= remediation.length;
-  // The host decides whether this turn is applyable (latest result, right cluster,
-  // etc.); when it is, every step gets an Apply affordance.
-  const canApply = !!onApply;
+  // Apply is offered ONLY when the agent pointed at a safe step (recommended_index).
+  // When it returns 0 / none ("needs human judgement"), we honor that and don't
+  // offer one-click apply — the steps stay copy-only with a note.
+  const canApply = !!onApply && recValid;
   return (
     <div className="mt-3 space-y-2">
       {/* Root cause — the anchor: distinct tone + heavier type so it pops. */}
@@ -791,6 +798,14 @@ function DiagnosisResult({
               );
             })}
           </ol>
+          {!recValid && (
+            <p className="mt-2 flex items-start gap-1.5 text-[11px] leading-snug text-theme-text-tertiary">
+              <ShieldCheck className="mt-0.5 h-3 w-3 shrink-0" />
+              No safe one-click fix — the agent flagged this as needing your
+              judgement. Review the steps, or resume in your agent to apply them
+              interactively.
+            </p>
+          )}
         </div>
       )}
 

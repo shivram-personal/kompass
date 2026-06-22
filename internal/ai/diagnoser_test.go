@@ -57,10 +57,15 @@ func TestApplyPrompt_BindsConfirmedFix(t *testing.T) {
 	}
 }
 
-func TestDiagnosisFromText_FallsBackToText(t *testing.T) {
-	d := diagnosisFromText("The deployment is unschedulable due to insufficient CPU.")
-	if d.RootCause == "" || d.Report == "" {
-		t.Fatalf("expected text fallback, got root=%q report=%q", d.RootCause, d.Report)
+func TestDiagnosisFromText_FreeTextIsReportNotRootCause(t *testing.T) {
+	// A reply with no fenced JSON carries the prose in Report and leaves RootCause
+	// empty — so the UI renders it neutrally, not under the "ROOT CAUSE" anchor.
+	d := diagnosisFromText("The deployment looks healthy; nothing is wrong.")
+	if d.Report == "" {
+		t.Fatalf("expected free text in Report, got %q", d.Report)
+	}
+	if d.RootCause != "" {
+		t.Errorf("free text must not become a RootCause, got %q", d.RootCause)
 	}
 }
 
