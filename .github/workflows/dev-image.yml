@@ -45,26 +45,9 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Compute tags
-        id: tags
-        # Always publish the immutable :dev-<sha>. Only move the mutable :dev
-        # when this commit is still main's tip, so a slow CI run for an older
-        # commit finishing after a newer one can't roll :dev backwards.
-        run: |
-          SHA="$(git rev-parse --short HEAD)"
-          TAGS="${DOCKER_REPO}:dev-${SHA}"
-          git fetch --quiet origin main
-          if [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ]; then
-            TAGS="${TAGS}"$'\n'"${DOCKER_REPO}:dev"
-          else
-            echo "::notice::superseded by a newer commit on main - publishing :dev-${SHA} only, not moving :dev"
-          fi
-          {
-            echo "sha=${SHA}"
-            echo "tags<<EOF"
-            echo "${TAGS}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+      - name: Compute sha
+        id: sha
+        run: echo "value=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -82,7 +65,19 @@ jobs:
           platforms: linux/amd64
           push: true
           build-args: |
-            VERSION=dev-${{ steps.tags.outputs.sha }}
-          tags: ${{ steps.tags.outputs.tags }}
+            VERSION=dev-${{ steps.sha.outputs.value }}
+          tags: ${{ env.DOCKER_REPO }}:dev-${{ steps.sha.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Move :dev if this commit is still main's tip
+        # Re-checked AFTER the build (not before): a newer commit landing during
+        # the build must not be overwritten by this older run. Registry-side
+        # retag of the just-pushed immutable tag, so no rebuild.
+        run: |
+          git fetch --quiet origin main
+          if [ "$(git rev-parse HEAD)" = "$(git rev-parse FETCH_HEAD)" ]; then
+            docker buildx imagetools create -t "${DOCKER_REPO}:dev" "${DOCKER_REPO}:dev-${{ steps.sha.outputs.value }}"
+          else
+            echo "::notice::superseded by a newer commit on main - leaving :dev unchanged"
+          fi
