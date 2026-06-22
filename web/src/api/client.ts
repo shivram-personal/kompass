@@ -2311,11 +2311,15 @@ export function useDrainNode() {
 // Helm API hooks
 // ============================================================================
 
+function helmNamespaceParams(namespaces: string[] = []) {
+  return namespaces.length > 0 ? `?namespaces=${namespaces.join(',')}` : ''
+}
+
 // List all Helm releases
-export function useHelmReleases(namespace?: string) {
-  const params = namespace ? `?namespace=${namespace}` : ''
+export function useHelmReleases(namespaces: string[] = []) {
+  const params = helmNamespaceParams(namespaces)
   return useQuery<HelmRelease[]>({
-    queryKey: ['helm-releases', namespace],
+    queryKey: ['helm-releases', namespaces],
     queryFn: () => fetchJSON(`/helm/releases${params}`),
     staleTime: 30000, // 30 seconds
   })
@@ -2393,10 +2397,10 @@ export function useHelmUpgradeInfo(namespace: string, name: string, enabled = tr
 }
 
 // Batch check for upgrade availability (for list view)
-export function useHelmBatchUpgradeInfo(namespace?: string, enabled = true) {
-  const params = namespace ? `?namespace=${namespace}` : ''
+export function useHelmBatchUpgradeInfo(namespaces: string[] = [], enabled = true) {
+  const params = helmNamespaceParams(namespaces)
   return useQuery<BatchUpgradeInfo>({
-    queryKey: ['helm-batch-upgrade-info', namespace],
+    queryKey: ['helm-batch-upgrade-info', namespaces],
     queryFn: () => fetchJSON(`/helm/upgrade-check${params}`),
     enabled,
     staleTime: 30000, // 30 seconds - keep in sync with release list

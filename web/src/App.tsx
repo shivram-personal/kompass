@@ -1382,8 +1382,6 @@ function AppInner() {
         <div className="flex items-center gap-3 shrink-0">
           <NamespaceSwitcher
             ref={namespaceSwitcherRef}
-            disabled={mainView === 'helm'}
-            disabledTooltip="Helm view always shows all namespaces"
           />
 
 
@@ -1746,10 +1744,9 @@ function AppInner() {
           />
         )}
 
-        {/* Helm view - always show all namespaces since releases span multiple ns */}
         {mainView === 'helm' && (
           <HelmView
-            namespace=""
+            namespaces={namespaces}
             selectedRelease={selectedHelmRelease}
             onReleaseClick={(ns, name, storageNamespace) => {
               setSelectedHelmRelease({ namespace: ns, name, storageNamespace })

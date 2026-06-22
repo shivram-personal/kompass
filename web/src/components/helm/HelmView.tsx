@@ -15,23 +15,23 @@ import { InstallWizard } from './InstallWizard'
 type ViewTab = 'releases' | 'charts'
 
 interface HelmViewProps {
-  namespace: string
+  namespaces: string[]
   selectedRelease?: SelectedHelmRelease | null
   onReleaseClick?: (namespace: string, name: string, storageNamespace?: string) => void
 }
 
-export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmViewProps) {
+export function HelmView({ namespaces, selectedRelease, onReleaseClick }: HelmViewProps) {
   const [activeTab, setActiveTab] = useState<ViewTab>('releases')
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedChart, setSelectedChart] = useState<{ repo: string; chart: string; version: string; source: ChartSource } | null>(null)
 
-  const { data: releases, isLoading, error: releasesError, refetch: refetchReleases } = useHelmReleases(namespace || undefined)
+  const { data: releases, isLoading, error: releasesError, refetch: refetchReleases } = useHelmReleases(namespaces)
   const isForbidden = isForbiddenError(releasesError)
   const releasesErrorMessage = releasesError instanceof Error ? releasesError.message : 'Failed to load Helm releases'
 
   // Lazy load upgrade info after releases are loaded
   const { data: upgradeInfo, isLoading: upgradeLoading, error: upgradeError, refetch: refetchUpgradeInfo } = useHelmBatchUpgradeInfo(
-    namespace || undefined,
+    namespaces,
     Boolean(releases && releases.length > 0)
   )
   const upgradeErrorMessage = upgradeError instanceof Error ? upgradeError.message : 'Upgrade checks failed'
