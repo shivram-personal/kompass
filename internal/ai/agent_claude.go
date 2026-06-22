@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"io"
+	"os"
 	"os/exec"
 	"strconv"
 )
@@ -51,6 +52,13 @@ func (a *claudeAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func(
 
 	cmd := exec.CommandContext(ctx, a.bin, args...)
 	cmd.Env = scrubbedEnv()
+	// Run from the user's home dir so the session is stored under a stable,
+	// predictable project path: Claude Code's `--resume <id>` is cwd-scoped, and
+	// the "Open in Claude Code" hand-off resumes from a home-dir terminal. Claude's
+	// built-in tools are disabled (--tools ""), so cwd doesn't widen its access.
+	if home, err := os.UserHomeDir(); err == nil {
+		cmd.Dir = home
+	}
 	return cmd, cleanup, nil
 }
 

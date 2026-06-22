@@ -12,6 +12,9 @@ import {
   Minimize2,
   ChevronLeft,
   Settings2,
+  MoreVertical,
+  TerminalSquare,
+  Copy,
 } from "lucide-react";
 import { Tooltip } from "../ui/Tooltip";
 import {
@@ -22,6 +25,69 @@ import {
 import { InvestigationView } from "./InvestigationView";
 import { RecentList } from "./Home";
 import { ConsentCard } from "./parts";
+import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
+import { type RunSummary } from "../../api/diagnose";
+
+// InvestigationMenu is the secondary "hand off to your own agent" action. It opens
+// the user's full interactive CLI (their config + MCPs + approvals) in Radar's
+// local terminal, seeded with this investigation — the escape hatch from the
+// contained in-panel engine to the real agent.
+function InvestigationMenu({ run }: { run: RunSummary }) {
+  const [open, setOpen] = useState(false);
+  const label = launchAgentLabel(run);
+  const command = buildLaunchCommand(run, `${window.location.origin}/mcp`);
+  // No resumable session yet (or stale run) → nothing to hand off.
+  if (!command) return null;
+
+  return (
+    <div className="relative">
+      <Tooltip content="More" position="bottom">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="rounded-md p-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+          aria-label="More actions"
+          aria-haspopup="menu"
+          aria-expanded={open}
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+      </Tooltip>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 top-full z-20 mt-1 w-60 rounded-lg border border-theme-border bg-theme-surface py-1 shadow-theme-lg">
+            <button
+              onClick={() => {
+                openInTerminal(command, "Diagnose");
+                setOpen(false);
+              }}
+              className="flex w-full items-start gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
+            >
+              <TerminalSquare className="mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary" />
+              <span>
+                Resume in {label}
+                <span className="block text-[11px] text-theme-text-tertiary">
+                  Continues this exact session in your full {label} (write
+                  access — it asks before changes).
+                </span>
+              </span>
+            </button>
+            <button
+              onClick={() => {
+                void navigator.clipboard?.writeText(command);
+                setOpen(false);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-theme-text-primary hover:bg-theme-hover"
+            >
+              <Copy className="h-4 w-4 shrink-0 text-theme-text-tertiary" />
+              Copy command
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function DiagnoseSurface({
   width,
@@ -197,6 +263,7 @@ export function DiagnoseSurface({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          {activeRun && <InvestigationMenu run={activeRun} />}
           <Tooltip content={maximized ? "Restore" : "Expand"} position="bottom">
             <button
               onClick={() => setMaximized((v) => !v)}
