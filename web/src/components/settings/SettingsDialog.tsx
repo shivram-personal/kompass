@@ -481,7 +481,7 @@ function MCPSection({
               <code className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary truncate">
                 {mcpUrl}
               </code>
-              <Tooltip content="Copy MCP URL">
+              <Tooltip content="Copy MCP URL" wrapperClassName="shrink-0">
               <button
                 onClick={handleCopy}
                 className="shrink-0 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"

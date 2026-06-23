@@ -138,7 +138,7 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
         {command}
       </code>
       {onRunInTerminal && (
-        <Tooltip content="Run in terminal">
+        <Tooltip content="Run in terminal" wrapperClassName="shrink-0">
         <button
           onClick={() => onRunInTerminal(command)}
           className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
@@ -147,7 +147,7 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
         </button>
         </Tooltip>
       )}
-      <Tooltip content="Copy to clipboard">
+      <Tooltip content="Copy to clipboard" wrapperClassName="shrink-0">
       <button
         onClick={handleCopy}
         className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"

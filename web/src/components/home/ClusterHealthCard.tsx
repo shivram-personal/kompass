@@ -444,7 +444,7 @@ export function ClusterHealthCard({
         {/* Left column: Warning indicators (aligned with cluster info) */}
         <div className="flex flex-col justify-center gap-1 w-1/4 shrink-0 pr-4 border-r border-theme-border/50">
           {health.warningEvents > 0 && (
-            <Tooltip content="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)">
+            <Tooltip content="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)" wrapperClassName="w-fit">
             <button
               onClick={onWarningEventsClick}
               className="badge status-degraded w-fit gap-1.5 hover:opacity-80 transition-opacity"
@@ -455,7 +455,7 @@ export function ClusterHealthCard({
             </Tooltip>
           )}
           {issueCount > 0 && (
-            <Tooltip content="View grouped live operational issues">
+            <Tooltip content="View grouped live operational issues" wrapperClassName="w-fit">
             <button
               onClick={onIssuesClick}
               className={clsx('badge w-fit gap-1.5 hover:opacity-80 transition-opacity', hasCriticalIssues ? 'status-unhealthy' : 'status-degraded')}

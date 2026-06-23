@@ -409,7 +409,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
           <div className="flex items-center gap-2">
             <Package className="w-5 h-5 text-purple-400" />
             <h2 className="text-lg font-semibold text-theme-text-primary truncate">{release.name}</h2>
-            <Tooltip content="Copy name">
+            <Tooltip content="Copy name" wrapperClassName="shrink-0">
             <button
               onClick={() => copyToClipboard(release.name, 'name')}
               className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
@@ -420,14 +420,14 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
           </div>
           <p className="text-sm text-theme-text-tertiary">{release.namespace}</p>
           {releaseDetail?.managedByFluxHelmRelease && (
-            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Changes here would be reverted at the next reconcile.`}>
+            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Changes here would be reverted at the next reconcile.`} wrapperClassName="mt-1">
             <button
               type="button"
               onClick={() => {
                 const [ns, name] = releaseDetail.managedByFluxHelmRelease!.split('/')
                 navigate(`/gitops/detail/helmreleases/${encodeURIComponent(ns || '_')}/${encodeURIComponent(name)}`)
               }}
-              className="mt-1 inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
+              className="inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
             >
               <GitBranch className="w-3 h-3" />
               Managed by Flux · {releaseDetail.managedByFluxHelmRelease}

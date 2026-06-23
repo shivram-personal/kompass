@@ -385,11 +385,11 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
       )}
 
       {isDownloadable && (
-        <Tooltip content="Download file">
+        <Tooltip content="Download file" wrapperClassName="ml-1">
         <button
           onClick={handleDownload}
           disabled={downloading}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded ml-1 disabled:opacity-50 disabled:pointer-events-none"
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded disabled:opacity-50 disabled:pointer-events-none"
         >
           {downloading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />

@@ -62,13 +62,10 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
             <Tooltip
               key={i}
               content={`${new Date(r.timestamp * 1000).toLocaleString()} · ${r.label}${r.value > 1 ? ` ×${r.value}` : ''}`}
-            >
-            <div
-              className="absolute top-0 h-full w-px bg-amber-500/80"
-              style={{ left }}
+              wrapperClassName="absolute top-0 h-full w-px bg-amber-500/80"
+              wrapperStyle={{ left }}
             >
               <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-amber-500" />
-            </div>
             </Tooltip>
           )
         })}

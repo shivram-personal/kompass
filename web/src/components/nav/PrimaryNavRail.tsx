@@ -132,7 +132,7 @@ export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned,
           forced slim (showPinToggle=false) — expanding there isn't available. */}
       {showPinToggle && (
       <div className="px-2 pb-2 pt-1 border-t border-theme-border/50">
-        <Tooltip content={pinned ? 'Collapse navigation' : 'Expand navigation'} position="right" wrapperClassName="!block w-full">
+        <Tooltip content={pinned ? 'Collapse navigation' : 'Expand navigation'} position="right" wrapperClassName="!block w-full shrink-0">
         <button
           type="button"
           onClick={onTogglePinned}
@@ -158,7 +158,7 @@ function BrandRow({ pinned, onNavigate }: { pinned: boolean; onNavigate: (view: 
   // Clickable brand = secondary home affordance (logo→home convention). The
   // Home nav item below still carries the active state; the brand just navigates.
   return (
-    <Tooltip content="Home" position="right" wrapperClassName="!block w-full">
+    <Tooltip content="Home" position="right" wrapperClassName="!block w-full shrink-0">
     <button
       type="button"
       onClick={() => onNavigate('home')}

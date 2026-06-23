@@ -18,10 +18,10 @@ export function DebugOverlay() {
 
   if (!visible) {
     return (
-      <Tooltip content="Show debug stats">
+      <Tooltip content="Show debug stats" position="left" wrapperClassName="fixed bottom-3 right-3 z-50">
       <button
         onClick={() => setVisible(true)}
-        className="fixed bottom-3 right-3 z-50 p-2 bg-theme-surface/90 border border-theme-border rounded-lg text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+        className="p-2 bg-theme-surface/90 border border-theme-border rounded-lg text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
       >
         <Bug className="w-4 h-4" />
       </button>

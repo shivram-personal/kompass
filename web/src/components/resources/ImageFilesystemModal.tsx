@@ -367,10 +367,10 @@ function DownloadConfirmation({ metadata, onConfirm, onCancel }: DownloadConfirm
             <pre className="bg-theme-elevated rounded p-3 text-xs text-theme-text-primary overflow-x-auto font-mono">
               {authCommand}
             </pre>
-            <Tooltip content="Copy to clipboard" position="left">
+            <Tooltip content="Copy to clipboard" position="left" wrapperClassName="absolute top-2 right-2">
             <button
               onClick={handleCopy}
-              className="absolute top-2 right-2 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-base rounded transition-colors"
+              className="p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-base rounded transition-colors"
             >
               {copied ? (
                 <Check className="w-4 h-4 text-green-400" />
@@ -467,10 +467,10 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
             <pre className="bg-theme-elevated rounded p-3 text-xs text-theme-text-primary overflow-x-auto font-mono">
               {authCommand}
             </pre>
-            <Tooltip content="Copy to clipboard" position="left">
+            <Tooltip content="Copy to clipboard" position="left" wrapperClassName="absolute top-2 right-2">
             <button
               onClick={handleCopy}
-              className="absolute top-2 right-2 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-base rounded transition-colors"
+              className="p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-base rounded transition-colors"
             >
               {copied ? (
                 <Check className="w-4 h-4 text-green-400" />
@@ -716,11 +716,11 @@ function FileTreeNode({ node, depth, defaultExpanded = true, image, namespace, p
         )}
 
         {isFile && (
-          <Tooltip content="Download file">
+          <Tooltip content="Download file" wrapperClassName="ml-1">
           <button
             onClick={handleDownload}
             disabled={downloading}
-            className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded ml-1 disabled:opacity-50 disabled:pointer-events-none"
+            className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded disabled:opacity-50 disabled:pointer-events-none"
           >
             {downloading ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />

@@ -88,7 +88,7 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
             <span className="text-xs font-medium text-theme-text-secondary">
               {data.errorCode === 'unconfigured' ? 'Helm not configured' : 'Helm unavailable'}
             </span>
-            <Tooltip content={data.error} wrapperClassName="mt-1 min-w-0">
+            <Tooltip content={data.error} wrapperClassName="!block mt-1 min-w-0 text-center">
             <span className="text-[11px] text-center px-2 truncate max-w-full">
               {data.errorCode === 'unconfigured'
                 ? 'Set rbac.helm=true in the Radar Helm chart values.'
