@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { useAvailablePorts, useClusterInfo, AvailablePort } from '../../api/client'
 import { useStartPortForward } from './PortForwardManager'
 import { validatePort } from '@skyhook-io/k8s-ui/utils/validators'
+import { Tooltip } from '../ui/Tooltip'
 
 interface PortForwardButtonProps {
   type: 'pod' | 'service'
@@ -206,31 +207,32 @@ export function PortForwardButton({
     // If no ports available, show disabled button
     if (!isLoading && ports.length === 0) {
       return (
+        <Tooltip content="No ports available">
         <button
           disabled
           className={clsx(
-            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg opacity-50 cursor-not-allowed',
+            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg opacity-50 cursor-not-allowed disabled:pointer-events-none',
             className
           )}
-          title="No ports available"
         >
           <Plug className="w-4 h-4" />
           No Ports
         </button>
+        </Tooltip>
       )
     }
 
     // If only one port, forward directly on click (most common case)
     if (ports.length === 1) {
       return (
+        <Tooltip content={`Port forward to ${ports[0].port}`}>
         <button
           onClick={() => handlePortSelect(ports[0])}
           disabled={isPending}
           className={clsx(
-            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg hover:bg-theme-hover transition-colors disabled:opacity-50',
+            'flex items-center gap-2 px-3 py-2 bg-theme-elevated text-theme-text-primary text-sm rounded-lg hover:bg-theme-hover transition-colors disabled:opacity-50 disabled:pointer-events-none',
             className
           )}
-          title={`Port forward to ${ports[0].port}`}
         >
           {isPending ? (
             <Loader2 className="w-4 h-4 animate-spin" />
@@ -239,6 +241,7 @@ export function PortForwardButton({
           )}
           Forward :{ports[0].port}
         </button>
+        </Tooltip>
       )
     }
 
@@ -269,6 +272,7 @@ export function PortForwardButton({
               <div className="px-3 py-2 border-b border-theme-border">
                 <div className="text-xs text-theme-text-disabled mb-2">Listen on</div>
                 <div className="flex gap-1">
+                  <Tooltip content="Only accessible from this machine" wrapperClassName="flex-1">
                   <button
                     onClick={(e) => { e.stopPropagation(); setListenAddress('127.0.0.1') }}
                     className={clsx(
@@ -277,11 +281,12 @@ export function PortForwardButton({
                         ? 'btn-brand-toggle'
                         : 'bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-primary'
                     )}
-                    title="Only accessible from this machine"
                   >
                     <Monitor className="w-3 h-3" />
                     localhost
                   </button>
+                  </Tooltip>
+                  <Tooltip content="Accessible from other machines on the network" wrapperClassName="flex-1">
                   <button
                     onClick={(e) => { e.stopPropagation(); setListenAddress('0.0.0.0') }}
                     className={clsx(
@@ -290,11 +295,11 @@ export function PortForwardButton({
                         ? 'bg-amber-600 text-white'
                         : 'bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-primary'
                     )}
-                    title="Accessible from other machines on the network"
                   >
                     <Globe className="w-3 h-3" />
                     all interfaces
                   </button>
+                  </Tooltip>
                 </div>
               </div>
             )}
@@ -375,11 +380,11 @@ export function PortForwardInlineButton({
 
   return (
     <>
+      <Tooltip content={`Port forward ${port}`}>
       <button
         onClick={handleClick}
         disabled={disabled || isPending}
-        className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-theme-elevated hover:bg-accent-muted rounded text-xs transition-colors disabled:opacity-50 disabled:hover:bg-theme-elevated"
-        title={`Port forward ${port}`}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-theme-elevated hover:bg-accent-muted rounded text-xs transition-colors disabled:opacity-50 disabled:hover:bg-theme-elevated disabled:pointer-events-none"
       >
         {port}/{protocol}
         {isPending ? (
@@ -388,6 +393,7 @@ export function PortForwardInlineButton({
           <Plug className="w-3 h-3" />
         )}
       </button>
+      </Tooltip>
       {dialogInfo && (
         <KubectlCommandDialog info={dialogInfo} onClose={() => setDialogInfo(null)} />
       )}

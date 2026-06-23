@@ -7,6 +7,7 @@ import { useImageMetadata, ApiError } from '../../api/client'
 import type { FileNode, ImageFilesystem } from '../../types'
 import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
+import { Tooltip } from '../ui/Tooltip'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 // Manual fetch function for filesystem (not a hook - gives us full control)
@@ -141,9 +142,11 @@ export function ImageFilesystemModal({
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
           <div className="flex-1 min-w-0">
             <h3 className="text-lg font-semibold text-theme-text-primary">Image Filesystem</h3>
-            <p className="text-sm text-theme-text-secondary truncate mt-0.5" title={image}>
+            <Tooltip content={image} wrapperClassName="!block w-full">
+            <p className="text-sm text-theme-text-secondary truncate mt-0.5">
               {image}
             </p>
+            </Tooltip>
             {(displayFilesystem?.platform || metadata?.platform) && (
               <p className="text-xs text-theme-text-tertiary mt-1">
                 Platform: {displayFilesystem?.platform || metadata?.platform}
@@ -245,9 +248,11 @@ export function ImageFilesystemModal({
               <span>{formatBytes(displayFilesystem.totalSize)}</span>
               {displayFilesystem.layers && <span>{displayFilesystem.layers.length} layers</span>}
               {displayFilesystem.digest && (
-                <span className="truncate" title={displayFilesystem.digest}>
+                <Tooltip content={displayFilesystem.digest} wrapperClassName="min-w-0">
+                <span className="truncate">
                   Digest: {displayFilesystem.digest.substring(0, 20)}...
                 </span>
+                </Tooltip>
               )}
             </>
           )}
@@ -362,10 +367,10 @@ function DownloadConfirmation({ metadata, onConfirm, onCancel }: DownloadConfirm
             <pre className="bg-theme-elevated rounded p-3 text-xs text-theme-text-primary overflow-x-auto font-mono">
               {authCommand}
             </pre>
+            <Tooltip content="Copy to clipboard" position="left">
             <button
               onClick={handleCopy}
               className="absolute top-2 right-2 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-base rounded transition-colors"
-              title="Copy to clipboard"
             >
               {copied ? (
                 <Check className="w-4 h-4 text-green-400" />
@@ -373,6 +378,7 @@ function DownloadConfirmation({ metadata, onConfirm, onCancel }: DownloadConfirm
                 <Copy className="w-4 h-4" />
               )}
             </button>
+            </Tooltip>
           </div>
         </div>
       )}
@@ -461,10 +467,10 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
             <pre className="bg-theme-elevated rounded p-3 text-xs text-theme-text-primary overflow-x-auto font-mono">
               {authCommand}
             </pre>
+            <Tooltip content="Copy to clipboard" position="left">
             <button
               onClick={handleCopy}
               className="absolute top-2 right-2 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-base rounded transition-colors"
-              title="Copy to clipboard"
             >
               {copied ? (
                 <Check className="w-4 h-4 text-green-400" />
@@ -472,6 +478,7 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
                 <Copy className="w-4 h-4" />
               )}
             </button>
+            </Tooltip>
           </div>
         </div>
       )}
@@ -709,11 +716,11 @@ function FileTreeNode({ node, depth, defaultExpanded = true, image, namespace, p
         )}
 
         {isFile && (
+          <Tooltip content="Download file">
           <button
             onClick={handleDownload}
             disabled={downloading}
-            className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded ml-1 disabled:opacity-50"
-            title="Download file"
+            className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded ml-1 disabled:opacity-50 disabled:pointer-events-none"
           >
             {downloading ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -721,6 +728,7 @@ function FileTreeNode({ node, depth, defaultExpanded = true, image, namespace, p
               <Download className="w-3.5 h-3.5" />
             )}
           </button>
+          </Tooltip>
         )}
       </div>
 

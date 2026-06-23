@@ -10,6 +10,7 @@ import { clsx } from 'clsx'
 import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmUpgradeInfo, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
 import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
 import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -334,63 +335,72 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 checking...
               </span>
             ) : upgradeError ? (
+              <Tooltip content={upgradeErrorMessage ?? ''}>
               <span
                 className="badge bg-theme-hover/50 text-theme-text-secondary"
-                title={upgradeErrorMessage}
               >
                 upgrade check failed
               </span>
+              </Tooltip>
             ) : upgradeInfo?.updateAvailable ? (
+              <Tooltip content={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}` : helmActReason}>
               <button
                 onClick={() => setShowUpgradeConfirm(true)}
                 disabled={!canHelmWrite}
                 className={clsx(
-                  'badge transition-colors', SEVERITY_BADGE.warning,
+                  'badge transition-colors disabled:pointer-events-none', SEVERITY_BADGE.warning,
                   canHelmWrite ? 'hover:bg-amber-500/30 cursor-pointer' : 'opacity-50 cursor-not-allowed'
                 )}
-                title={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}` : helmActReason}
               >
                 <ArrowUpCircle className="w-3 h-3" />
                 {upgradeInfo.latestVersion}
               </button>
+              </Tooltip>
             ) : upgradeInfo && !upgradeInfo.error ? (
-              <span className={clsx('badge', SEVERITY_BADGE.success)} title="Chart is up to date">
+              <Tooltip content="Chart is up to date">
+              <span className={clsx('badge', SEVERITY_BADGE.success)}>
                 latest
               </span>
+              </Tooltip>
             ) : upgradeInfo?.error ? (
+              <Tooltip content={upgradeInfo.error}>
               <span
                 className="badge bg-theme-hover/50 text-theme-text-secondary"
-                title={upgradeInfo.error}
               >
                 upstream unknown
               </span>
+              </Tooltip>
             ) : null}
           </div>
           <div className="flex items-center gap-1">
+            <Tooltip content="Refresh">
             <button
               onClick={refetch}
               disabled={isRefreshAnimating}
-              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
-              title="Refresh"
+              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50 disabled:pointer-events-none"
             >
               <RefreshCw className={clsx('w-4 h-4', isRefreshAnimating && 'animate-spin')} />
             </button>
+            </Tooltip>
+            <Tooltip content={canHelmWrite ? 'Uninstall release' : helmActReason}>
             <button
               onClick={() => setShowUninstallConfirm(true)}
               disabled={!canHelmWrite}
               className={clsx(
-                'p-1.5 rounded',
+                'p-1.5 rounded disabled:pointer-events-none',
                 canHelmWrite
                   ? 'text-theme-text-secondary hover:text-red-400 hover:bg-red-500/10'
                   : 'text-theme-text-disabled cursor-not-allowed'
               )}
-              title={canHelmWrite ? 'Uninstall release' : helmActReason}
             >
               <Trash2 className="w-4 h-4" />
             </button>
-            <button onClick={onClose} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded" title="Close (Esc)">
+            </Tooltip>
+            <Tooltip content="Close (Esc)">
+            <button onClick={onClose} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded">
               <X className="w-4 h-4" />
             </button>
+            </Tooltip>
           </div>
         </div>
 
@@ -399,16 +409,18 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
           <div className="flex items-center gap-2">
             <Package className="w-5 h-5 text-purple-400" />
             <h2 className="text-lg font-semibold text-theme-text-primary truncate">{release.name}</h2>
+            <Tooltip content="Copy name">
             <button
               onClick={() => copyToClipboard(release.name, 'name')}
               className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-              title="Copy name"
             >
               {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
+            </Tooltip>
           </div>
           <p className="text-sm text-theme-text-tertiary">{release.namespace}</p>
           {releaseDetail?.managedByFluxHelmRelease && (
+            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Changes here would be reverted at the next reconcile.`}>
             <button
               type="button"
               onClick={() => {
@@ -416,11 +428,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 navigate(`/gitops/detail/helmreleases/${encodeURIComponent(ns || '_')}/${encodeURIComponent(name)}`)
               }}
               className="mt-1 inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
-              title={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Changes here would be reverted at the next reconcile.`}
             >
               <GitBranch className="w-3 h-3" />
               Managed by Flux · {releaseDetail.managedByFluxHelmRelease}
             </button>
+            </Tooltip>
           )}
         </div>
 

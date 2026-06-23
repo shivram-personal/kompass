@@ -411,11 +411,11 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   Cancel
                 </button>
                 {step === 'review' ? (
+                  <Tooltip content={!canHelmWrite ? helmActReason : ''}>
                   <button
                     onClick={handleInstall}
                     disabled={!canInstall || isInstalling || !canHelmWrite}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium btn-brand rounded-lg disabled:cursor-not-allowed"
-                    title={!canHelmWrite ? helmActReason : undefined}
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium btn-brand rounded-lg disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
                     {isInstalling ? (
                       <Loader2 className="w-4 h-4 animate-spin" />
@@ -424,6 +424,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                     )}
                     Install
                   </button>
+                  </Tooltip>
                 ) : (
                   <button
                     onClick={() => setStep(step === 'info' ? 'values' : 'review')}

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { User, LogOut } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAuthMe } from '../api/client'
+import { Tooltip } from './ui/Tooltip'
 import { useQueryClient } from '@tanstack/react-query'
 
 interface UserMenuProps {
@@ -67,9 +68,9 @@ export function UserMenu({ variant = 'topbar', pinned = true }: UserMenuProps = 
   return (
     <div ref={menuRef} className={clsx('relative', isRail && 'group/item', isRail && !pinned && 'w-10')}>
       {isRail ? (
+        <Tooltip content={authMe.username} position="right" wrapperClassName="!block w-full">
         <button
           onClick={() => setIsOpen(!isOpen)}
-          title={authMe.username}
           className={clsx(
             'relative flex h-9 w-full items-center rounded-md text-sm font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors',
             !pinned && 'max-w-10 overflow-hidden',
@@ -78,14 +79,16 @@ export function UserMenu({ variant = 'topbar', pinned = true }: UserMenuProps = 
           <span className="flex w-10 shrink-0 items-center justify-center">{avatar}</span>
           <span className={clsx('pr-3 truncate', !pinned && 'opacity-0')}>{authMe.username.split('@')[0]}</span>
         </button>
+        </Tooltip>
       ) : (
+        <Tooltip content={authMe.username}>
         <button
           onClick={() => setIsOpen(!isOpen)}
           className="w-7 h-7 rounded-full bg-blue-500/15 text-blue-500 flex items-center justify-center text-xs font-medium hover:bg-blue-500/25 transition-colors"
-          title={authMe.username}
         >
           {initials || <User className="w-3.5 h-3.5" />}
         </button>
+        </Tooltip>
       )}
 
       {/* Slim-rail fly-out label (account row, collapsed) */}

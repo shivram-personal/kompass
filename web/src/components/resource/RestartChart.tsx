@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { usePrometheusResourceMetrics, usePrometheusStatus, type PrometheusSeries, type PrometheusTimeRange } from '../../api/client'
+import { Tooltip } from '../ui/Tooltip'
 
 /**
  * RestartEventLane — vertical markers at each restart event, on a dedicated
@@ -58,14 +59,17 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
         {restarts.map((r, i) => {
           const left = `${Math.max(0, Math.min(100, ((r.timestamp - windowStart) / span) * 100))}%`
           return (
-            <div
+            <Tooltip
               key={i}
+              content={`${new Date(r.timestamp * 1000).toLocaleString()} · ${r.label}${r.value > 1 ? ` ×${r.value}` : ''}`}
+            >
+            <div
               className="absolute top-0 h-full w-px bg-amber-500/80"
               style={{ left }}
-              title={`${new Date(r.timestamp * 1000).toLocaleString()} · ${r.label}${r.value > 1 ? ` ×${r.value}` : ''}`}
             >
               <div className="absolute -top-0.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-amber-500" />
             </div>
+            </Tooltip>
           )
         })}
       </div>

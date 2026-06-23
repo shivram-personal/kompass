@@ -1,6 +1,7 @@
 import { ArrowRight, Check, Info, AlertTriangle } from 'lucide-react'
 import { SEVERITY_TEXT, SEVERITY_BADGE, type Severity } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { usePrometheusRightsizing, usePrometheusStatus, type RightsizingTone, type RightsizingRow } from '../../api/client'
+import { Tooltip } from '../ui/Tooltip'
 
 const RIGHTSIZING_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
 
@@ -38,7 +39,9 @@ export function RightsizingStrip({ kind, namespace, name }: {
         <header className="flex items-center justify-between mb-1">
           <h3 className="text-sm font-medium text-theme-text-primary">Right-sizing</h3>
         </header>
-        <p className="text-xs text-theme-text-tertiary" title={msg}>Right-sizing unavailable — Prometheus query failed.</p>
+        <Tooltip content={msg}>
+        <p className="text-xs text-theme-text-tertiary">Right-sizing unavailable — Prometheus query failed.</p>
+        </Tooltip>
       </section>
     )
   }

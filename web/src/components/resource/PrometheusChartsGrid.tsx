@@ -26,6 +26,7 @@ import {
   type CategoryDef,
 } from './PrometheusCharts'
 import { RestartEventLane } from './RestartChart'
+import { Tooltip } from '../ui/Tooltip'
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -288,7 +289,11 @@ function WorkloadHealthBadge({ kind, namespace, name }: { kind: string; namespac
   // silently render as fine while we have no signal to display.
   if (error && !data) {
     const msg = error instanceof Error ? error.message : String(error)
-    return <span className={`badge badge-sm ${SEVERITY_BADGE.neutral}`} title={`Health check failed: ${msg}`}>Health unknown</span>
+    return (
+      <Tooltip content={`Health check failed: ${msg}`}>
+      <span className={`badge badge-sm ${SEVERITY_BADGE.neutral}`}>Health unknown</span>
+      </Tooltip>
+    )
   }
   if (!data?.sampleAvailable || data.rows.length === 0) return null
 
@@ -320,7 +325,9 @@ function PanelError({ message }: { message: string }) {
   return (
     <div className={`flex flex-col items-center justify-center h-full min-h-[160px] ${SEVERITY_TEXT.warning} text-xs px-3 text-center`}>
       Query failed
-      <span className="text-theme-text-quaternary mt-0.5 line-clamp-2" title={message}>{message}</span>
+      <Tooltip content={message} wrapperClassName="!block w-full">
+      <span className="text-theme-text-quaternary mt-0.5 line-clamp-2">{message}</span>
+      </Tooltip>
     </div>
   )
 }

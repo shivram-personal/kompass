@@ -8,6 +8,7 @@ import { pluralize } from '@skyhook-io/k8s-ui'
 import { useFlowSearch } from './TrafficFlowListContext'
 import { useQuery } from '@tanstack/react-query'
 import { fetchJSON } from '../../api/client'
+import { Tooltip } from '../ui/Tooltip'
 
 // DNS response code names
 const DNS_RCODES: Record<number, string> = {
@@ -174,28 +175,36 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
                   <span className="text-theme-text-tertiary tabular-nums whitespace-nowrap">{time}</span>
 
                   {/* Source */}
-                  <span className="truncate text-theme-text-primary" title={flow.source.namespace ? `${flow.source.namespace}/${flow.source.name}` : flow.source.name}>
+                  <Tooltip content={flow.source.namespace ? `${flow.source.namespace}/${flow.source.name}` : flow.source.name} wrapperClassName="min-w-0">
+                  <span className="truncate text-theme-text-primary">
                     {flow.source.name}
                   </span>
+                  </Tooltip>
 
                   {/* Destination */}
-                  <span className="truncate text-theme-text-primary" title={flow.destination.namespace ? `${flow.destination.namespace}/${flow.destination.name}` : flow.destination.name}>
+                  <Tooltip content={flow.destination.namespace ? `${flow.destination.namespace}/${flow.destination.name}` : flow.destination.name} wrapperClassName="min-w-0">
+                  <span className="truncate text-theme-text-primary">
                     {flow.destination.name}
                   </span>
+                  </Tooltip>
 
                   {/* Request info */}
                   <div className="flex items-center gap-1.5 min-w-0">
                     {isHTTP && (
                       <>
                         <span className={clsx('shrink-0 badge badge-sm text-[10px]', SEVERITY_BADGE.info)}>{flow.httpMethod}</span>
-                        <span className="truncate text-theme-text-secondary" title={flow.httpPath}>{flow.httpPath}</span>
+                        <Tooltip content={flow.httpPath ?? ''} wrapperClassName="min-w-0">
+                        <span className="truncate text-theme-text-secondary">{flow.httpPath}</span>
+                        </Tooltip>
                         {flow.l7Type === 'REQUEST' && <span className={clsx('shrink-0 text-[9px]', SEVERITY_TEXT.warning)}>no response</span>}
                       </>
                     )}
                     {isDNS && (
                       <>
                         <span className={clsx('shrink-0 badge badge-sm text-[10px]', SEVERITY_BADGE.neutral)}>DNS</span>
-                        <span className="truncate text-theme-text-secondary" title={flow.dnsQuery}>{flow.dnsQuery}</span>
+                        <Tooltip content={flow.dnsQuery ?? ''} wrapperClassName="min-w-0">
+                        <span className="truncate text-theme-text-secondary">{flow.dnsQuery}</span>
+                        </Tooltip>
                       </>
                     )}
                     {!isHTTP && !isDNS && (

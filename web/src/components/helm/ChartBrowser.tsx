@@ -316,15 +316,16 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                 ) : (
                   <div className="text-sm mt-1 flex flex-col items-center gap-2">
                     <p>Your repositories may be out of date.</p>
+                    <Tooltip content={canHelmWrite ? 'Run helm repo update on every configured repository' : helmWriteReason}>
                     <button
                       onClick={handleUpdateAllRepos}
                       disabled={isBatchUpdating || !canHelmWrite}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs btn-brand rounded disabled:opacity-50"
-                      title={canHelmWrite ? 'Run helm repo update on every configured repository' : helmWriteReason}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs btn-brand rounded disabled:opacity-50 disabled:pointer-events-none"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 ${isBatchUpdating ? 'animate-spin' : ''}`} />
                       {isBatchUpdating ? 'Updating…' : 'Update all repositories'}
                     </button>
+                    </Tooltip>
                     <button
                       onClick={() => setChartSource('artifacthub')}
                       className="text-xs text-blue-400 hover:underline"
@@ -436,14 +437,15 @@ function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, ca
           </span>
         )}
       </button>
+      <Tooltip content={canUpdate ? "Update repository" : (cantUpdateReason ?? "Helm write permissions required")}>
       <button
         onClick={(e) => { e.stopPropagation(); onUpdate() }}
         disabled={isUpdating || !canUpdate}
-        className="p-1 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
-        title={canUpdate ? "Update repository" : (cantUpdateReason ?? "Helm write permissions required")}
+        className="p-1 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50 disabled:pointer-events-none"
       >
         <RefreshCw className={clsx('w-3.5 h-3.5', isUpdating && 'animate-spin')} />
       </button>
+      </Tooltip>
     </div>
   )
 }

@@ -219,24 +219,24 @@ export function ClusterHealthCard({
                 its top bar; rendering it again here is redundant and
                 makes the card feel like a label rather than content. */}
             {!isCloud && (
-              <h2
-                className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
-                // In-cluster mode's cluster.name is the literal "in-cluster"
-                // sentinel, which would leak via the browser hover tooltip
-                // even though the visible text falls back to the platform
-                // label. Drop the title attribute entirely in that case;
-                // local mode keeps it so users can hover to see the full
-                // kubeconfig context path.
-                title={isInCluster ? undefined : cluster.name}
-              >
+              // In-cluster mode's cluster.name is the literal "in-cluster"
+              // sentinel, which would leak via the hover tooltip even though
+              // the visible text falls back to the platform label. Render no
+              // tooltip in that case; local mode keeps it so users can hover
+              // to see the full kubeconfig context path.
+              <Tooltip content={isInCluster ? '' : cluster.name} wrapperClassName="!block min-w-0 mb-1.5">
+              <h2 className="text-xl font-semibold text-theme-text-primary truncate leading-tight">
                 {headlineName}
               </h2>
+              </Tooltip>
             )}
             <div className="flex flex-col gap-0.5 text-xs text-theme-text-tertiary">
               {(parsedContext.account || parsedContext.region) && (
-                <span className="truncate font-mono" title={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}>
+                <Tooltip content={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')} wrapperClassName="min-w-0">
+                <span className="truncate font-mono">
                   {[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}
                 </span>
+                </Tooltip>
               )}
               {cluster.version && (
                 <span>Kubernetes {cluster.version}</span>
@@ -247,12 +247,11 @@ export function ClusterHealthCard({
                   (in-cluster has no meaningful context name, cloud
                   shell already renders the canonical name). */}
               {cluster.name && cluster.name !== headlineName && deployment.mode === 'local' && (
-                <span
-                  className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5"
-                  title={cluster.name}
-                >
+                <Tooltip content={cluster.name}>
+                <span className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5">
                   {cluster.name}
                 </span>
+                </Tooltip>
               )}
             </div>
             {nodeVersionSkew && (
@@ -290,9 +289,11 @@ export function ClusterHealthCard({
                 <Radio className="w-3.5 h-3.5 text-purple-400 animate-pulse shrink-0" />
                 <div className="flex flex-col gap-0.5 min-w-0 flex-1 text-left">
                   <span className="text-xs font-medium text-purple-400">MCP Server Live</span>
-                  <span className="text-[10px] text-theme-text-tertiary truncate font-mono" title={mcpUrl}>
+                  <Tooltip content={mcpUrl} wrapperClassName="min-w-0">
+                  <span className="text-[10px] text-theme-text-tertiary truncate font-mono">
                     HTTP · {mcpUrl}
                   </span>
+                  </Tooltip>
                 </div>
                 <Info className="w-3.5 h-3.5 text-purple-400/60 shrink-0" />
               </button>
@@ -443,24 +444,26 @@ export function ClusterHealthCard({
         {/* Left column: Warning indicators (aligned with cluster info) */}
         <div className="flex flex-col justify-center gap-1 w-1/4 shrink-0 pr-4 border-r border-theme-border/50">
           {health.warningEvents > 0 && (
+            <Tooltip content="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)">
             <button
               onClick={onWarningEventsClick}
-              title="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)"
               className="badge status-degraded w-fit gap-1.5 hover:opacity-80 transition-opacity"
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               <span><span className="font-mono">{health.warningEvents}</span> Warning Events</span>
             </button>
+            </Tooltip>
           )}
           {issueCount > 0 && (
+            <Tooltip content="View grouped live operational issues">
             <button
               onClick={onIssuesClick}
-              title="View grouped live operational issues"
               className={clsx('badge w-fit gap-1.5 hover:opacity-80 transition-opacity', hasCriticalIssues ? 'status-unhealthy' : 'status-degraded')}
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
               <span>{pluralize(issueCount, 'Active Issue')}</span>
             </button>
+            </Tooltip>
           )}
         </div>
 

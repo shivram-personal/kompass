@@ -4,6 +4,7 @@ import type { OpenCostNamespaceCost, OpenCostWorkloadCost, OpenCostNodeCost } fr
 import { ArrowLeft, ChevronDown, ChevronRight, DollarSign, HelpCircle, Loader2, Server, X } from 'lucide-react'
 import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { CostTrendChart } from './CostTrendChart'
+import { Tooltip } from '../ui/Tooltip'
 
 interface CostViewProps {
   onBack: () => void
@@ -177,8 +178,12 @@ export function CostView({ onBack }: CostViewProps) {
           <div className="grid grid-cols-[minmax(180px,1fr)_90px_90px_80px_minmax(160px,1fr)_120px] gap-2 px-4 py-2 border-b border-theme-border text-[11px] font-medium text-theme-text-tertiary uppercase tracking-wider">
             <span>Namespace</span>
             <span className="text-right">Hourly</span>
-            <span className="text-right cursor-help" title="Projected from current hourly rate — not historical spend">Monthly*</span>
-            <span className="text-right cursor-help" title="% of reserved resources actually being used, weighted by cost">Efficiency</span>
+            <Tooltip content="Projected from current hourly rate — not historical spend" wrapperClassName="!block text-right">
+            <span className="cursor-help">Monthly*</span>
+            </Tooltip>
+            <Tooltip content="% of reserved resources actually being used, weighted by cost" wrapperClassName="!block text-right">
+            <span className="cursor-help">Efficiency</span>
+            </Tooltip>
             <span>CPU / Memory</span>
             <span className="text-right">Cost Split</span>
           </div>
@@ -368,7 +373,9 @@ function NodeCostTable({ nodes }: { nodes: OpenCostNodeCost[] }) {
         <span>Node</span>
         <span>Instance Type</span>
         <span className="text-right">Hourly</span>
-        <span className="text-right cursor-help" title="Projected from current hourly rate — not historical spend">Monthly*</span>
+        <Tooltip content="Projected from current hourly rate — not historical spend" wrapperClassName="!block text-right">
+        <span className="cursor-help">Monthly*</span>
+        </Tooltip>
         <span className="text-right">CPU / Memory</span>
       </div>
 
@@ -387,9 +394,11 @@ function NodeCostRow({ node }: { node: OpenCostNodeCost }) {
 
   return (
     <div className="grid grid-cols-[minmax(200px,1fr)_minmax(120px,1fr)_90px_100px_140px] gap-2 px-4 py-2.5">
-      <span className="text-sm text-theme-text-primary truncate font-medium" title={node.name}>
+      <Tooltip content={node.name} wrapperClassName="!block min-w-0">
+      <span className="text-sm text-theme-text-primary truncate font-medium block">
         {node.name}
       </span>
+      </Tooltip>
       <span className="text-xs text-theme-text-secondary truncate">
         {node.instanceType || '-'}
         {node.region && <span className="text-theme-text-quaternary ml-1.5">({node.region})</span>}

@@ -22,6 +22,7 @@ import { X, ArrowRight, Globe, Server, Activity, Puzzle } from 'lucide-react'
 import { isClusterAddon, type AddonMode } from './TrafficView'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { getNamespaceColor } from '../../utils/traffic-colors'
+import { Tooltip } from '../ui/Tooltip'
 
 const elk = new ELK()
 
@@ -845,7 +846,9 @@ function DetailsPanel({
                     {edgeData.flow.topHTTPPaths.map((p, i) => (
                       <div key={i} className="flex items-center gap-1.5 text-[10px]">
                         <span className={clsx('shrink-0 px-1 py-0.5 rounded badge font-medium', SEVERITY_BADGE.info)}>{p.method}</span>
-                        <span className="text-theme-text-primary truncate flex-1" title={p.path}>{p.path || '/'}</span>
+                        <Tooltip content={p.path} wrapperClassName="min-w-0 flex-1">
+                        <span className="text-theme-text-primary truncate flex-1">{p.path || '/'}</span>
+                        </Tooltip>
                         <span className="shrink-0 text-theme-text-secondary">{p.count}</span>
                         {p.avgMs ? <span className="shrink-0 text-theme-text-tertiary">{formatLatency(p.avgMs)}</span> : null}
                         {p.errorPct ? <span className={clsx('shrink-0', p.errorPct > 10 ? SEVERITY_TEXT.error : SEVERITY_TEXT.warning)}>{p.errorPct.toFixed(0)}%err</span> : null}
@@ -862,7 +865,9 @@ function DetailsPanel({
                   <div className="space-y-1 max-h-40 overflow-y-auto">
                     {edgeData.flow.topDNSQueries.map((q, i) => (
                       <div key={i} className="flex items-center gap-1.5 text-[10px]">
-                        <span className="text-theme-text-primary truncate flex-1" title={q.query}>{q.query}</span>
+                        <Tooltip content={q.query} wrapperClassName="min-w-0 flex-1">
+                        <span className="text-theme-text-primary truncate flex-1">{q.query}</span>
+                        </Tooltip>
                         <span className="shrink-0 text-theme-text-secondary">{q.count}</span>
                         {q.nxCount ? <span className={clsx('shrink-0', SEVERITY_TEXT.warning)}>NX:{q.nxCount}</span> : null}
                         {q.avgTTL ? <span className="shrink-0 text-theme-text-tertiary">TTL:{q.avgTTL}s</span> : null}

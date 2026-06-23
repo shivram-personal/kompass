@@ -1307,14 +1307,15 @@ function AppInner() {
                 </span>
               )}
               {!connected && (
+                <Tooltip content="Reconnect">
                 <button
                   onClick={reconnect}
                   disabled={isReconnecting}
-                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50"
-                  title="Reconnect"
+                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-50 disabled:pointer-events-none"
                 >
                   <RefreshCw className={`w-3 h-3 ${isReconnecting ? 'animate-spin' : ''}`} />
                 </button>
+                </Tooltip>
               )}
             </div>
             {/* Port forwards indicator — shown only when sessions exist */}
@@ -1433,13 +1434,14 @@ function AppInner() {
 
           {/* Local terminal */}
           {capabilities.localTerminal && (
+            <Tooltip content="Open local terminal">
             <button
               onClick={() => openLocalTerminal()}
               className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-              title="Open local terminal"
             >
               <SquareTerminal className="w-4 h-4" />
             </button>
+            </Tooltip>
           )}
 
           {/* Theme toggle — hidden in embedded mode. Host apps (e.g. Radar
@@ -1459,20 +1461,22 @@ function AppInner() {
               old floating bottom-right pair. Settings moved to the rail bottom. */}
           {showNavRail && (
             <>
+              <Tooltip content="Keyboard shortcuts (?)">
               <button
                 onClick={() => setShowHelp(true)}
                 className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-                title="Keyboard shortcuts (?)"
               >
                 <HelpCircle className="w-4 h-4" />
               </button>
+              </Tooltip>
+              <Tooltip content="Report a bug / Diagnostics">
               <button
                 onClick={() => setShowDiagnostics(true)}
                 className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-                title="Report a bug / Diagnostics"
               >
                 <Bug className="w-4 h-4" />
               </button>
+              </Tooltip>
             </>
           )}
 
@@ -2243,10 +2247,10 @@ function ThemeToggle() {
   const { theme, toggleTheme } = useTheme()
 
   return (
+    <Tooltip content={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}>
     <button
       onClick={toggleTheme}
       className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-      title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
     >
       {theme === 'dark' ? (
         <Sun className="w-4 h-4" />
@@ -2254,6 +2258,7 @@ function ThemeToggle() {
         <Moon className="w-4 h-4" />
       )}
     </button>
+    </Tooltip>
   )
 }
 

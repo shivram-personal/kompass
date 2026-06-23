@@ -5,6 +5,7 @@ import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
 import { useAuthMe } from '../api/client'
+import { Tooltip } from './ui/Tooltip'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -137,18 +138,19 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
         {command}
       </code>
       {onRunInTerminal && (
+        <Tooltip content="Run in terminal">
         <button
           onClick={() => onRunInTerminal(command)}
           className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-          title="Run in terminal"
         >
           <TerminalSquare className="w-3.5 h-3.5" />
         </button>
+        </Tooltip>
       )}
+      <Tooltip content="Copy to clipboard">
       <button
         onClick={handleCopy}
         className="shrink-0 text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-        title="Copy to clipboard"
       >
         {copied ? (
           <Check className="w-3.5 h-3.5 text-green-400" />
@@ -156,6 +158,7 @@ function CopyableCommand({ command, onRunInTerminal }: { command: string; onRunI
           <Copy className="w-3.5 h-3.5" />
         )}
       </button>
+      </Tooltip>
     </div>
   )
 }

@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { Home, Network, List, Clock, AlertTriangle, Package, GitBranch, Boxes, Activity, DollarSign, ShieldCheck, Settings, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { MainView } from '../../types'
+import { Tooltip } from '../ui/Tooltip'
 
 // The views the rail can navigate to. Broader than k8s-ui's ExtendedMainView
 // (which omits 'applications') — it mirrors the navigable subset of App.tsx's
@@ -131,11 +132,11 @@ export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned,
           forced slim (showPinToggle=false) — expanding there isn't available. */}
       {showPinToggle && (
       <div className="px-2 pb-2 pt-1 border-t border-theme-border/50">
+        <Tooltip content={pinned ? 'Collapse navigation' : 'Expand navigation'} position="right" wrapperClassName="!block w-full">
         <button
           type="button"
           onClick={onTogglePinned}
           aria-label={pinned ? 'Collapse navigation' : 'Expand navigation'}
-          title={pinned ? 'Collapse navigation' : 'Expand navigation'}
           className="group/pin relative flex h-9 w-full items-center rounded-md text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-secondary transition-colors"
         >
           <span className="flex w-10 shrink-0 items-center justify-center">
@@ -146,6 +147,7 @@ export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned,
               would contradict the "Expand navigation" label. */}
           <span className={clsx('text-[13px] font-medium', !pinned && 'hidden')}>Collapse</span>
         </button>
+        </Tooltip>
       </div>
       )}
     </aside>
@@ -156,11 +158,11 @@ function BrandRow({ pinned, onNavigate }: { pinned: boolean; onNavigate: (view: 
   // Clickable brand = secondary home affordance (logo→home convention). The
   // Home nav item below still carries the active state; the brand just navigates.
   return (
+    <Tooltip content="Home" position="right" wrapperClassName="!block w-full">
     <button
       type="button"
       onClick={() => onNavigate('home')}
       aria-label="Radar — go to home"
-      title="Home"
       // Height matches the top bar header (App.tsx — items-center + py-2 = 51px)
       // so the rail's brand divider and the header's bottom border form one line.
       className="flex h-[51px] w-full items-center border-b border-theme-border/50 shrink-0 transition-opacity hover:opacity-80"
@@ -181,6 +183,7 @@ function BrandRow({ pinned, onNavigate }: { pinned: boolean; onNavigate: (view: 
         <span className="text-[9px] mt-0.5 tracking-wide uppercase text-theme-text-tertiary">by Skyhook</span>
       </span>
     </button>
+    </Tooltip>
   )
 }
 

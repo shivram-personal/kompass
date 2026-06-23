@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import type { HelmRevision } from '../../types'
 import { getStatusColor, formatDate, formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
+import { Tooltip } from '../ui/Tooltip'
 
 interface RevisionHistoryProps {
   history: HelmRevision[]
@@ -108,7 +109,7 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                   </div>
 
                   <div className="flex items-center gap-4 mt-1 text-xs text-theme-text-tertiary">
-                    <span title={revision.updated}>{formatDate(revision.updated)}</span>
+                    <Tooltip content={revision.updated}><span>{formatDate(revision.updated)}</span></Tooltip>
                     <span>{formatAge(revision.updated)} ago</span>
                   </div>
 

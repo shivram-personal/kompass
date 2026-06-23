@@ -7,6 +7,7 @@ import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useCloudRole, useVersionCheck } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { Tooltip } from '../ui/Tooltip'
 import type { DeploymentMode } from '../../types'
 
 interface Config {
@@ -235,15 +236,16 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
         {canEditConfig && (
         <div className="flex items-center justify-between gap-3 p-4 border-t border-theme-border shrink-0">
             <div className="flex items-center gap-2">
+              <Tooltip content="Reset all configuration to defaults">
               <button
                 onClick={resetConfig}
                 disabled={saving}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50"
-                title="Reset all configuration to defaults"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors disabled:opacity-50 disabled:pointer-events-none"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
                 Reset
               </button>
+              </Tooltip>
               {saveMessage && (
                 <span className={clsx(
                   'text-xs',
@@ -479,13 +481,14 @@ function MCPSection({
               <code className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary truncate">
                 {mcpUrl}
               </code>
+              <Tooltip content="Copy MCP URL">
               <button
                 onClick={handleCopy}
                 className="shrink-0 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
-                title="Copy MCP URL"
               >
                 {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
               </button>
+              </Tooltip>
             </div>
           </div>
 

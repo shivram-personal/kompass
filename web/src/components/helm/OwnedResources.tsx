@@ -13,6 +13,7 @@ import { useAvailablePorts } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
 import { pluralize } from '@skyhook-io/k8s-ui'
+import { Tooltip } from '../ui/Tooltip'
 
 interface OwnedResourcesProps {
   resources: HelmOwnedResource[]
@@ -103,13 +104,14 @@ export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
           ) : (
             <span className="flex items-center gap-2">
               Showing {filteredResources.length} of {resources.length} resources
+              <Tooltip content="Clear filter">
               <button
                 onClick={() => setHealthFilter('all')}
                 className="p-0.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-                title="Clear filter"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
+              </Tooltip>
             </span>
           )}
         </div>
@@ -255,39 +257,44 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
 
         {/* Status badge */}
         {resource.status && (
+          <Tooltip content={resource.message || resource.status}>
           <span
             className={clsx('badge-sm', getResourceStatusColor(resource.status || ''))}
-            title={resource.message || resource.status}
           >
             {resource.status}
           </span>
+          </Tooltip>
         )}
 
         {/* Issue summary (e.g., "OOMKilled", "CrashLoopBackOff") */}
         {resource.issue && (
+          <Tooltip content={resource.summary || resource.issue}>
           <span
             className="text-xs text-red-400"
-            title={resource.summary || resource.issue}
           >
             {resource.issue}
           </span>
+          </Tooltip>
         )}
 
         {/* Error icon with message tooltip */}
         {isError && resource.message && !resource.issue && (
-          <span title={resource.message}>
+          <Tooltip content={resource.message}>
+          <span>
             <AlertCircle className="w-3.5 h-3.5 text-red-400" />
           </span>
+          </Tooltip>
         )}
 
         {canNavigate && (
+          <Tooltip content="View details">
           <button
             onClick={handleClick}
             className="p-1 text-theme-text-tertiary opacity-0 group-hover:opacity-100 hover:text-theme-text-primary hover:bg-theme-elevated rounded transition-all"
-            title="View details"
           >
             <ExternalLink className="w-3.5 h-3.5" />
           </button>
+          </Tooltip>
         )}
       </div>
     </div>
@@ -383,35 +390,37 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
 
       {/* Terminal */}
       {isRunning && canExec && (
+        <Tooltip content="Open terminal">
         <button
           onClick={(e) => { e.stopPropagation(); handleOpenTerminal() }}
           disabled={isLoadingAction}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-          title="Open terminal"
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           <Terminal className="w-3.5 h-3.5" />
         </button>
+        </Tooltip>
       )}
 
       {/* Logs */}
       {canViewLogs && (
+        <Tooltip content="View logs">
         <button
           onClick={(e) => { e.stopPropagation(); handleOpenLogs() }}
           disabled={isLoadingAction}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-          title="View logs"
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           <FileText className="w-3.5 h-3.5" />
         </button>
+        </Tooltip>
       )}
 
       {/* Port Forward */}
       {canPortForward && !portsLoading && ports.length > 0 && (
+        <Tooltip content={`Port forward :${ports[0].port}`}>
         <button
           onClick={(e) => { e.stopPropagation(); handlePortForward(ports[0].port) }}
           disabled={startPortForward.isPending}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-          title={`Port forward :${ports[0].port}`}
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
         >
           {startPortForward.isPending ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -419,6 +428,7 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
             <Plug className="w-3.5 h-3.5" />
           )}
         </button>
+        </Tooltip>
       )}
     </div>
   )
@@ -449,11 +459,11 @@ function ServiceQuickActions({ namespace, serviceName }: ServiceQuickActionsProp
 
   return (
     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+      <Tooltip content={`Port forward :${ports[0].port}`}>
       <button
         onClick={(e) => { e.stopPropagation(); handlePortForward(ports[0].port) }}
         disabled={startPortForward.isPending}
-        className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50"
-        title={`Port forward :${ports[0].port}`}
+        className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-blue-500/10 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
       >
         {startPortForward.isPending ? (
           <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -461,6 +471,7 @@ function ServiceQuickActions({ namespace, serviceName }: ServiceQuickActionsProp
           <Plug className="w-3.5 h-3.5" />
         )}
       </button>
+      </Tooltip>
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, ChevronRight, Pin } from 'lucide-react'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { MCP_TOOL_CATALOG } from './mcpToolCatalog'
+import { Tooltip } from '../ui/Tooltip'
 
 interface MCPSetupDialogProps {
   open: boolean
@@ -19,13 +20,14 @@ function CopyButton({ text }: { text: string }) {
   }
 
   return (
+    <Tooltip content="Copy to clipboard" position="left" wrapperClassName="absolute top-2 right-2">
     <button
       onClick={handleCopy}
-      className="absolute top-2 right-2 p-1.5 rounded-md bg-theme-elevated/50 hover:bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-      title="Copy to clipboard"
+      className="p-1.5 rounded-md bg-theme-elevated/50 hover:bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
     >
       {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
     </button>
+    </Tooltip>
   )
 }
 
@@ -308,19 +310,23 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   <div className="flex items-center gap-2">
                     <code className="inline-code text-[11px]">{tool.name}</code>
                     {tool.write && (
-                      <span className="badge-sm bg-amber-500/10 text-amber-600 dark:text-amber-400" title="Write tool — annotated as destructive">
+                      <Tooltip content="Write tool — annotated as destructive">
+                      <span className="badge-sm bg-amber-500/10 text-amber-600 dark:text-amber-400">
                         write
                       </span>
+                      </Tooltip>
                     )}
                   </div>
                   <p className="text-[11px] text-theme-text-tertiary leading-relaxed">{tool.desc}</p>
                   {tool.params.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-0.5">
                       {tool.params.map((p) => (
-                        <span key={p.arg} className="inline-code text-[11px]" title={p.desc}>
+                        <Tooltip key={p.arg} content={p.desc}>
+                        <span className="inline-code text-[11px]">
                           <span>{p.arg}</span>
                           {p.required && <span className="text-red-400">*</span>}
                         </span>
+                        </Tooltip>
                       ))}
                     </div>
                   )}

@@ -4,6 +4,7 @@ import type { SelectedResource } from '../../types'
 import { ChecksView, PaneLoader, PageHeader, type CheckResourceRef } from '@skyhook-io/k8s-ui'
 import { ShieldCheck, Settings } from 'lucide-react'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
+import { Tooltip } from '../ui/Tooltip'
 
 interface AuditViewProps {
   namespaces: string[]
@@ -82,13 +83,14 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
             {ignoredCount > 0 && (
               <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
             )}
+            <Tooltip content="Checks settings">
             <button
               onClick={() => setShowSettings(true)}
               className="p-2 rounded-lg hover:bg-theme-hover text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-              title="Checks settings"
             >
               <Settings className="w-4 h-4" />
             </button>
+            </Tooltip>
           </>
         }
       />

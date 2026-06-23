@@ -9,6 +9,7 @@ import { YamlEditor } from '../ui/YamlEditor'
 import { useHelmPreviewValues, useHelmApplyValues } from '../../api/client'
 import { useCanHelmAct } from '../../api/client'
 import { ValuesDiffPreview } from './ValuesDiffPreview'
+import { Tooltip } from '../ui/Tooltip'
 
 interface ValuesViewerProps {
   values?: HelmValues
@@ -227,11 +228,11 @@ export function ValuesViewer({
                 )}
                 Preview
               </button>
+              <Tooltip content={!canHelmWrite ? helmActReason : ''}>
               <button
                 onClick={handleApply}
                 disabled={!!yamlError || applyMutation.isPending || !canHelmWrite}
-                className="flex items-center gap-1 px-2.5 py-1 text-xs btn-brand rounded disabled:cursor-not-allowed"
-                title={!canHelmWrite ? helmActReason : undefined}
+                className="flex items-center gap-1 px-2.5 py-1 text-xs btn-brand rounded disabled:cursor-not-allowed disabled:pointer-events-none"
               >
                 {applyMutation.isPending ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -240,6 +241,7 @@ export function ValuesViewer({
                 )}
                 Apply
               </button>
+              </Tooltip>
             </>
           )}
         </div>

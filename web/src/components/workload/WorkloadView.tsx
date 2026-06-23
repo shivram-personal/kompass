@@ -43,6 +43,7 @@ import { useCanUpdateSecrets, useCanNodeWrite, useNamespacedCapabilities } from 
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
 import { useToast } from '../ui/Toast'
+import { Tooltip } from '../ui/Tooltip'
 import { PodRenderer } from '../resources/renderers/PodRenderer'
 import { NodeRenderer } from '../resources/renderers/NodeRenderer'
 import { ServiceRenderer } from '../resources/renderers/ServiceRenderer'
@@ -879,15 +880,18 @@ function FluxSourceConsumersInner({ sourceKind, namespace, name }: { sourceKind:
       </h3>
       <div className="flex flex-wrap gap-1.5">
         {consumers.map((c) => (
-          <button
+          <Tooltip
             key={`${c.kind}/${c.namespace}/${c.name}`}
+            content={`${c.kind} ${c.namespace}/${c.name}`}
+          >
+          <button
             onClick={() => navigate(`/gitops/detail/${c.plural}/${encodeURIComponent(c.namespace)}/${encodeURIComponent(c.name)}`)}
             className="inline-flex items-center gap-1.5 rounded border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[11px] text-theme-text-secondary hover:border-skyhook-500/60 hover:text-skyhook-500 transition-colors"
-            title={`${c.kind} ${c.namespace}/${c.name}`}
           >
             <span className="text-theme-text-tertiary">{c.kind === 'HelmRelease' ? 'HR' : 'K'}</span>
             <span>{c.namespace}/{c.name}</span>
           </button>
+          </Tooltip>
         ))}
       </div>
     </div>

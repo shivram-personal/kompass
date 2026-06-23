@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Bug, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { useRuntimeStats } from '../api/client'
+import { Tooltip } from './ui/Tooltip'
 
 function formatUptime(seconds: number): string {
   if (seconds < 60) return `${seconds}s`
@@ -17,13 +18,14 @@ export function DebugOverlay() {
 
   if (!visible) {
     return (
+      <Tooltip content="Show debug stats">
       <button
         onClick={() => setVisible(true)}
         className="fixed bottom-3 right-3 z-50 p-2 bg-theme-surface/90 border border-theme-border rounded-lg text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-        title="Show debug stats"
       >
         <Bug className="w-4 h-4" />
       </button>
+      </Tooltip>
     )
   }
 

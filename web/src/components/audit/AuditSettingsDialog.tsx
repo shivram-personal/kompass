@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { useAuditSettings, useUpdateAuditSettings, useAudit, useCloudRole } from '../../api/client'
 import type { CheckMeta } from '@skyhook-io/k8s-ui'
 import { validateRFC1123Label, type ValidationResult } from '@skyhook-io/k8s-ui/utils/validators'
+import { Tooltip } from '../ui/Tooltip'
 
 interface AuditSettingsDialogProps {
   namespaces: string[]
@@ -192,6 +193,17 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
           >
             Cancel
           </button>
+          <Tooltip
+            content={
+              !canEdit
+                ? 'Audit settings can only be changed by owners'
+                : newNsError
+                  ? 'Fix or clear the pending namespace input before saving'
+                  : newNsDuplicate
+                    ? 'Clear the duplicate pending input before saving'
+                    : ''
+            }
+          >
           <button
             onClick={handleSave}
             // Block save while the namespace input has unfixed pending
@@ -200,19 +212,11 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
             disabled={
               !canEdit || updateSettings.isPending || newNsError !== null || newNsDuplicate
             }
-            title={
-              !canEdit
-                ? 'Audit settings can only be changed by owners'
-                : newNsError
-                  ? 'Fix or clear the pending namespace input before saving'
-                  : newNsDuplicate
-                    ? 'Clear the duplicate pending input before saving'
-                    : undefined
-            }
-            className="px-4 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
           >
             {updateSettings.isPending ? 'Saving...' : 'Save'}
           </button>
+          </Tooltip>
         </div>
       </div>
     </div>

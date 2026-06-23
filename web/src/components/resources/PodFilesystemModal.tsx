@@ -7,6 +7,7 @@ import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { Tooltip } from '../ui/Tooltip'
 
 interface PodFilesystem {
   root: FileNode
@@ -384,11 +385,11 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
       )}
 
       {isDownloadable && (
+        <Tooltip content="Download file">
         <button
           onClick={handleDownload}
           disabled={downloading}
-          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded ml-1 disabled:opacity-50"
-          title="Download file"
+          className="p-1 text-theme-text-tertiary hover:text-blue-400 hover:bg-theme-elevated rounded ml-1 disabled:opacity-50 disabled:pointer-events-none"
         >
           {downloading ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -396,6 +397,7 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
             <Download className="w-3.5 h-3.5" />
           )}
         </button>
+        </Tooltip>
       )}
     </div>
   )
