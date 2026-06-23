@@ -85,7 +85,6 @@ const CLAUDE_MODEL_OPTIONS: Option[] = [
     description: "Balanced — efficient for routine work",
   },
   { value: "haiku", label: "Haiku", description: "Fastest — quick checks" },
-  { value: "fable", label: "Fable", description: "Newest model family" },
 ];
 // Codex has no stable alias set and no way to enumerate models, and slugs change
 // across versions — so we take a free-text override rather than a list that rots.
