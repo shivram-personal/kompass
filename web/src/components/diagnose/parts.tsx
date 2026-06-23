@@ -399,9 +399,11 @@ export function TurnView({
         followup={followup}
       />
       {turn.status === "running" && turn.answer && (
-        <div className="whitespace-pre-wrap rounded-md border border-theme-border bg-theme-base/50 p-2 text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere]">
+        // Live narration as the agent works (Claude streams its reasoning as text).
+        // Rendered as markdown so its **bold**/lists read cleanly, not raw markers.
+        <AIMarkdown className="rounded-md border border-theme-border bg-theme-base/50 p-2 text-xs leading-relaxed text-theme-text-secondary [overflow-wrap:anywhere] [&_code]:font-normal [&_li]:text-theme-text-secondary [&_p]:my-1 [&_strong]:font-medium [&_strong]:text-theme-text-primary">
           {stripJsonBlock(turn.answer)}
-        </div>
+        </AIMarkdown>
       )}
       {turn.status === "done" && turn.diagnosis && (
         <ResultCard
