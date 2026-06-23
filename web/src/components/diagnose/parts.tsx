@@ -11,6 +11,7 @@ import {
   Check,
   ShieldCheck,
   ChevronRight,
+  ChevronDown,
   Wrench,
   Wand2,
   Sparkles,
@@ -61,24 +62,43 @@ function Segmented<T extends string | boolean>({
   );
 }
 
+type Option = { value: string; label: string; description?: string };
+
 // Claude Code's --model takes version-stable ALIASES that always resolve to the
 // user's installed latest of that tier (per `claude --help`), so this list never
-// rots across model updates. "" = the agent's own default.
-const CLAUDE_MODEL_OPTIONS = [
-  { value: "", label: "Default" },
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-  { value: "fable", label: "Fable" },
+// rots across model updates. "" = the agent's own default. Descriptions mirror
+// Claude Code's own /model picker so the tradeoff is legible.
+const CLAUDE_MODEL_OPTIONS: Option[] = [
+  {
+    value: "",
+    label: "Default",
+    description: "Use Claude Code's configured model",
+  },
+  {
+    value: "opus",
+    label: "Opus",
+    description: "Most capable — best for complex problems",
+  },
+  {
+    value: "sonnet",
+    label: "Sonnet",
+    description: "Balanced — efficient for routine work",
+  },
+  { value: "haiku", label: "Haiku", description: "Fastest — quick checks" },
+  { value: "fable", label: "Fable", description: "Newest model family" },
 ];
 // Codex has no stable alias set and no way to enumerate models, and slugs change
 // across versions — so we take a free-text override rather than a list that rots.
-const EFFORT_OPTIONS = [
-  { value: "", label: "Default" },
-  { value: "minimal", label: "Minimal" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
+const EFFORT_OPTIONS: Option[] = [
+  { value: "", label: "Default", description: "Use Codex's configured effort" },
+  {
+    value: "minimal",
+    label: "Minimal",
+    description: "Fastest, least reasoning",
+  },
+  { value: "low", label: "Low", description: "Quick" },
+  { value: "medium", label: "Medium", description: "Balanced" },
+  { value: "high", label: "High", description: "Most thorough, slowest" },
 ];
 
 function TextField({
@@ -115,7 +135,10 @@ function TextField({
   );
 }
 
-function Dropdown({
+// SelectMenu is a themed dropdown (button + popover list) matching the app's other
+// custom dropdowns — unlike a native <select> it renders option descriptions and
+// stays on-theme in both light/dark.
+function SelectMenu({
   label,
   value,
   options,
@@ -124,26 +147,71 @@ function Dropdown({
 }: {
   label: string;
   value: string;
-  options: { value: string; label: string }[];
+  options: Option[];
   onChange: (v: string) => void;
   hint?: string;
 }) {
+  const [open, setOpen] = useState(false);
+  const current = options.find((o) => o.value === value) ?? options[0];
   return (
     <div>
       <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
         {label}
       </div>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-md border border-theme-border bg-theme-base px-2 py-1.5 text-xs text-theme-text-primary"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
+      <div className="relative">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          className="flex w-full items-center justify-between gap-2 rounded-md border border-theme-border bg-theme-base px-2.5 py-1.5 text-left text-xs text-theme-text-primary hover:bg-theme-hover"
+        >
+          <span className="truncate">{current?.label}</span>
+          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+        </button>
+        {open && (
+          <>
+            <div
+              className="fixed inset-0 z-10"
+              onClick={() => setOpen(false)}
+            />
+            <ul
+              role="listbox"
+              className="absolute left-0 right-0 z-20 mt-1 max-h-72 overflow-y-auto rounded-md border border-theme-border bg-theme-surface py-1 shadow-theme-lg"
+            >
+              {options.map((o) => {
+                const sel = o.value === value;
+                return (
+                  <li key={o.value}>
+                    <button
+                      role="option"
+                      aria-selected={sel}
+                      onClick={() => {
+                        onChange(o.value);
+                        setOpen(false);
+                      }}
+                      className="flex w-full items-start gap-2 px-2.5 py-1.5 text-left hover:bg-theme-hover"
+                    >
+                      <Check
+                        className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${sel ? "text-accent" : "opacity-0"}`}
+                      />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-medium text-theme-text-primary">
+                          {o.label}
+                        </span>
+                        {o.description && (
+                          <span className="block text-[11px] leading-snug text-theme-text-tertiary">
+                            {o.description}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+      </div>
       {hint && (
         <p className="mt-1 text-[11px] leading-snug text-theme-text-tertiary">
           {hint}
@@ -222,16 +290,16 @@ export function AgentControls({
           }
         />
       ) : (
-        <Dropdown
+        <SelectMenu
           label="Model"
           value={model}
           options={CLAUDE_MODEL_OPTIONS}
           onChange={onSetModel}
-          hint="Aliases always resolve to the latest of that tier; Default uses Claude Code's own."
+          hint="Aliases always resolve to the latest of that tier."
         />
       )}
       {isCodex && (
-        <Dropdown
+        <SelectMenu
           label="Reasoning effort"
           value={effort}
           options={EFFORT_OPTIONS}
