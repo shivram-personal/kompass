@@ -11,7 +11,7 @@ User → [Auth Layer] → Radar Backend → K8s API (as user, via impersonation)
 ```
 
 1. **Authentication** identifies the user (proxy headers or OIDC login)
-2. **Reads** are filtered by namespace — Radar discovers which namespaces the user can access via `SubjectAccessReview` and only returns resources from those namespaces. Cluster-scoped resources (Nodes, ClusterRoles when `rbac.viewRBAC` is on, StorageClasses, etc.) are served from the ServiceAccount-populated informer cache without per-user RBAC re-checks, so anyone reaching Radar's API sees them regardless of their own K8s permissions on those kinds.
+2. **Reads** are filtered by namespace — Radar discovers which namespaces the user can access via `SubjectAccessReview` and only returns resources from those namespaces. Cluster-scoped resources (Nodes, PersistentVolumes, StorageClasses, ClusterRoles when `rbac.viewRBAC` is on, cluster-scoped CRDs, etc.) have no namespace to filter on, so they are gated per-kind via `SubjectAccessReview`: a user sees them only if their own RBAC permits listing that kind. Cluster-wide pod visibility does **not** imply Node/PV visibility — each cluster-scoped read goes through its own check.
 3. **Writes** use K8s impersonation — Radar makes the K8s API call as the authenticated user, so K8s RBAC decides whether it's allowed
 4. **UI adapts** — capability checks run per-user, so buttons (exec, restart, scale, Helm) only appear if the user has permission
 
@@ -349,7 +349,7 @@ When auth is enabled:
 - A **username** appears in the Radar header with a logout option
 - The **namespace selector** only shows namespaces the user can access
 - **Topology, resources, events, dashboard** are filtered to accessible namespaces
-- **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are currently visible to all authenticated users regardless of namespace permissions — per-resource SAR checks for these are planned for a future release
+- **Cluster-scoped resources** (Nodes, PersistentVolumes, StorageClasses) are gated per-kind via `SubjectAccessReview` — a user sees them only if their own RBAC permits listing that kind, independent of namespace access
 - **Helm releases** are visible to all authenticated users (reads use the ServiceAccount, not impersonation, because the K8s `view` role doesn't include `list secrets` which Helm requires). Write operations (install, upgrade, rollback, uninstall) are impersonated and require the user to have appropriate RBAC.
 - **Write buttons** (restart, scale, exec, Helm install, etc.) only appear if the user has permission
 - Write operations return **403** from K8s if RBAC denies them (shown as an error toast)
