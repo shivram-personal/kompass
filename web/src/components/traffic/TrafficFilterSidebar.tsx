@@ -188,7 +188,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
         <div className="px-3 py-2 border-b border-theme-border space-y-1.5">
           <div className="flex items-center gap-2">
             <Clock className="w-3.5 h-3.5 text-theme-text-tertiary" />
-            <Tooltip content="Show traffic from the selected time window" wrapperClassName="!block flex-1">
+            <Tooltip content="Show traffic from the selected time window" wrapperClassName="!flex flex-1">
             <select
               value={timeRange}
               onChange={(e) => setTimeRange(e.target.value)}
@@ -202,7 +202,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
           </div>
           <div className="flex items-center gap-2">
             <Filter className="w-3.5 h-3.5 text-theme-text-tertiary" />
-            <Tooltip content="Hide low-traffic flows to reduce noise" wrapperClassName="!block flex-1">
+            <Tooltip content="Hide low-traffic flows to reduce noise" wrapperClassName="!flex flex-1">
             <select
               value={minConnections}
               onChange={(e) => setMinConnections(Number(e.target.value))}
