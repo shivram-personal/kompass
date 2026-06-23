@@ -2,7 +2,7 @@
 // persistence, no app/routing knowledge) so they lift cleanly into k8s-ui later
 // and Cloud can reuse them. The stateful controller lives in DiagnoseContext;
 // the run logic in InvestigationView.
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Loader2,
   CheckCircle2,
@@ -19,7 +19,9 @@ import {
   Maximize2,
 } from "lucide-react";
 import { stringify as toYaml } from "yaml";
+import { codeToHtml } from "shiki";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
+import { useTheme } from "../../context/ThemeContext";
 import {
   type Diagnosis,
   type DiagnoseStep,
@@ -816,6 +818,7 @@ function ToolResultDialog({
   text: string;
   truncated?: boolean;
 }) {
+  const { theme } = useTheme();
   const [fmt, setFmt] = useState<"yaml" | "json">("yaml");
   const parsed = useMemo<{ ok: boolean; value?: unknown }>(() => {
     try {
@@ -830,10 +833,27 @@ function ToolResultDialog({
     : fmt === "yaml"
       ? safeYaml(parsed.value)
       : JSON.stringify(parsed.value, null, 2);
+  const language = parsed.ok ? fmt : "text";
 
-  // Plain <pre> (not a syntax-highlighting viewer) so the payload renders instantly
-  // and reliably; the formatting + the JSON/YAML toggle carry readability, and the
-  // browser's native find works on the real DOM text.
+  // Progressive syntax highlighting: render the plain text instantly, then swap in
+  // shiki's highlighted HTML once it resolves. A slow/failed highlighter load never
+  // blocks the payload (unlike CodeViewer's "Loading…" gate) — worst case it stays
+  // plain. Native browser find still works on the rendered text.
+  const [html, setHtml] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    setHtml(null);
+    let alive = true;
+    codeToHtml(display, {
+      lang: language,
+      theme: theme === "light" ? "github-light" : "github-dark",
+    })
+      .then((h) => alive && setHtml(h))
+      .catch(() => {}); // keep the plain pre on failure
+    return () => {
+      alive = false;
+    };
+  }, [open, display, language, theme]);
   return (
     <DialogPortal open={open} onClose={onClose} className="w-[min(90vw,820px)]">
       <div className="flex items-center justify-between gap-3 border-b border-theme-border p-3">
@@ -863,9 +883,16 @@ function ToolResultDialog({
           <CopyButton text={display} />
         </div>
       </div>
-      <pre className="m-3 max-h-[60vh] overflow-auto rounded-md border border-theme-border bg-theme-base p-3 font-mono text-xs leading-relaxed text-theme-text-secondary">
-        {display}
-      </pre>
+      {html ? (
+        <div
+          className="animate-code-colorize m-3 max-h-[60vh] overflow-auto rounded-md border border-theme-border bg-theme-base p-3 text-xs leading-relaxed [&_pre]:!m-0 [&_pre]:!bg-transparent [&_pre]:font-mono [&_pre]:!text-xs [&_pre]:!leading-relaxed"
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      ) : (
+        <pre className="m-3 max-h-[60vh] overflow-auto rounded-md border border-theme-border bg-theme-base p-3 font-mono text-xs leading-relaxed text-theme-text-secondary">
+          {display}
+        </pre>
+      )}
     </DialogPortal>
   );
 }
