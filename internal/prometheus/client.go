@@ -77,29 +77,36 @@ func newMCPHTTPClient() *http.Client {
 }
 
 // SetManualURL sets the --prometheus-url override on the global client.
+// manualURL is read under the per-client c.mu (discover, Reinitialize), so the
+// write takes c.mu too. clientMu is held (read) across the whole write so a
+// concurrent Reinitialize can't swap globalClient out from under us and leave the
+// new pointer with stale settings. Lock order clientMu→c.mu matches Reinitialize.
 func SetManualURL(rawURL string) {
-	clientMu.Lock()
-	defer clientMu.Unlock()
-	if globalClient != nil {
-		globalClient.manualURL = strings.TrimRight(rawURL, "/")
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if globalClient == nil {
+		return
 	}
+	globalClient.mu.Lock()
+	defer globalClient.mu.Unlock()
+	globalClient.manualURL = strings.TrimRight(rawURL, "/")
 }
 
 // SetHeaders sets HTTP headers attached to every Prometheus request on the
-// global client. Pass nil or an empty map to clear.
+// global client. Pass nil or an empty map to clear. Holds clientMu (read) across
+// the write for the same reason as SetManualURL.
 func SetHeaders(h map[string]string) {
 	clientMu.RLock()
-	c := globalClient
-	clientMu.RUnlock()
-	if c == nil {
+	defer clientMu.RUnlock()
+	if globalClient == nil {
 		return
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.headers = copyHeaders(h)
+	globalClient.mu.Lock()
+	defer globalClient.mu.Unlock()
+	globalClient.headers = copyHeaders(h)
 	// Drop the cached prom.Client so the next request rebuilds its transport
 	// with the new headers.
-	c.prom = nil
+	globalClient.prom = nil
 }
 
 func copyHeaders(h map[string]string) map[string]string {

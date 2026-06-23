@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ import (
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
+	"github.com/skyhook-io/radar/internal/traffic"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
 	"github.com/skyhook-io/radar/pkg/hpadiag"
@@ -488,6 +490,7 @@ func (s *Server) setupRoutes() {
 			// Config (persisted startup configuration)
 			r.Get("/config", s.handleGetConfig)
 			r.Put("/config", s.handlePutConfig)
+			r.Put("/integrations/prometheus", s.handleApplyPrometheusURL)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -3729,6 +3732,9 @@ type configResponse struct {
 	File      config.Config `json:"file"`
 	Effective config.Config `json:"effective"`
 	IsDesktop bool          `json:"isDesktop"`
+	// PrometheusHeaderKeys lists the configured Prometheus header names so the UI
+	// can show what's set without ever receiving the (secret) values.
+	PrometheusHeaderKeys []string `json:"prometheusHeaderKeys,omitempty"`
 }
 
 // handleGetConfig returns the on-disk config file alongside the effective startup config.
@@ -3736,10 +3742,16 @@ type configResponse struct {
 // diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	file := config.Load()
+	headerKeys := make([]string, 0, len(file.PrometheusHeaders))
+	for k := range file.PrometheusHeaders {
+		headerKeys = append(headerKeys, k)
+	}
+	sort.Strings(headerKeys)
 	file.PrometheusHeaders = nil
 	resp := configResponse{
-		File:      file,
-		IsDesktop: version.IsDesktop(),
+		File:                 file,
+		IsDesktop:            version.IsDesktop(),
+		PrometheusHeaderKeys: headerKeys,
 	}
 	if s.effectiveConfig != nil {
 		effective := *s.effectiveConfig
@@ -3774,6 +3786,96 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	result.PrometheusHeaders = nil
 	s.writeJSON(w, result)
+}
+
+// handleApplyPrometheusURL re-points the running Prometheus client at a new URL
+// immediately and persists it. The Prometheus URL is one of the few settings
+// that doesn't need a restart: the metrics path reads it from a mutable global
+// per query, so re-pointing it live is safe and saves operators a restart loop
+// when tuning discovery. Reset() drops the cached connection so the next probe
+// rediscovers against the new URL rather than reusing the old endpoint. The
+// response carries the live reachability result so the UI can confirm the URL
+// actually works. An empty URL reverts to auto-discovery.
+func (s *Server) handleApplyPrometheusURL(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
+		return
+	}
+	// No requireConnected: persisting + applying a manual URL needs no cluster
+	// (the probe hits the URL over HTTP), so operators can point at an external
+	// Prometheus even while the cluster is unreachable, like handlePutConfig.
+	var body struct {
+		PrometheusURL string `json:"prometheusUrl"`
+		// Headers is a pointer so we can tell "not editing headers" (nil — keep
+		// what's on disk) apart from "clear all headers" (present but empty). The
+		// UI only sends it when the user touched the header editor, since GET
+		// redacts the values and can't round-trip them.
+		Headers *map[string]string `json:"headers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	rawURL := strings.TrimSpace(body.PrometheusURL)
+
+	// Reject anything startup would log.Fatalf on, so "Apply now" can't persist a
+	// config that bricks the next launch. Empty reverts to auto-discovery.
+	if rawURL != "" {
+		if u, err := url.Parse(rawURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			s.writeError(w, http.StatusBadRequest, "Prometheus URL must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)")
+			return
+		}
+	}
+
+	var headers map[string]string
+	if body.Headers != nil {
+		headers = make(map[string]string, len(*body.Headers))
+		for k, v := range *body.Headers {
+			if k = strings.TrimSpace(k); k != "" {
+				headers[k] = v
+			}
+		}
+	}
+
+	// Persist first: a failed disk write must not leave the running client
+	// pointed somewhere the on-disk config disagrees with.
+	if _, err := config.Update(func(c *config.Config) {
+		c.PrometheusURL = rawURL
+		if body.Headers != nil {
+			c.PrometheusHeaders = headers
+		}
+	}); err != nil {
+		log.Printf("[config] Failed to persist Prometheus URL: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Apply to the running client. Reset() drops the cached connection so the
+	// probe below rediscovers against the new URL instead of the old endpoint.
+	prometheuspkg.SetManualURL(rawURL)
+	traffic.SetMetricsURL(rawURL)
+	if body.Headers != nil {
+		prometheuspkg.SetHeaders(headers)
+		traffic.SetMetricsHeaders(headers)
+	}
+	prometheuspkg.Reset()
+
+	resp := struct {
+		Connected bool   `json:"connected"`
+		Address   string `json:"address,omitempty"`
+		Error     string `json:"error,omitempty"`
+	}{}
+	if client := prometheuspkg.GetClient(); client != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		addr, _, err := client.EnsureConnected(ctx)
+		if err != nil {
+			resp.Error = err.Error()
+		} else {
+			resp.Connected = true
+			resp.Address = addr
+		}
+	}
+	s.writeJSON(w, resp)
 }
 
 // Debug handlers for event pipeline diagnostics
