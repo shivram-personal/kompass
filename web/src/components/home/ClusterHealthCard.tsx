@@ -224,8 +224,8 @@ export function ClusterHealthCard({
               // the visible text falls back to the platform label. Render no
               // tooltip in that case; local mode keeps it so users can hover
               // to see the full kubeconfig context path.
-              <Tooltip content={isInCluster ? '' : cluster.name} wrapperClassName="!block min-w-0 mb-1.5">
-              <h2 className="text-xl font-semibold text-theme-text-primary truncate leading-tight">
+              <Tooltip content={isInCluster ? '' : cluster.name} wrapperClassName="!block min-w-0">
+              <h2 className="text-xl font-semibold text-theme-text-primary truncate leading-tight mb-1.5">
                 {headlineName}
               </h2>
               </Tooltip>
