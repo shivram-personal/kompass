@@ -576,6 +576,20 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	var turns int
 	var sessionID string
 
+	// Claude streams its narration as standalone `text` messages interleaved with
+	// tool calls; the FINAL text message is the report (it equals the `result`
+	// event). To interleave narration with tools in the timeline — and NOT duplicate
+	// the report — we hold each text block and flush it as a narration event when
+	// the next stream item arrives; the last one (pending at `result`) is the report
+	// and is dropped here (it surfaces as the result card instead).
+	var pendingText string
+	flushNarration := func() {
+		if t := strings.TrimSpace(pendingText); t != "" {
+			onEvent(StreamEvent{Type: "thinking", Token: t})
+		}
+		pendingText = ""
+	}
+
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || line[0] != '{' {
@@ -593,14 +607,18 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 			for _, b := range ev.Message.Content {
 				switch b.Type {
 				case "text":
-					if b.Text != "" {
-						onEvent(StreamEvent{Type: "token", Token: b.Text})
-					}
+					// Hold this text; the prior pending narration (if any) is now
+					// known to be interim → flush it. This one waits for the next
+					// item (interim → flushed) or `result` (report → dropped).
+					flushNarration()
+					pendingText = b.Text
 				case "thinking":
+					flushNarration()
 					if b.Thinking != "" {
 						onEvent(StreamEvent{Type: "thinking", Token: b.Thinking})
 					}
 				case "tool_use":
+					flushNarration() // interim narration precedes its tool call
 					tool := strings.TrimPrefix(b.Name, "mcp__radar__")
 					starts[b.ID] = time.Now()
 					args, _ := capPayload(strings.TrimSpace(string(b.Input)))

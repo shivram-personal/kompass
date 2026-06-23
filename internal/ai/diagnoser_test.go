@@ -195,3 +195,44 @@ func TestCapPayload(t *testing.T) {
 		t.Errorf("truncated payload not capped: %d runes", len([]rune(s)))
 	}
 }
+
+// TestParseStream_InterleavesNarration pins the Claude treatment: interim text
+// (followed by more activity) becomes an interleaved narration ("thinking") event;
+// the FINAL text (the report, equal to the result) is NOT emitted as narration —
+// it surfaces via the result card.
+func TestParseStream_InterleavesNarration(t *testing.T) {
+	stream := strings.Join([]string{
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"Let me check the deployment."}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__radar__get_resource","input":{"name":"x"}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"The root cause is the bad image."}]}}`,
+		`{"type":"result","result":"The root cause is the bad image.","num_turns":1}`,
+	}, "\n")
+
+	var narrations []string
+	var toolSeen bool
+	parseStream(strings.NewReader(stream), func(ev StreamEvent) {
+		switch ev.Type {
+		case "thinking":
+			narrations = append(narrations, ev.Token)
+		case "token":
+			t.Errorf("Claude narration should not emit token events anymore, got %q", ev.Token)
+		case "step":
+			if ev.Step != nil && ev.Step.Status == "running" {
+				toolSeen = true
+			}
+		}
+	})
+
+	if len(narrations) != 1 || narrations[0] != "Let me check the deployment." {
+		t.Errorf("expected the interim narration interleaved, got %v", narrations)
+	}
+	for _, n := range narrations {
+		if strings.Contains(n, "root cause") {
+			t.Errorf("the final report must not appear as narration, got %q", n)
+		}
+	}
+	if !toolSeen {
+		t.Error("expected the tool step")
+	}
+}
