@@ -716,6 +716,30 @@ func TestReviseVerdictWithProbes_SkippedRowsIgnored(t *testing.T) {
 	}
 }
 
+// TestDeps_NamespaceAllowed pins the per-request namespace scoping
+// contract that gates cross-namespace fan-out in the trace walk. Empty
+// allow-list is the single-user / auth-disabled default and admits all
+// namespaces; a non-empty list scopes strictly.
+func TestDeps_NamespaceAllowed(t *testing.T) {
+	cases := []struct {
+		name    string
+		allowed []string
+		ns      string
+		want    bool
+	}{
+		{"empty admits everything", nil, "any", true},
+		{"in scope", []string{"a", "b"}, "a", true},
+		{"out of scope", []string{"a", "b"}, "c", false},
+		{"empty namespace against scoped list", []string{"a"}, "", false},
+	}
+	for _, c := range cases {
+		got := Deps{AllowedNamespaces: c.allowed}.NamespaceAllowed(c.ns)
+		if got != c.want {
+			t.Errorf("%s: NamespaceAllowed(%q) with allowed=%v = %v, want %v", c.name, c.ns, c.allowed, got, c.want)
+		}
+	}
+}
+
 // TestHasUnverifiableEndpoints_UpstreamsAreCounted pins that a marker
 // placed on an Upstream hop (e.g. an unreadable parent Gateway on a
 // Route trace) reaches the verdict downgrade. The earlier downstream-

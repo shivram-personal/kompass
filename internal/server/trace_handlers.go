@@ -65,6 +65,14 @@ func (s *Server) handleTrace(w http.ResponseWriter, r *http.Request) {
 		// on impersonation failure; the probe layer treats nil as "skip the
 		// apiserver path," which is the correct fail-closed behavior.
 		Client: k8s.ClientFromContext(r.Context()),
+		// Carry the per-user namespace allow-list into the trace walk so
+		// cross-namespace fan-out (Route backendRefs, parent Gateways,
+		// upstream Routes for a Service) is redacted when the dependent
+		// is outside scope. Without this, the cluster-wide cache would
+		// leak Service config + pod IPs + findings the handler did not
+		// authorize. Empty list means single-user / auth-disabled, where
+		// every namespace is in scope.
+		AllowedNamespaces: namespaces,
 	}
 	opts := trace.Options{
 		Probe: queryTrue(r, "probe"),

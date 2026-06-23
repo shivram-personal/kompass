@@ -9,7 +9,9 @@ The trace has two layers:
 1. **Static** — is the path wired correctly in config + current pod state? Pure functions over the in-memory informer cache, no per-call API requests. Always on.
 2. **Active reachability test** (optional, one-shot) — send DNS / TCP / TLS / HTTP probes along the declared path and report what came back. Runs only when the operator clicks **Run test**.
 
-The active layer adds evidence; it never overrides the static verdict.
+The active layer can escalate the static verdict when probes give clear evidence of a real failure on a hop (every non-skipped probe failed → that hop counts toward broken; over half failed → counts toward degraded). It never softens a static verdict: a critical static finding outranks probe state, and an unverifiable path stays unverifiable.
+
+Probes run from the operator's current vantage (laptop or in-cluster). A failure caused by the vantage itself — NetworkPolicy blocking Radar's path, a service-mesh mTLS handshake without a client cert — surfaces as a probe failure and can escalate the verdict the same way a real failure would. See "What it deliberately does NOT do" below for the boundaries of what probes can and cannot tell you.
 
 ## Mental model
 

@@ -200,7 +200,11 @@ func TLS(ctx context.Context, addr, serverName string, vantage Vantage) Result {
 // HTTP performs one GET against url. Redirects are not followed: a 301
 // response and the destination it points at are independent results, and
 // chasing the redirect would conflate them. The Host header is set to host
-// when non-empty so callers can probe via IP while presenting a hostname.
+// when non-empty so callers can probe via IP while presenting a hostname;
+// the same value is set as TLS ServerName so SNI matches what the
+// certificate names, not the IP in the URL. Without ServerName Go derives
+// SNI from the URL host, so a Gateway HTTPS probe dialed by IP would fail
+// cert verify even when the server is healthy.
 func HTTP(ctx context.Context, url, host string, vantage Vantage) Result {
 	r := Result{Layer: LayerHTTP, Target: url, Vantage: vantage}
 	if url == "" {
@@ -217,9 +221,13 @@ func HTTP(ctx context.Context, url, host string, vantage Vantage) Result {
 		req.Host = host
 	}
 	req.Header.Set("User-Agent", "radar-trace-probe/1 (https://github.com/skyhook-io/radar)")
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if host != "" {
+		tlsCfg.ServerName = host
+	}
 	client := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		Transport:     &http.Transport{TLSClientConfig: &tls.Config{MinVersion: tls.VersionTLS12}},
+		Transport:     &http.Transport{TLSClientConfig: tlsCfg},
 	}
 	start := time.Now()
 	resp, err := client.Do(req)

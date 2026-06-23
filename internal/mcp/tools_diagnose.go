@@ -30,7 +30,7 @@ import (
 // pod set for log fan-out; GitOps reconcilers take a no-pods status path.
 type diagnoseInput struct {
 	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, a GitOps reconciler (application, kustomization, helmrelease) for sync/health summary + parsed failure cause, or a network entry kind (service, ingress, httproute, grpcroute, gateway) for a path-shaped trace of which hop drops traffic"`
-	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes against the declared path. Uses direct TCP when radar is in-cluster, K8s API server proxy from a laptop — the same call works either way. Probes never override the static verdict; they add evidence. Costs 0-3s wall time. No effect for non-network kinds."`
+	Probe     bool   `json:"probe,omitempty" jsonschema:"active reachability test for network entry kinds: when true, augment the static trace with DNS/TCP/TLS/HTTP probes against the declared path. Uses direct TCP when radar is in-cluster, K8s API server proxy from a laptop — the same call works either way. Probes can escalate the static verdict when failures are unanimous on a hop, but never soften broken or unknown. Probe failures attributable to the vantage (e.g. NetworkPolicy blocking radar's path) can produce false-positive escalations; the per-hop chip carries the granular signal. Costs 0-3s wall time. No effect for non-network kinds."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
@@ -706,6 +706,14 @@ func handleNetworkTraceDiagnose(ctx context.Context, input diagnoseInput, kind s
 		// ClientFromContext returns nil on impersonation failure; the probe
 		// layer treats nil as "skip the apiserver path."
 		Client: k8s.ClientFromContext(ctx),
+		// Carry the caller's namespace scope into the trace walk so
+		// cross-namespace fan-out (Route backendRefs, parent Gateways,
+		// upstream Routes) is redacted when the dependent is outside
+		// scope. filterNamespacesForUser returns the caller's allowed
+		// set; passing only the subject namespace would be too narrow
+		// (every cross-namespace dependency would redact even ones the
+		// caller can read), so pass the full allowed set.
+		AllowedNamespaces: filterNamespacesForUser(ctx, nil),
 	}
 	tr, err := trace.BuildTraceWithOptions(ctx, deps, kind, input.Namespace, input.Name, trace.Options{Probe: input.Probe})
 	if err != nil {

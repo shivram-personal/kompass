@@ -872,7 +872,7 @@ function DiagnoseFromWorkloadHint({ kind, namespace, name, onNavigate }: { kind:
               <button
                 type="button"
                 onClick={() => open(svc)}
-                className="text-theme-accent-primary hover:underline font-medium"
+                className="text-accent-text hover:underline font-medium"
               >
                 {svc.name}
               </button>

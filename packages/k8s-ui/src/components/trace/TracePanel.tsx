@@ -54,31 +54,27 @@ interface TracePanelProps {
  * before reading the message.
  */
 export function TracePanel({ trace, isLoading, error, onRefresh, probeRequested, onRunProbes, onNavigateToResource }: TracePanelProps) {
-  if (isLoading && !trace) {
-    return <PanelMessage tone="muted" message="Loading trace…" />
-  }
-  if (error && !trace) {
-    return <PanelMessage tone="error" message={`Failed to load trace: ${error.message}`} onAction={onRefresh} actionLabel="Retry" />
-  }
-  if (!trace) {
-    return <PanelMessage tone="muted" message="No trace data available." />
-  }
-  // Server-side normalization fills these as []; the nullish-coalesce
-  // covers any future shape drift without crashing the iteration.
-  const upstreams = (trace.upstreams ?? []).map(normalizeHopFindings)
-  const downstream = (trace.downstream ?? []).map(normalizeHopFindings)
-  const hasPath = downstream.length > 0 || upstreams.length > 0
-  const probesPresent = hasAnyProbes(trace)
-  const feasibility = useMemo(() => probeFeasibility([...upstreams, ...downstream]), [upstreams, downstream])
-  // Layout is padding-free; the consumer (Diagnose tab or drawer Section)
-  // owns the outer spacing so we don't double-pad when nested inside a
-  // Radar Section component.
-  const brokenHop = trace.brokenAt >= 0 && trace.brokenAt < downstream.length
-    ? downstream[trace.brokenAt]
-    : undefined
+  // All hooks run unconditionally on every render. The previous shape
+  // returned early on the loading/error/!trace branches before any
+  // hook, so the next render with `trace` populated would mismatch the
+  // hook call count and crash with "Rendered more hooks than during
+  // the previous render." Derive against possibly-undefined trace
+  // upfront; the early returns sit below the hook block.
   const containerRef = useRef<HTMLDivElement | null>(null)
-  // jumpToBroken locates the broken hop's DOM node within the panel and
-  // scrolls + pulses it. Scoping the query to containerRef avoids
+  const upstreams = useMemo(
+    () => (trace?.upstreams ?? []).map(normalizeHopFindings),
+    [trace],
+  )
+  const downstream = useMemo(
+    () => (trace?.downstream ?? []).map(normalizeHopFindings),
+    [trace],
+  )
+  const feasibility = useMemo(
+    () => probeFeasibility([...upstreams, ...downstream]),
+    [upstreams, downstream],
+  )
+  // jumpToBroken locates the broken hop's DOM node within the panel
+  // and scrolls + pulses it. Scoping the query to containerRef avoids
   // matching another panel's broken hop when multiple TracePanels are
   // mounted (e.g. dock + drawer). The data-broken-target attribute is
   // set on whichever HopRow is currently rendered as broken; the
@@ -92,9 +88,26 @@ export function TracePanel({ trace, isLoading, error, onRefresh, probeRequested,
     el.classList.add('trace-broken-pulse')
     window.setTimeout(() => el.classList.remove('trace-broken-pulse'), 1200)
   }, [])
+  if (isLoading && !trace) {
+    return <PanelMessage tone="muted" message="Loading trace…" />
+  }
+  if (error && !trace) {
+    return <PanelMessage tone="error" message={`Failed to load trace: ${error.message}`} onAction={onRefresh} actionLabel="Retry" />
+  }
+  if (!trace) {
+    return <PanelMessage tone="muted" message="No trace data available." />
+  }
+  const hasPath = downstream.length > 0 || upstreams.length > 0
+  const probesPresent = hasAnyProbes(trace)
+  // Layout is padding-free; the consumer (Diagnose tab or drawer
+  // Section) owns the outer spacing so we don't double-pad when nested
+  // inside a Radar Section component.
+  const brokenHop = trace.brokenAt >= 0 && trace.brokenAt < downstream.length
+    ? downstream[trace.brokenAt]
+    : undefined
   return (
     <div ref={containerRef} className="flex flex-col gap-3">
-      <VerdictBanner verdict={trace.verdict} reason={trace.reason} brokenHop={brokenHop} unknownClass={trace.unknownClass} onRefresh={onRefresh} onJumpToBroken={brokenHop && brokenHop.resource.name ? jumpToBroken : undefined} />
+      <VerdictBanner verdict={trace.verdict} reason={trace.reason} brokenHop={brokenHop} unknownClass={trace.unknownClass} probesPresent={probesPresent} onRefresh={onRefresh} onJumpToBroken={brokenHop && brokenHop.resource.name ? jumpToBroken : undefined} />
       {onRunProbes && hasPath && (
         <ReachabilitySection
           feasibility={feasibility}
@@ -162,7 +175,7 @@ const VERDICT_ICON: Record<Verdict, React.ComponentType<{ className?: string }>>
   unknown: AlertTriangle,
 }
 
-function VerdictBanner({ verdict, reason, brokenHop, unknownClass, onRefresh, onJumpToBroken }: { verdict: Verdict; reason?: string; brokenHop?: Hop; unknownClass?: 'by-design' | 'investigate'; onRefresh?: () => void; onJumpToBroken?: () => void }) {
+function VerdictBanner({ verdict, reason, brokenHop, unknownClass, probesPresent, onRefresh, onJumpToBroken }: { verdict: Verdict; reason?: string; brokenHop?: Hop; unknownClass?: 'by-design' | 'investigate'; probesPresent?: boolean; onRefresh?: () => void; onJumpToBroken?: () => void }) {
   // When a single hop is the locus of the break/degrade, name it in the
   // banner title — a generic "Traffic path is degraded" leaves the
   // operator without a starting point. Synthetic collection hops (Pods,
@@ -178,6 +191,12 @@ function VerdictBanner({ verdict, reason, brokenHop, unknownClass, onRefresh, on
     title = verdict === 'broken'
       ? `${label} is broken - traffic can't pass`
       : `${label} is degraded`
+  } else if (verdict === 'healthy' && !probesPresent) {
+    // Static-only healthy reads as overclaim - green + checkmark says
+    // "fine, look elsewhere" when only config consistency was confirmed,
+    // not actual traffic. Qualify the banner so the operator knows
+    // probing would tighten the conclusion.
+    title = 'Configuration looks healthy - run the reachability test to confirm traffic actually flows'
   }
   if (verdict === 'unknown' && unknownClass === 'by-design') {
     // Steady-state unverifiable shapes (selectorless, ExternalName) read

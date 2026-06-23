@@ -584,6 +584,23 @@ func routeUpstreamsForService(deps Deps, svc *corev1.Service, kind string) []Hop
 			continue
 		}
 		ref := ResourceRef{Group: "gateway.networking.k8s.io", Kind: kind, Namespace: route.GetNamespace(), Name: route.GetName()}
+		// A Route referencing this Service from a namespace outside the
+		// caller's scope still belongs in the trace (so the topology
+		// isn't a lie) but its findings are suppressed; the existence
+		// of the dependency is in-scope, the Route's own state is not.
+		if !deps.NamespaceAllowed(route.GetNamespace()) {
+			out = append(out, Hop{
+				Resource: ref,
+				Edge:     kind + "->Service",
+				Meta:     map[string]any{"endpointSource": "unknown"},
+				Findings: []Finding{{
+					Code:     "rbac:cross-namespace-redacted",
+					Severity: SeverityInfo,
+					Message:  fmt.Sprintf("Upstream %s %q is in namespace %q, which is outside the namespaces you can read. Its findings are not shown.", kind, route.GetName(), route.GetNamespace()),
+				}},
+			})
+			continue
+		}
 		out = append(out, Hop{
 			Resource: ref,
 			Edge:     kind + "->Service",
@@ -847,6 +864,25 @@ func traceRouteEntry(deps Deps, t *Trace, kind string) {
 	}
 	for _, b := range backends {
 		svcRef := ResourceRef{Kind: "Service", Namespace: b.Namespace, Name: b.Name}
+		// A backendRef pointing at a Service the caller can't read must
+		// still appear in the trace (so the path doesn't pretend it
+		// doesn't exist) but its config + pod fan-out + probes are
+		// suppressed and the hop is marked unverifiable. Without the
+		// scope check, the cluster-wide cache would leak resources the
+		// REST handler did not authorize. See Deps.AllowedNamespaces.
+		if !deps.NamespaceAllowed(b.Namespace) {
+			hops = append(hops, Hop{
+				Resource: svcRef,
+				Edge:     kind + "->Service",
+				Meta:     map[string]any{"endpointSource": "unknown"},
+				Findings: []Finding{{
+					Code:     "rbac:cross-namespace-redacted",
+					Severity: SeverityInfo,
+					Message:  fmt.Sprintf("Backend Service %q is in namespace %q, which is outside the namespaces you can read. Its config and probe results are not shown.", b.Name, b.Namespace),
+				}},
+			})
+			continue
+		}
 		svcHop := Hop{
 			Resource: svcRef,
 			Edge:     kind + "->Service",
@@ -1024,8 +1060,25 @@ func routeParentGateways(deps Deps, route *unstructured.Unstructured) []Hop {
 			continue
 		}
 		seen[key] = true
-		gw, gwErr := deps.Dynamic.Get(gvr, ns, name)
 		ref := ResourceRef{Group: "gateway.networking.k8s.io", Kind: "Gateway", Namespace: ns, Name: name}
+		// A parent Gateway in a namespace outside the caller's scope
+		// still belongs in the trace so the path doesn't pretend the
+		// route is orphaned, but config + probes + findings are
+		// redacted and the hop is marked unverifiable.
+		if !deps.NamespaceAllowed(ns) {
+			out = append(out, Hop{
+				Resource: ref,
+				Edge:     "Gateway->Route",
+				Meta:     map[string]any{"endpointSource": "unknown"},
+				Findings: []Finding{{
+					Code:     "rbac:cross-namespace-redacted",
+					Severity: SeverityInfo,
+					Message:  fmt.Sprintf("Parent Gateway %q is in namespace %q, which is outside the namespaces you can read. Its config and probe results are not shown.", name, ns),
+				}},
+			})
+			continue
+		}
+		gw, gwErr := deps.Dynamic.Get(gvr, ns, name)
 		findings := hopFindings(deps.Issues, ref)
 		// Only escalate to "missing-parent" on a confirmed NotFound. The
 		// dynamic cache wraps its own sentinel rather than apimachinery's

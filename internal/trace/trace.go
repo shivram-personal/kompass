@@ -59,6 +59,30 @@ type Deps struct {
 	// through the API server proxy (Service/Pod /proxy). Optional — when
 	// nil, probes fall back to direct TCP only.
 	Client kubernetes.Interface
+	// AllowedNamespaces is the per-request namespace allow-list derived
+	// from the caller's RBAC. When empty (single-user / auth-disabled),
+	// every namespace is in-scope. When non-empty, a hop in any other
+	// namespace is rendered as a referenced ResourceRef without config
+	// or probes, and flagged unverifiable in the verdict — the caller
+	// can see that a cross-namespace dependency exists without leaking
+	// the dependent's shape or live state.
+	AllowedNamespaces []string
+}
+
+// NamespaceAllowed reports whether the caller's RBAC scope permits
+// reading resources in ns. An empty AllowedNamespaces means "no
+// scope filtering," consistent with the single-user / auth-disabled
+// default.
+func (d Deps) NamespaceAllowed(ns string) bool {
+	if len(d.AllowedNamespaces) == 0 {
+		return true
+	}
+	for _, allowed := range d.AllowedNamespaces {
+		if allowed == ns {
+			return true
+		}
+	}
+	return false
 }
 
 // ResourceRef points at a single Kubernetes object in the trace.
