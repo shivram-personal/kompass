@@ -20,7 +20,6 @@ import {
 } from "lucide-react";
 import { stringify as toYaml } from "yaml";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
-import { CodeViewer } from "../ui/CodeViewer";
 import {
   type Diagnosis,
   type DiagnoseStep,
@@ -818,7 +817,6 @@ function ToolResultDialog({
   truncated?: boolean;
 }) {
   const [fmt, setFmt] = useState<"yaml" | "json">("yaml");
-  const [copied, setCopied] = useState(false);
   const parsed = useMemo<{ ok: boolean; value?: unknown }>(() => {
     try {
       return { ok: true, value: JSON.parse(text) };
@@ -832,8 +830,10 @@ function ToolResultDialog({
     : fmt === "yaml"
       ? safeYaml(parsed.value)
       : JSON.stringify(parsed.value, null, 2);
-  const language = parsed.ok ? fmt : "text";
 
+  // Plain <pre> (not a syntax-highlighting viewer) so the payload renders instantly
+  // and reliably; the formatting + the JSON/YAML toggle carry readability, and the
+  // browser's native find works on the real DOM text.
   return (
     <DialogPortal open={open} onClose={onClose} className="w-[min(90vw,820px)]">
       <div className="flex items-center justify-between gap-3 border-b border-theme-border p-3">
@@ -847,34 +847,25 @@ function ToolResultDialog({
             </div>
           )}
         </div>
-        {parsed.ok && (
-          <div className="w-36 shrink-0">
-            <Segmented<"yaml" | "json">
-              value={fmt}
-              onChange={setFmt}
-              options={[
-                { value: "yaml", label: "YAML" },
-                { value: "json", label: "JSON" },
-              ]}
-            />
-          </div>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {parsed.ok && (
+            <div className="w-32">
+              <Segmented<"yaml" | "json">
+                value={fmt}
+                onChange={setFmt}
+                options={[
+                  { value: "yaml", label: "YAML" },
+                  { value: "json", label: "JSON" },
+                ]}
+              />
+            </div>
+          )}
+          <CopyButton text={display} />
+        </div>
       </div>
-      <div className="p-3">
-        <CodeViewer
-          code={display}
-          language={language}
-          maxHeight="60vh"
-          showLineNumbers
-          showCopyButton
-          copied={copied}
-          onCopy={() => {
-            void navigator.clipboard?.writeText(display);
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
-          }}
-        />
-      </div>
+      <pre className="m-3 max-h-[60vh] overflow-auto rounded-md border border-theme-border bg-theme-base p-3 font-mono text-xs leading-relaxed text-theme-text-secondary">
+        {display}
+      </pre>
     </DialogPortal>
   );
 }

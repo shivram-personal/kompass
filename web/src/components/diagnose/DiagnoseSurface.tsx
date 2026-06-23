@@ -29,6 +29,29 @@ import { ConsentCard } from "./parts";
 import { buildLaunchCommand, launchAgentLabel, openInTerminal } from "./launch";
 import { type RunSummary } from "../../api/diagnose";
 
+function capWord(s: string): string {
+  return s ? s[0].toUpperCase() + s.slice(1) : s;
+}
+
+// buildConfigLine renders the active AI config as the header subtitle. Codex shows
+// its isolation mode + effective reasoning effort (Default → medium); a model
+// override is shown for either agent. Reflects a run's recorded settings, or the
+// current defaults on Home.
+function buildConfigLine(cfg: {
+  agent?: string;
+  isolated?: boolean;
+  model?: string;
+  effort?: string;
+}): string {
+  const parts = [agentLabelFor(cfg.agent ?? "")];
+  if (cfg.agent === "codex") {
+    parts.push(cfg.isolated === false ? "My setup" : "Isolated");
+    parts.push(`${capWord(cfg.effort || "medium")} effort`);
+  }
+  if (cfg.model) parts.push(capWord(cfg.model));
+  return "via " + parts.join(" · ");
+}
+
 // InvestigationMenu hands an investigation off to the user's own full agent. The
 // PRIMARY action copies a resume command they can paste wherever they actually
 // work (terminal, tmux, IDE) — destination-agnostic. Running it in Radar's built-in
@@ -55,7 +78,7 @@ function InvestigationMenu({ run }: { run: RunSummary }) {
   };
 
   return (
-    <div className="relative">
+    <div className="relative flex items-center">
       <Tooltip content="More" position="bottom">
         <button
           onClick={toggle}
@@ -172,12 +195,17 @@ export function DiagnoseSurface({
   const activeAgentLabel = activeRun?.agent
     ? agentLabelFor(activeRun.agent)
     : d.agentLabel;
-  // The header subtitle: "via <agent>" plus the run's/selected mode. Isolation
-  // only differs for Codex, so only annotate it there.
-  const modeAgent = activeRun?.agent ?? d.selectedAgent;
-  const modeIsolated = activeRun ? activeRun.isolated !== false : d.isolated;
-  const modeSuffix =
-    modeAgent === "codex" ? (modeIsolated ? " · Isolated" : " · My setup") : "";
+  // Header subtitle: the config a focused run actually used (it records agent /
+  // isolation / model / effort), or the current defaults on Home. Codex shows mode
+  // + reasoning effort; model is shown only when overridden. Clicking opens Settings.
+  const configLine = buildConfigLine(
+    activeRun ?? {
+      agent: d.selectedAgent,
+      isolated: d.isolated,
+      model: d.model,
+      effort: d.effort,
+    },
+  );
   const detailTitle = activeRun
     ? `${activeRun.kind} ${activeRun.namespace ? `${activeRun.namespace}/` : ""}${activeRun.name}`
     : "AI investigations";
@@ -263,11 +291,7 @@ export function DiagnoseSurface({
               {detailTitle}
             </div>
             <div className="flex items-center gap-1 text-xs text-theme-text-tertiary">
-              <span className="truncate">
-                {d.view === "home"
-                  ? `via ${d.agentLabel}${modeSuffix}`
-                  : `${activeAgentLabel}${modeSuffix}`}
-              </span>
+              <span className="truncate">{configLine}</span>
               <Tooltip content="AI settings" position="bottom">
                 <button
                   onClick={openDiagnoseSettings}
