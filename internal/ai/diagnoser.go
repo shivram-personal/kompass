@@ -113,7 +113,10 @@ type StepInfo struct {
 	Status  string `json:"status"` // "running" | "done"
 	Ms      *int64 `json:"ms,omitempty"`
 	Summary string `json:"summary,omitempty"` // input args (on running)
-	Result  string `json:"result,omitempty"`  // result preview (on done)
+	Result  string `json:"result,omitempty"`  // result text (on done), capped
+	// Truncated marks that Result was capped — so the UI tells the user the
+	// payload (and anything they copy) is partial, not the complete tool output.
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 // radarReadTools is the explicit allowlist of Radar MCP read tools the agent may
@@ -600,8 +603,9 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 				case "tool_use":
 					tool := strings.TrimPrefix(b.Name, "mcp__radar__")
 					starts[b.ID] = time.Now()
+					args, _ := capPayload(strings.TrimSpace(string(b.Input)))
 					onEvent(StreamEvent{Type: "step", Step: &StepInfo{
-						ID: b.ID, Tool: tool, Status: "running", Summary: summarize(b.Input),
+						ID: b.ID, Tool: tool, Status: "running", Summary: args,
 					}})
 				}
 			}
@@ -618,8 +622,9 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 					v := time.Since(t0).Milliseconds()
 					ms = &v
 				}
+				res, trunc := capPayload(claudeResultText(b.Content))
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
-					ID: b.ToolUseID, Status: "done", Ms: ms, Result: preview(b.Content, 800),
+					ID: b.ToolUseID, Status: "done", Ms: ms, Result: res, Truncated: trunc,
 				}})
 			}
 		case "result":
@@ -637,12 +642,46 @@ func parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnosis {
 	return d
 }
 
-func summarize(raw json.RawMessage) string { return preview(raw, 200) }
+// maxToolPayload caps a tool's input/result text held in the (in-memory) event
+// log. 32 KiB comfortably holds any single resource; worst case across retained
+// runs is a few MB locally. Larger payloads are truncated + flagged.
+const maxToolPayload = 32 << 10
 
-func preview(raw json.RawMessage, max int) string {
+// capPayload truncates s to maxToolPayload runes, reporting whether it cut.
+func capPayload(s string) (string, bool) {
+	if r := []rune(s); len(r) > maxToolPayload {
+		return string(r[:maxToolPayload]) + "\n…", true
+	}
+	return s, false
+}
+
+// claudeResultText extracts human-readable text from a Claude tool_result's
+// content, which can be a plain JSON string ("crashloop"), an MCP content array
+// ([{type:"text",text:…}]), or some other JSON value (returned as-is).
+func claudeResultText(raw json.RawMessage) string {
 	s := strings.TrimSpace(string(raw))
-	if r := []rune(s); len(r) > max {
-		return string(r[:max]) + "…"
+	if s == "" {
+		return ""
+	}
+	switch s[0] {
+	case '"':
+		var str string
+		if json.Unmarshal(raw, &str) == nil {
+			return str
+		}
+	case '[':
+		var parts []struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(raw, &parts) == nil {
+			var b strings.Builder
+			for _, p := range parts {
+				b.WriteString(p.Text)
+			}
+			if b.Len() > 0 {
+				return b.String()
+			}
+		}
 	}
 	return s
 }

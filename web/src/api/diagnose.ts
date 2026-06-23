@@ -23,7 +23,8 @@ export interface DiagnoseStep {
   status: "running" | "done";
   ms?: number;
   summary?: string; // input args (on running)
-  result?: string; // result preview (on done)
+  result?: string; // result text (on done), capped
+  truncated?: boolean; // result was capped — payload shown/copied is partial
 }
 
 export interface Diagnosis {

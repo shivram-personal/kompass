@@ -164,3 +164,34 @@ func TestAgentExitError_Classifies(t *testing.T) {
 		t.Errorf("expected raw stderr tail preserved, got %q", got)
 	}
 }
+
+// TestClaudeResultText covers the tool_result.content shapes: a plain JSON string
+// (pinned in the format test), an MCP content array, multipart text, and a raw
+// JSON object passed through.
+func TestClaudeResultText(t *testing.T) {
+	cases := []struct{ raw, want string }{
+		{`"crashloop"`, "crashloop"},                                            // JSON string content
+		{`[{"type":"text","text":"hello"}]`, "hello"},                           // single content block
+		{`[{"type":"text","text":"a"},{"type":"text","text":"b"}]`, "ab"},       // multipart
+		{`{"apiVersion":"v1","kind":"Pod"}`, `{"apiVersion":"v1","kind":"Pod"}`}, // object → raw
+	}
+	for _, c := range cases {
+		if got := claudeResultText([]byte(c.raw)); got != c.want {
+			t.Errorf("claudeResultText(%s) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+}
+
+func TestCapPayload(t *testing.T) {
+	if s, trunc := capPayload("short"); trunc || s != "short" {
+		t.Errorf("short payload should not truncate, got %q trunc=%v", s, trunc)
+	}
+	big := strings.Repeat("x", maxToolPayload+500)
+	s, trunc := capPayload(big)
+	if !trunc {
+		t.Error("oversized payload should be flagged truncated")
+	}
+	if len([]rune(s)) > maxToolPayload+2 {
+		t.Errorf("truncated payload not capped: %d runes", len([]rune(s)))
+	}
+}

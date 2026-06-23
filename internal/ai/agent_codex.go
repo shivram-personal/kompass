@@ -153,7 +153,7 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			if e.Item != nil && e.Item.Type == "mcp_tool_call" {
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 					ID: e.Item.ID, Tool: e.Item.Tool, Status: "running",
-					Summary: codexArgsPreview(e.Item.Arguments),
+					Summary: codexArgsText(e.Item.Arguments),
 				}})
 			}
 		case "item.completed":
@@ -162,9 +162,10 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 			}
 			switch e.Item.Type {
 			case "mcp_tool_call":
+				res, trunc := capPayload(codexResultText(e.Item))
 				onEvent(StreamEvent{Type: "step", Step: &StepInfo{
 					ID: e.Item.ID, Tool: e.Item.Tool, Status: "done",
-					Result: codexToolResultPreview(e.Item),
+					Result: res, Truncated: trunc,
 				}})
 			case "reasoning":
 				if e.Item.Text != "" {
@@ -184,15 +185,19 @@ func (a *codexAgent) parseStream(r io.Reader, onEvent func(StreamEvent)) Diagnos
 	return d
 }
 
-func codexArgsPreview(raw json.RawMessage) string {
+func codexArgsText(raw json.RawMessage) string {
 	s := strings.TrimSpace(string(raw))
 	if s == "" || s == "null" || s == "{}" {
 		return ""
 	}
-	return capPreview(s, 400)
+	args, _ := capPayload(s)
+	return args
 }
 
-func codexToolResultPreview(it *codexItem) string {
+// codexResultText joins the text parts of a Codex mcp_tool_call result (already
+// the unwrapped content[].text shape). Capping happens at the call site so the
+// truncated flag can be surfaced.
+func codexResultText(it *codexItem) string {
 	if it.Result == nil {
 		return ""
 	}
@@ -200,12 +205,5 @@ func codexToolResultPreview(it *codexItem) string {
 	for _, c := range it.Result.Content {
 		b.WriteString(c.Text)
 	}
-	return capPreview(b.String(), 2000)
-}
-
-func capPreview(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n]) + "…"
-	}
-	return s
+	return b.String()
 }

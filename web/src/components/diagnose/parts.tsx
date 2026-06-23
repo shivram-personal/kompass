@@ -2,7 +2,7 @@
 // persistence, no app/routing knowledge) so they lift cleanly into k8s-ui later
 // and Cloud can reuse them. The stateful controller lives in DiagnoseContext;
 // the run logic in InvestigationView.
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Loader2,
   CheckCircle2,
@@ -16,8 +16,11 @@ import {
   Wand2,
   Sparkles,
   RefreshCw,
+  Maximize2,
 } from "lucide-react";
+import { stringify as toYaml } from "yaml";
 import { DialogPortal } from "@skyhook-io/k8s-ui/components/ui/DialogPortal";
+import { CodeViewer } from "../ui/CodeViewer";
 import {
   type Diagnosis,
   type DiagnoseStep,
@@ -33,16 +36,18 @@ function Segmented<T extends string | boolean>({
   value,
   onChange,
 }: {
-  label: string;
+  label?: string;
   options: { value: T; label: string }[];
   value: T;
   onChange: (v: T) => void;
 }) {
   return (
     <div>
-      <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
-        {label}
-      </div>
+      {label && (
+        <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-theme-text-tertiary">
+          {label}
+        </div>
+      )}
       <div className="flex gap-1 rounded-lg border border-theme-border bg-theme-base p-1">
         {options.map((o) => (
           <button
@@ -334,6 +339,7 @@ export type TimelineItem =
       ms?: number;
       summary?: string;
       result?: string;
+      truncated?: boolean;
     };
 
 export function appendThinking(
@@ -664,7 +670,11 @@ export function Timeline({
 
 function ToolRow({ step }: { step: Extract<TimelineItem, { kind: "tool" }> }) {
   const [open, setOpen] = useState(false);
+  const [showFull, setShowFull] = useState(false);
   const hasDetail = !!(step.summary || step.result);
+  // Offer the rich dialog when the result is structured or non-trivial in size.
+  const richResult =
+    !!step.result && (isJsonPayload(step.result) || step.result.length > 200);
   return (
     <div className="rounded-md border border-theme-border/60 bg-theme-base/40">
       <button
@@ -700,31 +710,181 @@ function ToolRow({ step }: { step: Extract<TimelineItem, { kind: "tool" }> }) {
       {hasDetail && (
         <Collapse open={open}>
           <div className="space-y-2 border-t border-theme-border/60 px-2 py-2">
-            {step.summary && (
-              <div>
-                <div className="mb-0.5 text-[10px] uppercase tracking-wide text-theme-text-tertiary">
-                  Input
-                </div>
-                <pre className="overflow-x-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary">
-                  {step.summary}
-                </pre>
-              </div>
-            )}
+            {step.summary && <PayloadBlock label="Input" text={step.summary} />}
             {step.result && (
-              <div>
-                <div className="mb-0.5 text-[10px] uppercase tracking-wide text-theme-text-tertiary">
-                  Result
-                </div>
-                <pre className="max-h-48 overflow-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary">
-                  {step.result}
-                </pre>
-              </div>
+              <PayloadBlock
+                label="Result"
+                text={step.result}
+                truncated={step.truncated}
+                action={
+                  richResult ? (
+                    <button
+                      onClick={() => setShowFull(true)}
+                      className="flex items-center gap-1 text-[11px] text-accent hover:underline"
+                    >
+                      <Maximize2 className="h-3 w-3" />
+                      View payload
+                    </button>
+                  ) : undefined
+                }
+              />
             )}
           </div>
         </Collapse>
       )}
+      {step.result && (
+        <ToolResultDialog
+          open={showFull}
+          onClose={() => setShowFull(false)}
+          title={prettyTool(step.tool)}
+          text={step.result}
+          truncated={step.truncated}
+        />
+      )}
     </div>
   );
+}
+
+// isJsonPayload / formatJson — a tool result is "structured" if it parses as JSON.
+function isJsonPayload(text: string): boolean {
+  try {
+    JSON.parse(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function formatJson(text: string): string | null {
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2);
+  } catch {
+    return null;
+  }
+}
+
+// PayloadBlock — compact inline view of a tool input/result: pretty JSON (scrolled
+// to keep indentation) or wrapped text (logs/prose), with copy + optional action.
+function PayloadBlock({
+  label,
+  text,
+  truncated,
+  action,
+}: {
+  label: string;
+  text: string;
+  truncated?: boolean;
+  action?: ReactNode;
+}) {
+  const json = formatJson(text);
+  return (
+    <div>
+      <div className="mb-0.5 flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">
+          {label}
+        </span>
+        <div className="flex items-center gap-2">
+          {action}
+          <CopyButton text={json ?? text} />
+        </div>
+      </div>
+      <pre
+        className={`max-h-64 overflow-auto rounded bg-theme-elevated p-1.5 font-mono text-[11px] text-theme-text-secondary ${json ? "" : "whitespace-pre-wrap [overflow-wrap:anywhere]"}`}
+      >
+        {json ?? text}
+      </pre>
+      {truncated && (
+        <div className="mt-0.5 text-[10px] text-amber-500">
+          Capped at 32 KB — partial output.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ToolResultDialog — the rich payload viewer: syntax-highlighted + searchable via
+// CodeViewer, with a JSON⇄YAML toggle for structured results (YAML default — k8s
+// reads better) and plain text for non-JSON (logs/prose).
+function ToolResultDialog({
+  open,
+  onClose,
+  title,
+  text,
+  truncated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  title: string;
+  text: string;
+  truncated?: boolean;
+}) {
+  const [fmt, setFmt] = useState<"yaml" | "json">("yaml");
+  const [copied, setCopied] = useState(false);
+  const parsed = useMemo<{ ok: boolean; value?: unknown }>(() => {
+    try {
+      return { ok: true, value: JSON.parse(text) };
+    } catch {
+      return { ok: false };
+    }
+  }, [text]);
+
+  const display = !parsed.ok
+    ? text
+    : fmt === "yaml"
+      ? safeYaml(parsed.value)
+      : JSON.stringify(parsed.value, null, 2);
+  const language = parsed.ok ? fmt : "text";
+
+  return (
+    <DialogPortal open={open} onClose={onClose} className="w-[min(90vw,820px)]">
+      <div className="flex items-center justify-between gap-3 border-b border-theme-border p-3">
+        <div className="min-w-0">
+          <div className="truncate font-mono text-sm text-theme-text-primary">
+            {title}
+          </div>
+          {truncated && (
+            <div className="text-[11px] text-amber-500">
+              Capped at 32 KB — partial output.
+            </div>
+          )}
+        </div>
+        {parsed.ok && (
+          <div className="w-36 shrink-0">
+            <Segmented<"yaml" | "json">
+              value={fmt}
+              onChange={setFmt}
+              options={[
+                { value: "yaml", label: "YAML" },
+                { value: "json", label: "JSON" },
+              ]}
+            />
+          </div>
+        )}
+      </div>
+      <div className="p-3">
+        <CodeViewer
+          code={display}
+          language={language}
+          maxHeight="60vh"
+          showLineNumbers
+          showCopyButton
+          copied={copied}
+          onCopy={() => {
+            void navigator.clipboard?.writeText(display);
+            setCopied(true);
+            setTimeout(() => setCopied(false), 1500);
+          }}
+        />
+      </div>
+    </DialogPortal>
+  );
+}
+
+function safeYaml(value: unknown): string {
+  try {
+    return toYaml(value, { lineWidth: 0 });
+  } catch {
+    return JSON.stringify(value, null, 2);
+  }
 }
 
 // Collapse — the Radar-standard expand/collapse motion (grid-template-rows
