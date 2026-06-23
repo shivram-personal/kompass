@@ -89,7 +89,7 @@ const CLAUDE_MODEL_OPTIONS: Option[] = [
 // Codex has no stable alias set and no way to enumerate models, and slugs change
 // across versions — so we take a free-text override rather than a list that rots.
 const EFFORT_OPTIONS: Option[] = [
-  { value: "", label: "Default", description: "Use Codex's configured effort" },
+  { value: "", label: "Default", description: "Balanced — Radar's default" },
   {
     value: "minimal",
     label: "Minimal",
@@ -638,12 +638,14 @@ export function Timeline({
       )}
       {items.map((it, i) =>
         it.kind === "thinking" ? (
-          <p
+          // The model's reasoning between tool calls — muted + subordinate to the
+          // tool rows. Rendered as markdown so Codex's summary headers read cleanly.
+          <AIMarkdown
             key={i}
-            className="whitespace-pre-wrap py-0.5 text-xs italic leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere]"
+            className="py-0.5 text-xs leading-relaxed text-theme-text-tertiary [overflow-wrap:anywhere] [&_li]:text-theme-text-tertiary [&_p]:my-0.5 [&_strong]:font-medium [&_strong]:text-theme-text-secondary"
           >
             {it.text}
-          </p>
+          </AIMarkdown>
         ) : (
           <ToolRow key={it.id} step={it} />
         ),

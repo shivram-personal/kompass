@@ -41,15 +41,24 @@ func (a *codexAgent) command(ctx context.Context, s turnSpec) (*exec.Cmd, func()
 	// the agent also gets the user's own MCP servers (possibly write/network/cloud
 	// capable) + local file reads: a deliberate trusted mode, not a contained one.
 	base := []string{"--json", "--skip-git-repo-check", "-c", mcpCfg}
+	// Emit reasoning summaries so the UI can show the model's thinking between tool
+	// calls (off by default — without this the stream is only tool calls + the final
+	// message). The Codex parser maps these `reasoning` items to thinking events.
+	base = append(base, "-c", `model_reasoning_summary="auto"`)
 	if s.isolated {
 		base = append(base, "--ignore-user-config")
 	}
 	if s.model != "" {
 		base = append(base, "-m", s.model)
 	}
-	if s.effort != "" {
-		base = append(base, "-c", fmt.Sprintf("model_reasoning_effort=%q", s.effort))
+	// Default to medium reasoning effort (not Codex's bare default) — it gives a
+	// solid investigation AND is the level at which Codex actually emits reasoning
+	// summaries under --ignore-user-config, so the UI can show the model's thinking.
+	effort := s.effort
+	if effort == "" {
+		effort = "medium"
 	}
+	base = append(base, "-c", fmt.Sprintf("model_reasoning_effort=%q", effort))
 
 	var args []string
 	if s.sessionID != "" {
