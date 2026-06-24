@@ -50,6 +50,7 @@ func main() {
 	kubeconfigDir := flag.String("kubeconfig-dir", fileCfg.KubeconfigDirsFlag(), "Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)")
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
+	host := flag.String("host", "127.0.0.1", "Bind address for the server (default: 127.0.0.1 loopback; the engine is reached only by kompass-core within the pod)")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
 	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
 	devMode := flag.Bool("dev", false, "Development mode (serve frontend from filesystem)")
@@ -199,6 +200,7 @@ func main() {
 		Kubeconfig:               *kubeconfig,
 		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
 		Namespace:                *namespace,
+		Host:                     *host,
 		Port:                     *port,
 		NoBrowser:                *noBrowser,
 		Browser:                  *browser,

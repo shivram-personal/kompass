@@ -55,6 +55,7 @@ import (
 type Server struct {
 	router          *chi.Mux
 	broadcaster     *SSEBroadcaster
+	host            string
 	port            int
 	devMode         bool
 	staticFS        fs.FS
@@ -95,6 +96,10 @@ type Server struct {
 
 // Config holds server configuration
 type Config struct {
+	// Host is the bind address for the listener. Empty defaults to
+	// "127.0.0.1" (pod loopback) so the engine is reachable only by
+	// kompass-core within the pod and never exposed directly.
+	Host            string
 	Port            int
 	DevMode         bool           // Serve frontend from filesystem instead of embedded
 	StaticFS        embed.FS       // Embedded frontend files
@@ -112,6 +117,7 @@ func New(cfg Config) *Server {
 	s := &Server{
 		router:          chi.NewRouter(),
 		broadcaster:     NewSSEBroadcaster(),
+		host:            cfg.Host,
 		port:            cfg.Port,
 		devMode:         cfg.DevMode,
 		startTime:       time.Now(),
@@ -587,14 +593,20 @@ func (s *Server) Start() error {
 func (s *Server) StartWithReady(ready chan<- struct{}) error {
 	s.broadcaster.Start()
 
-	addr := fmt.Sprintf(":%d", s.port)
+	// Bind to loopback by default so the engine is reachable only by
+	// kompass-core within the pod. Empty host preserves this default.
+	host := s.host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	addr := fmt.Sprintf("%s:%d", host, s.port)
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	s.listener = ln
 
-	log.Printf("Starting Explorer server on http://localhost:%d", s.ActualPort())
+	log.Printf("Starting Explorer server on http://%s:%d", host, s.ActualPort())
 
 	if ready != nil {
 		close(ready)

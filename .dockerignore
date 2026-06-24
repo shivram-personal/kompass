@@ -5,6 +5,7 @@
 # Build artifacts
 explorer
 dist/
+node_modules/
 web/node_modules/
 
 # IDE

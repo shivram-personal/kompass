@@ -1,0 +1,8 @@
+# kompass-core runtime dependencies (pinned for reproducible, scannable builds).
+fastapi==0.115.6
+starlette==0.41.3
+uvicorn[standard]==0.34.0
+httpx==0.28.1
+pydantic==2.10.4
+pydantic-settings==2.7.1
+sse-starlette==2.2.1

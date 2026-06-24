@@ -1,0 +1,21 @@
+name: test-container
+
+# The mandatory containerized phase gate (SPEC §11). Merges are blocked unless
+# this is green.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: test-container-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run make test-container
+        run: make test-container

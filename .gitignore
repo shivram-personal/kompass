@@ -45,3 +45,10 @@ tmp/
 /radar-amd64
 /*.png
 /AGENTS.md
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/

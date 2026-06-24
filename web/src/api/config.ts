@@ -13,7 +13,12 @@
 // clusters on the same page) is a V2 concern — it would require
 // replacing this with a context.
 
-let apiBase = '/api';
+// Kompass: the browser only ever talks to kompass-core, which mounts the
+// engine's API under /api/engine/* (SPEC §6). All REST, SSE, and WebSocket
+// URLs derive from this base, so repointing it here routes every engine call
+// through the authenticated core proxy. Library-embed hosts can still override
+// via setApiBase().
+let apiBase = '/api/engine';
 let basename = '';
 let authHeadersProvider: () => Record<string, string> = () => ({});
 let credentialsMode: RequestCredentials = 'same-origin';

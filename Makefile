@@ -305,3 +305,23 @@ help:
 	@echo "  make install    - Install CLI to /usr/local/bin"
 	@echo "  make clean      - Clean build artifacts"
 	@echo "  make kill       - Kill running server"
+
+# =============================================================================
+# Kompass — containerized phase gate (SPEC §11)
+# =============================================================================
+.PHONY: test-container
+
+KOMPASS_TEST_IMAGE ?= kompass-test:latest
+SCANS_FATAL ?= 0
+
+# Build the test image (Go/Node/Python/kind/kubectl/Trivy/govulncheck/pip-audit)
+# and run the full gate inside it. The host docker socket is mounted so the gate
+# can build the engine+core images and drive a kind cluster. Exits non-zero on
+# any required failure — a phase is done only when this is green.
+test-container:
+	docker build -f build/test.Dockerfile -t $(KOMPASS_TEST_IMAGE) .
+	docker run --rm \
+	  -v /var/run/docker.sock:/var/run/docker.sock \
+	  -v $(CURDIR):/workspace -w /workspace \
+	  -e SCANS_FATAL=$(SCANS_FATAL) \
+	  $(KOMPASS_TEST_IMAGE)
