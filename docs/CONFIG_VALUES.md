@@ -114,3 +114,48 @@ These are KMS-encrypted at runtime by the app. No placeholders exist for them in
 4. Part C + D → edit the manifests.
 5. Part F → copy legal files from the fork.
 6. Deploy (DEPLOYMENT_GKE.md), then Part G in the running app.
+
+---
+
+## Part H — kompass-core auth & security parameters (Phase 1)
+
+All read from `KOMPASS_`-prefixed environment variables (`kompass_core/config.py`).
+The defaults are production-sound; override only with reason. **Secrets are never
+configured here** — the bootstrap admin password is generated at first start and
+printed once to the core log (Part G1).
+
+### H.1 Argon2id password hashing (explicitly set — not library defaults, SPEC §4.1)
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `KOMPASS_ARGON2_MEMORY_COST` | `65536` | Memory in **KiB** = **64 MiB** |
+| `KOMPASS_ARGON2_TIME_COST` | `3` | Iterations |
+| `KOMPASS_ARGON2_PARALLELISM` | `1` | Lanes |
+| `KOMPASS_ARGON2_HASH_LEN` | `32` | Derived hash length (bytes) |
+| `KOMPASS_ARGON2_SALT_LEN` | `16` | Salt length (bytes) |
+
+Type Argon2**id**. Encoded hashes advertise `$argon2id$v=19$m=65536,t=3,p=1$…`.
+Plaintext passwords are never stored, logged, or returned.
+
+### H.2 Sessions, cookies & CSRF
+
+| Env var | Default | Notes |
+|---|---|---|
+| `KOMPASS_COOKIE_NAME` | `kompass_session` | Session cookie name |
+| `KOMPASS_COOKIE_SECURE` | `true` | Requires HTTPS; set `false` only for plain-HTTP local/dev |
+| `KOMPASS_COOKIE_SAMESITE` | `strict` | CSRF hardening |
+| `KOMPASS_SESSION_IDLE_MINUTES` | `60` | Idle expiry (slides on use) |
+| `KOMPASS_SESSION_ABSOLUTE_HOURS` | `12` | Hard cap regardless of activity |
+| `KOMPASS_CSRF_HEADER` | `X-CSRF-Token` | Double-submit token header for writes |
+
+Session tokens are 256-bit, stored only as a SHA-256 hash; cookies are `HttpOnly`.
+
+### H.3 Authentication policy & scoping
+
+| Env var | Default | Notes |
+|---|---|---|
+| `KOMPASS_LOCKOUT_THRESHOLD` | `5` | Failed attempts before lockout |
+| `KOMPASS_LOCKOUT_MINUTES` | `15` | Lockout duration |
+| `KOMPASS_BOOTSTRAP_ADMIN_USERNAME` | `admin` | First-run admin username |
+| `KOMPASS_CLUSTER_HEADER` | `X-Kompass-Cluster-Id` | Target cluster for editor per-cluster scope on writes |
+| `KOMPASS_DB_URL` | `sqlite:////app/data/kompass.db` | App DB (PVC-backed in GKE) |

@@ -53,9 +53,10 @@ npm ci --no-audit --prefer-offline
 npm run tsc --workspace=web
 
 # ---------------------------------------------------------------------------
-step "kompass-core: pytest"
+step "kompass-core: pytest (incl. role×endpoint authorization matrix)"
 pip install --no-cache-dir -r kompass_core/requirements-dev.txt
-( cd kompass_core && python -m pytest -q )
+# -s surfaces the printed authorization matrix in the gate log.
+( cd kompass_core && python -m pytest -v -s )
 
 # ---------------------------------------------------------------------------
 # Security scans (report-only in Phase 0).
@@ -103,11 +104,14 @@ assert "core /healthz is ok" \
 assert "core /readyz reports engine reachable on loopback" \
   '[ "$(curl -fsS "$BASE/readyz" | jq -r .status)" = "ready" ]'
 
-assert "core proxies /api/engine/* to the engine" \
-  'curl -fsS "$BASE/api/engine/health" >/dev/null'
+assert "unauthenticated /api/engine/* is rejected with 401 (authz gate live)" \
+  '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/engine/topology")" = "401" ]'
 
 assert "engine is NOT reachable except via core (9280 not exposed)" \
   '! curl -fsS --max-time 5 "http://kompass-engine:9280/api/health" >/dev/null 2>&1'
+
+assert "bootstrap admin credentials printed once to the core log" \
+  'docker logs kompass-core 2>&1 | grep -q "INITIAL ADMIN CREDENTIALS"'
 
 assert "UI is served and branded Kompass" \
   'curl -fsS "$BASE/" | grep -q "Kompass"'
@@ -115,4 +119,4 @@ assert "UI is served and branded Kompass" \
 assert "UI carries no upstream Radar branding" \
   '! curl -fsS "$BASE/" | grep -qi "radar"'
 
-green "\nAll Phase 0 gate checks passed."
+green "\nAll Phase 1 gate checks passed."

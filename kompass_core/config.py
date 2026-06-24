@@ -29,6 +29,38 @@ class Settings(BaseSettings):
     # tails) disable the read timeout so long-lived streams are not cut off.
     request_timeout: float = 60.0
 
+    # --- Persistence (SQLite app DB, owned by kompass-core) -----------------
+    db_url: str = "sqlite:////app/data/kompass.db"
+
+    # --- Sessions & cookies -------------------------------------------------
+    cookie_name: str = "kompass_session"
+    # Secure cookies require HTTPS; ingress terminates TLS in prod. Tests and
+    # plain-HTTP local runs set this False.
+    cookie_secure: bool = True
+    cookie_samesite: str = "strict"
+    session_idle_minutes: int = 60
+    session_absolute_hours: int = 12
+    # Double-submit CSRF token required on state-changing requests.
+    csrf_header: str = "X-CSRF-Token"
+
+    # --- Authentication policy ----------------------------------------------
+    lockout_threshold: int = 5
+    lockout_minutes: int = 15
+    bootstrap_admin_username: str = "admin"
+
+    # Argon2id parameters — EXPLICIT, not library defaults (SPEC §4.1).
+    # memory in KiB (65536 KiB = 64 MiB).
+    argon2_time_cost: int = 3
+    argon2_memory_cost: int = 65536
+    argon2_parallelism: int = 1
+    argon2_hash_len: int = 32
+    argon2_salt_len: int = 16
+
+    # --- Per-cluster scoping -------------------------------------------------
+    # Mutating engine requests carry the target cluster id in this header so
+    # core can enforce editor per-cluster scope before proxying (SPEC §4.1).
+    cluster_header: str = "X-Kompass-Cluster-Id"
+
 
 def get_settings() -> Settings:
     return Settings()

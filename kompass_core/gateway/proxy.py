@@ -15,10 +15,11 @@ from __future__ import annotations
 import os
 
 import httpx
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..auth.dependencies import AuthContext, authorize_engine_request
 from ..config import Settings
 
 # Hop-by-hop headers must not be forwarded by a proxy (RFC 7230 §6.1), plus
@@ -71,7 +72,14 @@ def register_gateway(app: FastAPI, settings: Settings) -> None:
         await websocket.close(code=1011)
 
     @app.api_route(prefix + "/{path:path}", methods=_PROXY_METHODS)
-    async def proxy(path: str, request: Request) -> StreamingResponse:
+    async def proxy(
+        path: str,
+        request: Request,
+        ctx: AuthContext = Depends(authorize_engine_request),
+    ) -> StreamingResponse:
+        # Reaching here means the request is authenticated AND authorized for
+        # this method/cluster — denials raised 401/403 before this point and
+        # never touched the engine.
         client: httpx.AsyncClient = request.app.state.engine_client
         target = "/api/" + path  # /api/engine/<path>  ->  engine /api/<path>
 

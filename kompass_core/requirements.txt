@@ -6,3 +6,5 @@ httpx==0.28.1
 pydantic==2.10.4
 pydantic-settings==2.7.1
 sse-starlette==2.2.1
+SQLAlchemy==2.0.36
+argon2-cffi==23.1.0

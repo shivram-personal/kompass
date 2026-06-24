@@ -41,8 +41,12 @@ COPY --from=ui-builder /app/web/dist /app/web
 
 # Non-root, owns nothing it shouldn't. Phase 8 layers read-only rootfs +
 # dropped caps via the pod securityContext.
-RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin kompass
+RUN useradd --uid 10001 --no-create-home --shell /usr/sbin/nologin kompass \
+    && mkdir -p /app/data && chown 10001:10001 /app/data
+# SQLite app DB lives here (PVC-mounted in GKE). Owned by the runtime user.
+ENV KOMPASS_DB_URL=sqlite:////app/data/kompass.db
 USER 10001:10001
+VOLUME ["/app/data"]
 
 EXPOSE 8080
 ENTRYPOINT ["python", "-m", "kompass_core"]

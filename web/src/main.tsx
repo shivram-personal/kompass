@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { configureBundledMonaco } from './monaco-setup'
 import { RadarApp } from './RadarApp'
+import { KompassAuthGate } from './kompass/KompassAuthGate'
 import { openExternal } from './utils/navigation'
 import './index.css'
 
@@ -155,10 +156,14 @@ window.addEventListener('mouseup', (e: MouseEvent) => {
 }, true)
 
 
-// Standalone Radar binary: same-origin API, router at root. Library consumers
-// (e.g. radar-hub-web) render <RadarApp apiBase="..." basename="..." /> instead.
+// Standalone Kompass: the app is gated behind kompass-core auth. The engine UI
+// (RadarApp) only mounts once a Kompass session exists and any forced password
+// change is complete. Library consumers (e.g. radar-hub-web) embed RadarApp
+// directly and supply their own auth.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <RadarApp />
+    <KompassAuthGate>
+      <RadarApp />
+    </KompassAuthGate>
   </React.StrictMode>
 )
