@@ -159,3 +159,35 @@ Session tokens are 256-bit, stored only as a SHA-256 hash; cookies are `HttpOnly
 | `KOMPASS_BOOTSTRAP_ADMIN_USERNAME` | `admin` | First-run admin username |
 | `KOMPASS_CLUSTER_HEADER` | `X-Kompass-Cluster-Id` | Target cluster for editor per-cluster scope on writes |
 | `KOMPASS_DB_URL` | `sqlite:////app/data/kompass.db` | App DB (PVC-backed in GKE) |
+
+### H.4 KMS envelope encryption for kubeconfigs & secrets (Phase 2, SPEC §4.2)
+
+Kubeconfigs (and, later, provider API keys + the OIDC secret) are envelope-encrypted:
+a random data key (DEK) encrypts the secret with AES-256-GCM, and the DEK is wrapped
+by a KMS key. The DB stores **only** ciphertext + wrapped DEK + nonce — never plaintext
+and never the unwrapped DEK.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `KOMPASS_KMS_PROVIDER` | `local` | `gcp` for production (Cloud KMS); `local` is a dev/test stand-in |
+| `KOMPASS_KMS_KEY_NAME` | `""` | **GCP:** full key resource name (see below) |
+| `KOMPASS_LOCAL_KMS_KEY` | `""` | **Local stand-in only:** base64 of a 32-byte KEK, supplied out-of-band |
+
+**Production (GCP), set `KOMPASS_KMS_PROVIDER=gcp` and `KOMPASS_KMS_KEY_NAME` to the key
+resource created in `DEPLOYMENT_GKE.md` §2:**
+```
+projects/<PROJECT_ID>/locations/<REGION>/keyRings/kompass/cryptoKeys/kompass-app-secrets
+```
+Authentication is via **Workload Identity** — no static keys (`DEPLOYMENT_GKE.md` §3):
+the GSA `kompass-app@<PROJECT_ID>.iam.gserviceaccount.com` holds
+`roles/cloudkms.cryptoKeyEncrypterDecrypter` **on that key only**, and the KSA
+`kompass-ksa` (namespace `kompass`) is bound to it via `roles/iam.workloadIdentityUser`.
+The core container needs no key file — the Cloud KMS client uses the pod's Workload
+Identity credentials.
+
+**Local/kind/test stand-in (`KOMPASS_KMS_PROVIDER=local`):** the DEK is wrapped with a
+local KEK from `KOMPASS_LOCAL_KMS_KEY`. This is **clearly marked, not for production**
+(core logs a warning), and it preserves "no plaintext at rest": the DB holds only
+ciphertext + wrapped DEK; the KEK lives **outside** the database (env/secret). The
+`make test-container` gate supplies a throwaway dev KEK at runtime — never baked into
+the image, never a real GCP credential.

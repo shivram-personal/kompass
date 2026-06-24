@@ -34,7 +34,10 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY kompass_core/requirements.txt ./kompass_core/requirements.txt
-RUN pip install --no-cache-dir -r kompass_core/requirements.txt
+COPY kompass_core/requirements-gcp.txt ./kompass_core/requirements-gcp.txt
+# Runtime deps + the GCP Cloud KMS client (production envelope encryption).
+RUN pip install --no-cache-dir -r kompass_core/requirements.txt \
+    && pip install --no-cache-dir -r kompass_core/requirements-gcp.txt
 
 COPY kompass_core/ ./kompass_core/
 COPY --from=ui-builder /app/web/dist /app/web

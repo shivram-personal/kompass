@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useKompassAuth } from './AuthContext'
 import { AdminUsers } from './AdminUsers'
+import { ClustersAdmin } from './ClustersAdmin'
 
 // Self-contained Kompass account control. Floats so it doesn't require surgery
 // on the engine's own top bar; opens user management for admins and handles
@@ -9,6 +10,7 @@ export function AccountChip() {
   const { user, logout } = useKompassAuth()
   const [open, setOpen] = useState(false)
   const [showAdmin, setShowAdmin] = useState(false)
+  const [showClusters, setShowClusters] = useState(false)
   if (!user) return null
 
   return (
@@ -21,15 +23,26 @@ export function AccountChip() {
               <div className="text-xs text-theme-text-tertiary capitalize">{user.role}</div>
             </div>
             {user.role === 'admin' && (
-              <button
-                onClick={() => {
-                  setShowAdmin(true)
-                  setOpen(false)
-                }}
-                className="w-full text-left mt-2 px-1 py-1.5 rounded hover:bg-theme-bg text-theme-text-secondary"
-              >
-                Manage users
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    setShowAdmin(true)
+                    setOpen(false)
+                  }}
+                  className="w-full text-left mt-2 px-1 py-1.5 rounded hover:bg-theme-bg text-theme-text-secondary"
+                >
+                  Manage users
+                </button>
+                <button
+                  onClick={() => {
+                    setShowClusters(true)
+                    setOpen(false)
+                  }}
+                  className="w-full text-left px-1 py-1.5 rounded hover:bg-theme-bg text-theme-text-secondary"
+                >
+                  Manage clusters
+                </button>
+              </>
             )}
             <button
               onClick={() => void logout()}
@@ -48,6 +61,7 @@ export function AccountChip() {
         </button>
       </div>
       {showAdmin && <AdminUsers onClose={() => setShowAdmin(false)} />}
+      {showClusters && <ClustersAdmin onClose={() => setShowClusters(false)} />}
     </>
   )
 }

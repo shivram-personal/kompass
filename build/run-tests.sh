@@ -84,7 +84,11 @@ docker start kompass-engine
 
 # Core SHARES the engine's network namespace — exactly like two containers in
 # one pod — so it reaches the engine over 127.0.0.1 and nothing else can.
-docker run -d --name kompass-core --network "container:kompass-engine" "$CORE_IMAGE"
+# A clearly-marked DEV KMS stand-in key is supplied at runtime (never baked into
+# the image); production uses Cloud KMS instead.
+docker run -d --name kompass-core --network "container:kompass-engine" \
+  -e KOMPASS_LOCAL_KMS_KEY="ZGV2LW9ubHktc3RhbmQtaW4ta2V5LTMyLWJ5dGVzISE=" \
+  "$CORE_IMAGE"
 
 # The test container is on the kind network, so it resolves the engine
 # container by name; core's 8080 lives in that shared netns.
@@ -107,6 +111,9 @@ assert "core /readyz reports engine reachable on loopback" \
 assert "unauthenticated /api/engine/* is rejected with 401 (authz gate live)" \
   '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/engine/topology")" = "401" ]'
 
+assert "unauthenticated /api/clusters is rejected with 401 (registry behind auth)" \
+  '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/clusters")" = "401" ]'
+
 assert "engine is NOT reachable except via core (9280 not exposed)" \
   '! curl -fsS --max-time 5 "http://kompass-engine:9280/api/health" >/dev/null 2>&1'
 
@@ -119,4 +126,4 @@ assert "UI is served and branded Kompass" \
 assert "UI carries no upstream Radar branding" \
   '! curl -fsS "$BASE/" | grep -qi "radar"'
 
-green "\nAll Phase 1 gate checks passed."
+green "\nAll container gate checks passed."

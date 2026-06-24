@@ -20,6 +20,9 @@ def settings(tmp_path) -> Settings:
         static_dir="/nonexistent-kompass-static",
         cookie_secure=False,  # tests run over plain HTTP
         db_url=f"sqlite:///{db_path}",
+        # Local KMS stand-in: a fixed 32-byte test KEK (base64). NOT a real key.
+        kms_provider="local",
+        local_kms_key="MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
     )
 
 

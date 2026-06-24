@@ -119,3 +119,31 @@ export async function setUserClusters(id: number, cluster_ids: string[]): Promis
     await req(`/api/admin/users/${id}/clusters`, { method: 'PUT', body: JSON.stringify({ cluster_ids }) }),
   )
 }
+
+// --- cluster registry --------------------------------------------------------
+export type EnvTag = 'prod' | 'staging' | 'dev'
+
+export interface KompassCluster {
+  id: string
+  name: string
+  env_tag: EnvTag
+  context_name: string | null
+  created_by: string
+  created_at: string
+}
+
+export async function listClusters(): Promise<KompassCluster[]> {
+  return parse<KompassCluster[]>(await req('/api/clusters'))
+}
+
+export async function registerCluster(input: {
+  name: string
+  env_tag: EnvTag
+  kubeconfig: string
+}): Promise<KompassCluster> {
+  return parse<KompassCluster>(await req('/api/clusters', { method: 'POST', body: JSON.stringify(input) }))
+}
+
+export async function deleteCluster(id: string): Promise<void> {
+  await parse<void>(await req(`/api/clusters/${id}`, { method: 'DELETE' }))
+}

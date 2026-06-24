@@ -10,10 +10,13 @@ from fastapi import FastAPI
 from .admin.users_router import router as admin_users_router
 from .auth.router import router as auth_router
 from .auth.service import AuthService
+from .clusters.router import router as clusters_router
+from .clusters.service import ClusterService
 from .config import Settings, get_settings
 from .db import build_session_factory
 from .engine.client import build_engine_client
 from .gateway.proxy import register_gateway
+from .secretstore.kms import build_kms_provider
 
 log = logging.getLogger("kompass")
 
@@ -23,9 +26,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Persistence + auth wiring.
+        # Persistence + auth + registry wiring.
         app.state.session_factory = build_session_factory(settings.db_url)
         app.state.auth_service = AuthService(settings)
+        app.state.cluster_service = ClusterService(build_kms_provider(settings))
 
         # Bootstrap admin exactly once (empty user table). Print the one-time
         # password to the core log, clearly marked — never elsewhere.
@@ -62,6 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # (inside register_gateway) so explicit routes always take precedence.
     app.include_router(auth_router)
     app.include_router(admin_users_router)
+    app.include_router(clusters_router)
     register_gateway(app, settings)
     return app
 

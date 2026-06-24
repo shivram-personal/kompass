@@ -61,6 +61,19 @@ class Settings(BaseSettings):
     # core can enforce editor per-cluster scope before proxying (SPEC §4.1).
     cluster_header: str = "X-Kompass-Cluster-Id"
 
+    # --- Secrets / KMS envelope encryption (SPEC §4.2, §8) ------------------
+    # "gcp" uses Cloud KMS to wrap the per-secret data key (production).
+    # "local" is a clearly-marked dev/test STAND-IN: it wraps the DEK with a
+    # KEK supplied out-of-band via KOMPASS_LOCAL_KMS_KEY. The stand-in still
+    # guarantees "no plaintext at rest" — the DB holds only ciphertext + the
+    # KEK-wrapped DEK; the KEK lives outside the database. NOT for production.
+    kms_provider: str = "local"
+    # GCP Cloud KMS key resource name, e.g.
+    # projects/<p>/locations/<r>/keyRings/kompass/cryptoKeys/kompass-app-secrets
+    kms_key_name: str = ""
+    # base64-encoded 32-byte KEK for the local stand-in only.
+    local_kms_key: str = ""
+
 
 def get_settings() -> Settings:
     return Settings()

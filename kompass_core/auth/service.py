@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session as DbSession
 from .. import audit
 from ..config import Settings
 from ..db import utcnow
-from ..models import AuthSource, Role, User, UserCluster
+from ..models import AuthSource, Cluster, Role, User, UserCluster
 from .passwords import PasswordManager
 from .sessions import revoke_all_for_user
 
@@ -29,6 +29,13 @@ class AuthError(Exception):
 def validate_password(password: str) -> None:
     if len(password) < MIN_PASSWORD_LENGTH:
         raise AuthError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+
+
+def _validate_cluster_ids(db: DbSession, cluster_ids: list[str]) -> None:
+    """Editor per-cluster scope must reference real registry entries (SPEC §4.2)."""
+    for cid in cluster_ids:
+        if db.get(Cluster, cid) is None:
+            raise AuthError(f"Unknown cluster id: {cid}")
 
 
 class AuthService:
@@ -122,6 +129,7 @@ class AuthService:
             raise AuthError(f"Unknown role: {role}")
         if db.query(User).filter(User.username == username).count() > 0:
             raise AuthError("Username already exists.")
+        _validate_cluster_ids(db, cluster_ids or [])
         validate_password(password)
         # Audit the intent before the mutation (audit-before-execute).
         audit.record(db, action="user_create", result="attempt",
@@ -151,6 +159,7 @@ class AuthService:
         return user
 
     def set_clusters(self, db: DbSession, *, actor: User, user: User, cluster_ids: list[str]) -> User:
+        _validate_cluster_ids(db, cluster_ids)
         audit.record(db, action="user_set_clusters", result="attempt",
                      username=actor.username, role=actor.role, target=user.username,
                      params={"clusters": sorted(cluster_ids)})

@@ -1,0 +1,4 @@
+# GCP-only runtime dependency, kept out of requirements.txt so the test/dev
+# path (local KMS stand-in) stays lean and decoupled from GCP. Installed in the
+# production core image. GcpKmsProvider imports this lazily.
+google-cloud-kms==3.1.0

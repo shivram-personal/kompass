@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base, utcnow
@@ -63,6 +63,36 @@ class UserCluster(Base):
     cluster_id: Mapped[str] = mapped_column(String(255), primary_key=True)
 
     user: Mapped[User] = relationship(back_populates="clusters")
+
+
+class EnvTag(StrEnum):
+    prod = "prod"
+    staging = "staging"
+    dev = "dev"
+
+
+class Cluster(Base):
+    __tablename__ = "clusters"
+
+    # Stable, opaque id referenced by user_clusters scoping, audit, AI targeting.
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    env_tag: Mapped[str] = mapped_column(String(16))
+    # Non-secret metadata the engine uses to target this cluster (kubeconfig
+    # current-context name). Safe to store/return; not a credential.
+    context_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Envelope-encrypted kubeconfig. The DB NEVER holds plaintext kubeconfig or
+    # the unwrapped DEK: `kubeconfig_ciphertext` is AES-GCM(DEK), `wrapped_dek`
+    # is KMS-wrapped(DEK), `nonce` is the AES-GCM nonce, and `kms_key_ref`
+    # records which KMS key wrapped the DEK.
+    kubeconfig_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    wrapped_dek: Mapped[bytes] = mapped_column(LargeBinary)
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    kms_key_ref: Mapped[str] = mapped_column(String(512))
+
+    created_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class Session(Base):

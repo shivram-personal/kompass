@@ -92,7 +92,10 @@ def set_clusters(
     db: DbSession = Depends(get_db),
 ):
     user = _get_user_or_404(db, user_id)
-    _service(request).set_clusters(db, actor=ctx.user, user=user, cluster_ids=body.cluster_ids)
+    try:
+        _service(request).set_clusters(db, actor=ctx.user, user=user, cluster_ids=body.cluster_ids)
+    except AuthError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return user_public(user)
 
 
