@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, ForeignKey, Integer, LargeBinary, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base, utcnow
@@ -105,6 +105,32 @@ class Session(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     idle_expires_at: Mapped[datetime] = mapped_column(DateTime)
     abs_expires_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class ClusterEvent(Base):
+    """A cluster event in the core-owned store (SPEC §4.8 / Phase 3).
+
+    Scoped per cluster and pruned to the configured retention window. The
+    composite index on (cluster_id, ts) keeps "recent events for cluster X"
+    queries off a full table scan. `message` is redacted before storage so no
+    secret material that an event might capture is persisted.
+    """
+
+    __tablename__ = "cluster_events"
+    __table_args__ = (Index("ix_cluster_events_cluster_ts", "cluster_id", "ts"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cluster_id: Mapped[str] = mapped_column(String(255))
+    ts: Mapped[datetime] = mapped_column(DateTime)  # event time (UTC)
+    event_type: Mapped[str] = mapped_column(String(16))  # Normal | Warning
+    reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)  # redacted
+    involved_kind: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    involved_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    namespace: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    uid: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class AuditEvent(Base):

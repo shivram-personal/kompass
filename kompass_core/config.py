@@ -74,6 +74,20 @@ class Settings(BaseSettings):
     # base64-encoded 32-byte KEK for the local stand-in only.
     local_kms_key: str = ""
 
+    # --- Event retention (SPEC §4.8; Phase 3 directive) --------------------
+    # Cluster events are persisted in a core-owned store and pruned to this
+    # window. Defaults to 30 days per the Phase 3 directive (set to 14 to match
+    # SPEC §4.8). Pruning runs on an interval and is also callable directly.
+    event_retention_days: int = 30
+    event_prune_seconds: int = 3600
+    # Background poller that ingests the engine's current-cluster events.
+    # Off by default: mapping the engine's connected context to a registry
+    # cluster id (and ingesting remote clusters) depends on the deferred
+    # multi-cluster injection seam. The store, retention, and endpoints are
+    # complete and tested independently; poll_once() is ready to wire.
+    event_poll_enabled: bool = False
+    event_poll_seconds: int = 30
+
 
 def get_settings() -> Settings:
     return Settings()

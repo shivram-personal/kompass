@@ -114,6 +114,12 @@ assert "unauthenticated /api/engine/* is rejected with 401 (authz gate live)" \
 assert "unauthenticated /api/clusters is rejected with 401 (registry behind auth)" \
   '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/clusters")" = "401" ]'
 
+assert "unauthenticated /api/nodes/stats is rejected with 401 (gate enforced)" \
+  '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/nodes/stats")" = "401" ]'
+
+assert "unauthenticated /api/clusters/{id}/events is rejected with 401" \
+  '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/clusters/any/events")" = "401" ]'
+
 assert "engine is NOT reachable except via core (9280 not exposed)" \
   '! curl -fsS --max-time 5 "http://kompass-engine:9280/api/health" >/dev/null 2>&1'
 

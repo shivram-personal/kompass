@@ -191,3 +191,16 @@ local KEK from `KOMPASS_LOCAL_KMS_KEY`. This is **clearly marked, not for produc
 ciphertext + wrapped DEK; the KEK lives **outside** the database (env/secret). The
 `make test-container` gate supplies a throwaway dev KEK at runtime — never baked into
 the image, never a real GCP credential.
+
+### H.5 Event retention (Phase 3)
+
+Cluster events are persisted in a core-owned store, indexed on `(cluster_id, ts)`, and
+pruned to a retention window by a background loop (also callable directly). Event
+messages are redacted before storage so secrets an event might capture are not persisted.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `KOMPASS_EVENT_RETENTION_DAYS` | `30` | Retention window. Per the Phase 3 directive; set `14` to match SPEC §4.8. |
+| `KOMPASS_EVENT_PRUNE_SECONDS` | `3600` | How often the prune loop runs |
+| `KOMPASS_EVENT_POLL_ENABLED` | `false` | Background ingestion of the engine's current-cluster events. **Off** until the deferred multi-cluster injection seam lands (engine-context → registry-cluster-id mapping + remote ingestion). The store/retention/endpoints are complete and tested independently. |
+| `KOMPASS_EVENT_POLL_SECONDS` | `30` | Poll interval when enabled |
