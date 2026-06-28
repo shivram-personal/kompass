@@ -232,3 +232,19 @@ client; browsers are blocked from `/api/engine/kompass/*` at the core proxy):**
 - **Never persisted**: not to disk, not to tmpfs, not to a temp file. The encrypted registry
   row (KMS ciphertext + wrapped DEK) remains the only at-rest representation; the engine never
   sees the ciphertext, the wrapped DEK, or any KMS reference.
+
+### H.7 AI provider credentials & model management (Phase 4)
+
+Configured at runtime in the app (Admin → Manage AI providers), not via env. Provider
+**API keys are secrets** handled exactly like kubeconfigs: envelope-encrypted via the same
+KMS path (H.4) — the DB row holds only ciphertext + wrapped DEK + nonce + key ref plus a
+non-secret `…last4` hint. Keys are decrypted **in memory only at call time** (model listing /
+chat), never logged, and never returned (responses show only the masked `…last4`).
+
+- **Model lists are not hardcoded**: the per-provider picker fetches from the provider's
+  models endpoint using the decrypted key; if the provider has no fetchable endpoint or a
+  fetch fails, it falls back to an admin-editable list stored in the provider's config.
+- **Budgets / usage are NOT part of this phase.** Per SPEC §9, per-user daily token budget
+  *enforcement* is Phase 6 and the token/cost dashboard is Phase 7. The `users.daily_token_budget`
+  column exists (Phase 1 scaffold) but is not yet enforced; `ai_usage`/`model_pricing` are not
+  built until the chat/usage phases.

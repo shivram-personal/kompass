@@ -9,6 +9,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .admin.users_router import router as admin_users_router
+from .ai.providers.router import router as providers_router
+from .ai.providers.service import ProviderService
 from .auth.router import router as auth_router
 from .auth.service import AuthService
 from .clusters.router import router as clusters_router
@@ -50,7 +52,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Persistence + auth + registry wiring.
         app.state.session_factory = build_session_factory(settings.db_url)
         app.state.auth_service = AuthService(settings)
-        app.state.cluster_service = ClusterService(build_kms_provider(settings))
+        # One KMS provider shared by all secret-at-rest consumers (kubeconfigs,
+        # provider API keys) — the same Phase 2 envelope path, not a new one.
+        kms = build_kms_provider(settings)
+        app.state.cluster_service = ClusterService(kms)
+        app.state.provider_service = ProviderService(kms)
         app.state.event_service = EventService(settings)
 
         # Bootstrap admin exactly once (empty user table). Print the one-time
@@ -99,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(clusters_router)
     app.include_router(events_router)
     app.include_router(nodestats_router)
+    app.include_router(providers_router)
     register_gateway(app, settings)
     return app
 

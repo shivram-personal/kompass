@@ -95,6 +95,41 @@ class Cluster(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class ProviderConfig(Base):
+    """An AI provider configuration (SPEC §4.4, §5).
+
+    The API key is envelope-encrypted via the same KMS path as kubeconfigs
+    (Phase 2): the DB holds only ciphertext + wrapped DEK + nonce + key ref,
+    never plaintext. `api_key_last4` is the non-secret masked hint shown on
+    read so display never requires decryption. Decryption happens in memory
+    only at call time (model listing / chat).
+    """
+
+    __tablename__ = "provider_config"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(default=True)
+    base_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    api_key_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    wrapped_dek: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    kms_key_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    api_key_last4: Mapped[str | None] = mapped_column(String(8), nullable=True)
+
+    active_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Non-secret extras: admin-editable model list, org/project, etc. (JSON).
+    extra_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    updated_by: Mapped[str] = mapped_column(String(255))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+    @property
+    def has_api_key(self) -> bool:
+        return self.api_key_ciphertext is not None
+
+
 class Session(Base):
     __tablename__ = "sessions"
 

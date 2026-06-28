@@ -147,3 +147,54 @@ export async function registerCluster(input: {
 export async function deleteCluster(id: string): Promise<void> {
   await parse<void>(await req(`/api/clusters/${id}`, { method: 'DELETE' }))
 }
+
+// --- AI provider / model management ------------------------------------------
+export interface KompassProvider {
+  id: number
+  provider: string
+  enabled: boolean
+  base_url: string | null
+  active_model: string | null
+  has_api_key: boolean
+  api_key_masked: string | null
+  configured_models: string[]
+  updated_by: string
+  updated_at: string
+}
+
+export interface ProviderModels {
+  source: 'provider' | 'configured'
+  models: string[]
+  active_model: string | null
+}
+
+export async function listProviders(): Promise<KompassProvider[]> {
+  return parse<KompassProvider[]>(await req('/api/admin/providers'))
+}
+
+export async function createProvider(input: {
+  provider: string
+  base_url?: string | null
+  api_key?: string | null
+  active_model?: string | null
+  models?: string[]
+}): Promise<KompassProvider> {
+  return parse<KompassProvider>(await req('/api/admin/providers', { method: 'POST', body: JSON.stringify(input) }))
+}
+
+export async function updateProvider(
+  provider: string,
+  patch: Partial<{ enabled: boolean; base_url: string; api_key: string; active_model: string; models: string[] }>,
+): Promise<KompassProvider> {
+  return parse<KompassProvider>(
+    await req(`/api/admin/providers/${provider}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  )
+}
+
+export async function deleteProvider(provider: string): Promise<void> {
+  await parse<void>(await req(`/api/admin/providers/${provider}`, { method: 'DELETE' }))
+}
+
+export async function listProviderModels(provider: string): Promise<ProviderModels> {
+  return parse<ProviderModels>(await req(`/api/admin/providers/${provider}/models`))
+}
