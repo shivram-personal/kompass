@@ -8,8 +8,8 @@
 ## The rules
 
 ### 1. Python owns the brain; Go stays near-upstream
-- **All new logic goes in `kompass-core` (Python).** No new business logic, auth, or AI code in the Go engine.
-- The Go engine may be edited **only** to: (a) bind to pod loopback, (b) rebrand user-facing strings/assets/title, (c) toggle existing engine flags. Nothing else.
+- **All new logic goes in `kompass-core` (Python).** No new business logic, auth, or AI code in the Go engine beyond the sanctioned seam #3 below.
+- The Go engine has **three sanctioned seams, nothing else**: (1) bind to pod loopback, (2) rebrand user-facing strings/assets/title, and (3) the **in-memory kubeconfig injection seam** (SPEC ADR-001) — the only net-new Go logic permitted, and the **only** sanctioned path by which remote-cluster credentials may reach the engine (decrypted bytes over loopback, held in process memory only, never on any filesystem). Toggling existing engine flags is a config action, not a seam. Seam-#3 logic lives only in `kompass_seam_*.go` files plus minimal `// KOMPASS SEAM 3`-marked append-only hooks; `build/check_seam_drift.sh` guards the boundary.
 - If you think a feature needs Go logic, first try to do it in Python against the engine's existing API. If truly impossible, **stop and ask** before editing Go.
 - Keep the engine rebaseable: surgical edits only, so `git rebase upstream/main` stays clean.
 

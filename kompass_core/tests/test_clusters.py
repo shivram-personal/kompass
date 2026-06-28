@@ -106,9 +106,10 @@ def test_decrypt_failure_path_leaks_nothing(client, admin):
     finally:
         db.close()
 
+    # Decryption happens at connect (admin injection). Tampered DEK -> clean 500.
     with respx.mock(assert_all_mocked=False, assert_all_called=False):
         resp = client.post(
-            f"/api/clusters/{cid}/select", cookies=admin.cookies, headers={"X-CSRF-Token": admin.csrf}
+            f"/api/clusters/{cid}/connect", cookies=admin.cookies, headers={"X-CSRF-Token": admin.csrf}
         )
     assert resp.status_code == 500
     body = resp.text
@@ -227,15 +228,16 @@ def test_cluster_crud_is_audited(client, admin):
 
 
 @respx.mock(assert_all_mocked=False)
-def test_select_decrypts_in_memory_and_switches_engine(respx_mock, client, admin):
-    route = respx_mock.post(f"{ENGINE}/api/contexts/kind-kompass").mock(
-        return_value=httpx.Response(200, json={"ok": True})
-    )
+def test_select_uses_seam_route_and_switches_engine(respx_mock, client, admin):
     cid = _register(client, admin).json()["id"]
+    route = respx_mock.post(f"{ENGINE}/api/kompass/select/{cid}").mock(
+        return_value=httpx.Response(200, json={"status": "selected", "cluster_id": cid})
+    )
+    respx_mock.get(f"{ENGINE}/api/resources/events").mock(return_value=httpx.Response(200, json=[]))
     resp = client.post(f"/api/clusters/{cid}/select", cookies=admin.cookies,
                        headers={"X-CSRF-Token": admin.csrf})
     assert resp.status_code == 200
-    assert resp.json()["context_name"] == "kind-kompass"
-    assert route.called  # engine targeted via loopback, by context name only
+    assert resp.json()["context_name"] == "kind-kompass"  # falls back to registry metadata
+    assert route.called  # engine selected via the seam route over loopback
     for marker in SECRET_MARKERS:
         assert marker not in resp.text

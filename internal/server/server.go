@@ -254,6 +254,8 @@ func (s *Server) setupRoutes() {
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
+		// KOMPASS SEAM 3: in-memory kubeconfig injection routes — see docs/SPEC.md ADR-001.
+		s.registerKompassSeamRoutes(r)
 		// Streaming endpoints (SSE/WebSocket) - no timeout
 		r.Get("/events/stream", s.handleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)

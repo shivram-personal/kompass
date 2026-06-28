@@ -80,6 +80,13 @@ def register_gateway(app: FastAPI, settings: Settings) -> None:
         # Reaching here means the request is authenticated AND authorized for
         # this method/cluster — denials raised 401/403 before this point and
         # never touched the engine.
+
+        # Seam #3 routes (/api/engine/kompass/*) are core-internal: kompass-core
+        # calls them server-side over loopback with admin/scope authorization.
+        # They must NOT be reachable by browsers through the generic proxy.
+        if path == "kompass" or path.startswith("kompass/"):
+            return JSONResponse({"detail": "Not found."}, status_code=404)
+
         client: httpx.AsyncClient = request.app.state.engine_client
         target = "/api/" + path  # /api/engine/<path>  ->  engine /api/<path>
 

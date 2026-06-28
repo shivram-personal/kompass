@@ -12,13 +12,15 @@ from __future__ import annotations
 
 import logging
 
-import httpx
 from fastapi import APIRouter, Depends, Request
 from fastapi.exceptions import HTTPException
 from sqlalchemy.orm import Session as DbSession
 
+from .. import audit
 from ..auth.dependencies import AuthContext, get_db, require_active_user, require_admin
-from ..models import Cluster
+from ..models import Cluster, Role
+from . import injector
+from .injector import InjectionError
 from .schemas import RegisterClusterRequest, cluster_public
 from .service import ClusterError, ClusterService
 
@@ -74,7 +76,7 @@ def get_cluster(
 
 
 @router.delete("/{cluster_id}", status_code=204)
-def delete_cluster(
+async def delete_cluster(
     cluster_id: str,
     request: Request,
     ctx: AuthContext = Depends(require_admin),
@@ -82,7 +84,39 @@ def delete_cluster(
 ):
     svc = _service(request)
     cluster = _get_or_404(svc, db, cluster_id)
-    svc.delete(db, actor=ctx.user, cluster=cluster)
+    svc.delete(db, actor=ctx.user, cluster=cluster)  # audits + purges ciphertext
+    # Evict any in-memory credential from the engine (seam #3 lifecycle end).
+    await injector.evict(request.app.state.engine_client, cluster_id)
+
+
+@router.post("/{cluster_id}/connect")
+async def connect_cluster(
+    cluster_id: str,
+    request: Request,
+    ctx: AuthContext = Depends(require_admin),
+    db: DbSession = Depends(get_db),
+):
+    """ADMIN-only credential injection (and rotation): decrypt the kubeconfig in
+    memory and inject it into the engine over loopback (seam #3). Re-running
+    rotates the in-memory credential. The kubeconfig is never logged or returned.
+    """
+    svc = _service(request)
+    cluster = _get_or_404(svc, db, cluster_id)
+    try:
+        kubeconfig = svc.decrypt_kubeconfig(cluster)
+    except Exception:
+        raise HTTPException(status_code=500, detail="Could not access cluster credentials.")
+
+    # Audit-before-execute: record the injection intent before it happens.
+    audit.record(db, action="cluster_connect", result="attempt",
+                 username=ctx.user.username, role=ctx.user.role, cluster_id=cluster.id,
+                 target=cluster.name)
+    try:
+        result = await injector.inject(request.app.state.engine_client, cluster.id, kubeconfig)
+    except InjectionError:
+        raise HTTPException(status_code=502, detail="Engine could not load the cluster credentials.")
+    return {"status": "connected", "cluster_id": cluster.id,
+            "context_name": result.get("context_name")}
 
 
 @router.post("/{cluster_id}/select")
@@ -92,28 +126,32 @@ async def select_cluster(
     ctx: AuthContext = Depends(require_active_user),
     db: DbSession = Depends(get_db),
 ):
+    """Make a connected cluster the engine's active context. Follows per-cluster
+    RBAC scope: editors may select only clusters in their scope."""
     svc = _service(request)
     cluster = _get_or_404(svc, db, cluster_id)
 
-    # Point-of-use, in-memory decryption. The plaintext is used only to derive
-    # the engine target context and is never logged or returned.
+    user = ctx.user
+    if Role(user.role) == Role.editor and cluster_id not in user.allowed_cluster_ids:
+        audit.record(db, action="cluster_select", result="scope_denied",
+                     username=user.username, role=user.role, cluster_id=cluster_id)
+        raise HTTPException(status_code=403, detail="Cluster not in editor scope.")
+
+    engine = request.app.state.engine_client
     try:
-        svc.decrypt_kubeconfig(cluster)
+        injector_result = await injector.select(engine, cluster.id)
+    except InjectionError as e:
+        if str(e) == "cluster is not connected":
+            raise HTTPException(status_code=409, detail="Cluster is not connected; an admin must connect it first.")
+        raise HTTPException(status_code=502, detail="Engine could not select the cluster.")
+
+    # Now that this cluster is the active context, ingest its current events
+    # into the per-cluster store (Phase 3 poll_once wired to a real injected
+    # cluster). Best-effort: a poll failure must not fail selection.
+    try:
+        await request.app.state.event_service.poll_once(db, engine, cluster.id)
     except Exception:
-        # Decryption/KMS failure: clean error, no plaintext or key material.
-        raise HTTPException(status_code=500, detail="Could not access cluster credentials.")
+        pass
 
-    context_name = cluster.context_name
-    if not context_name:
-        raise HTTPException(status_code=400, detail="Cluster has no target context.")
-
-    # Forward a cluster-targeting context switch to the engine over loopback.
-    engine: httpx.AsyncClient = request.app.state.engine_client
-    try:
-        resp = await engine.post(f"/api/contexts/{context_name}")
-    except httpx.HTTPError:
-        raise HTTPException(status_code=502, detail="Engine is unreachable.")
-    if resp.status_code >= 400:
-        raise HTTPException(status_code=502, detail="Engine could not switch to the selected cluster.")
-
-    return {"status": "selected", "cluster_id": cluster.id, "context_name": context_name}
+    return {"status": "selected", "cluster_id": cluster.id,
+            "context_name": injector_result.get("context_name") or cluster.context_name}

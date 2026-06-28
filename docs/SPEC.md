@@ -85,8 +85,8 @@ These are inherited by reusing the engine; the build must **preserve and surface
 
 ## 2. Non-negotiable principles
 
-1. **Python owns the brain; Go stays near-upstream.** All new logic lives in `kompass-core` (Python). The Go engine is touched only for (a) rebranding and (b) binding it to loopback. No new business logic in Go.
-2. **Rebaseable engine.** Engine edits are limited to the seams in §3.3. Keep them surgical so `git rebase upstream/main` stays clean.
+1. **Python owns the brain; Go stays near-upstream.** All new logic lives in `kompass-core` (Python). The Go engine has exactly **three sanctioned seams** (§3.3): (1) loopback bind, (2) rebrand, and (3) the in-memory kubeconfig injection seam (ADR-001, §14). Seam #3 is the **only** net-new Go logic permitted and the **only** sanctioned path by which remote-cluster credentials reach the engine. No other business logic, auth, or AI code in Go.
+2. **Rebaseable engine.** Engine edits are limited to the three seams in §3.3, with all net-new seam-#3 logic isolated in `kompass_seam_*.go` files plus minimal, labeled, append-only hooks. Keep them surgical so `git rebase upstream/main` stays clean.
 3. **Read-only by default; mutation is privileged and gated.** Every mutating path requires (a) editor/admin role, (b) per-cluster authorization for editors, (c) explicit user confirmation with a rendered diff, and (d) an audit record written before execution.
 4. **AI never executes raw commands.** The LLM only emits a **structured action proposal** mapping to an existing engine write handler on a server-side whitelist. No free-form `kubectl`, no shelling out from model output.
 5. **Secrets never leave in plaintext.** API keys and uploaded kubeconfigs are KMS-envelope-encrypted at rest. Plaintext secrets are never logged, returned to the frontend, or sent to an LLM.
@@ -128,11 +128,14 @@ Same stack as the engine (React 19, Tailwind v4, shadcn/ui, TanStack Query). New
 
 All admin surfaces gated via the existing capabilities-context pattern (server-side enforced regardless).
 
-### 3.3 Allowed edits to the Go engine (surgical, rebrand + bind only)
+### 3.3 Allowed edits to the Go engine — three sanctioned seams
 1. **Bind to loopback** so the engine is reachable only by kompass-core within the pod (config/flag; no code logic change ideally).
 2. **Rebranding:** replace user-facing strings, logo/favicon/assets, page title, and any visible product identifiers with Kompass equivalents. Add Kompass NOTICE handling. Do **not** alter LICENSE/NOTICE/copyright headers (§1.3).
-3. Optionally enable existing engine flags (e.g. sqlite timeline storage, disable-exec where policy requires).
-**No new business logic, no auth, no AI code in Go.** If a needed capability seems to require Go logic, prefer doing it in Python against the engine's existing API; if truly impossible, **stop and ask**.
+3. **In-memory kubeconfig injection (SEAM 3, ADR-001 in §14).** The engine accepts an already-decrypted kubeconfig over loopback and holds it in **process memory only**, keyed per cluster, never on any filesystem path. This is the **only** net-new Go logic permitted and the **only** sanctioned path by which remote-cluster credentials reach the engine. All decryption/KMS/lifecycle stays in Python core. Rebase rules: all net-new logic lives in `kompass_seam_*.go` files; the unavoidable wiring into upstream files is minimal, append-only, and marked `// KOMPASS SEAM 3: … see docs/SPEC.md ADR-001`; a seam-drift check (`build/check_seam_drift.sh`) fails if logic escapes the sanctioned surface.
+
+(Toggling existing engine flags — e.g. sqlite timeline storage, disable-exec — is a configuration action, not a code seam.)
+
+**Beyond these three seams: no new business logic, no auth, no AI code in Go.** If a needed capability seems to require further Go logic, prefer doing it in Python against the engine's existing API; if truly impossible, **stop and ask**.
 
 ---
 
@@ -379,3 +382,24 @@ Stack: React 19 + Tailwind v4 + shadcn/ui + TanStack Query. **Read `/mnt/skills/
 4. **Google SSO:** yes — offered alongside local auth for gradual migration (Phase 7).
 5. **Token budgets:** admin-configurable default in the UI + per-user overrides; provider model picker required.
 6. **Branding:** full rebrand to Kompass; no user-facing reference to the upstream engine; legal LICENSE/NOTICE attribution retained in-repo (license requirement).
+
+---
+
+## 14. Architecture Decision Records
+
+### ADR-001 — In-memory kubeconfig injection seam (resolves the Phase 2 deferred multi-cluster boundary)
+
+**Status:** Accepted (Phase 3.5). Promotes kubeconfig injection to the **third sanctioned engine seam** (§2.1, §3.3).
+
+**Context.** Phase 2 established the encrypted cluster registry: kubeconfigs are KMS-envelope-encrypted at rest and decrypted only in core memory. To actually connect to a *remote* registered cluster, the engine needs that cluster's kubeconfig. The engine's only pre-existing runtime mechanism, `MergeAndSwitchContext`, **writes a merged kubeconfig to a temp file on disk** — which (a) violates the "no plaintext kubeconfig on any filesystem" invariant and (b) concentrates every connected cluster's credentials into one plaintext file. This was deliberately deferred at Phase 2/3 rather than worked around.
+
+**Decision.** Add a minimal, isolated, in-memory Go seam: the engine accepts an already-decrypted kubeconfig from core **over loopback** and holds it in **process memory only** (`sync.Map` keyed by cluster id), never on any filesystem path (no disk, no tmpfs, no temp file). Selection switches the active client by building a `clientcmd.ClientConfig` from the in-memory `clientcmdapi.Config`. The existing on-disk `MergeAndSwitchContext` path is **not** used for injected remote credentials. All decryption, KMS interaction, and credential lifecycle remain in Python (`kompass_core`); the engine never holds the encrypted store, the wrapped DEK, or any KMS reference.
+
+**Rejected alternatives.**
+- *Python-side Kubernetes client (core talks to clusters directly, bypassing the engine).* Rejected: it would duplicate the engine's entire informer cache, discovery, RBAC probing, topology, and resource layer in Python — re-implementing the very engine we reuse — and split cluster access across two stacks. Far more new code and drift than a tiny Go seam.
+- *tmpfs hand-off (core writes the kubeconfig to a memory-backed filesystem the engine reads).* Rejected: it still places plaintext on a *filesystem path* (violating the invariant as written), is observable via `/proc/<pid>` and process mounts, and risks persistence if tmpfs is misconfigured or swapped. In-memory-only is strictly stronger.
+
+**Consequences / coupling.**
+- `kompassSwitchInjected` (in `internal/k8s/kompass_seam_inject.go`) **intentionally mirrors** the client-construction + global-swap tail of upstream `SwitchContext` so the upstream hook stays a ~5-line append. This is a **known rebase re-sync point**: if upstream changes how `SwitchContext` builds clients or swaps the package globals, the seam must be re-checked and re-synced.
+- **Concurrency:** the engine is **single-active-context by design** — one active client at a time, swapped under `clientMu`. The seam inherits this property verbatim (same lock, same globals, same order) and introduces no new race; per-cluster credentials are isolated in the injection map, but *selecting* a cluster flips the one global active client. **Constraint for later phases:** a caller cannot issue concurrent requests to multiple clusters against a single engine and expect per-cluster routing — `select` + its dependent reads must be treated as a serialized unit against the active context (core serializes, or a future per-request client model would be required).
+- **Rebase-conflict surface** is bounded and labeled: net-new logic in `kompass_seam_*.go`; minimal `// KOMPASS SEAM 3`-marked append-only hooks in `internal/k8s/client.go` and `internal/server/server.go`; enforced by `build/check_seam_drift.sh`.

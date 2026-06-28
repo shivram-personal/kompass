@@ -1,0 +1,13 @@
+# Kompass engine seam surface — the sanctioned conflict surface for rebases.
+# See docs/SPEC.md ADR-001. The seam-drift check (build/check_seam_drift.sh)
+# fails if any KOMPASS SEAM marker or kompass_seam_*.go file appears outside
+# this set.
+#
+# Net-new Go logic — entirely contained in these seam files:
+internal/k8s/kompass_seam_inject.go
+internal/k8s/kompass_seam_inject_test.go
+internal/server/kompass_seam_inject.go
+#
+# Minimal append-only hooks in upstream files (each KOMPASS SEAM-marked):
+internal/k8s/client.go
+internal/server/server.go

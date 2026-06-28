@@ -876,6 +876,13 @@ func SwitchContext(name string) error {
 		return fmt.Errorf("cannot switch context when running in-cluster")
 	}
 
+	// KOMPASS SEAM 3: kubeconfig injection — see docs/SPEC.md ADR-001.
+	// Remote creds are injected in-memory by kompass-core; resolve them here
+	// before any disk-backed registry lookup so they never touch a filesystem.
+	if handled, err := kompassSwitchInjected(name); handled {
+		return err
+	}
+
 	// Snapshot registry-related globals under the lock. MergeAndSwitchContext
 	// can mutate all three concurrently, so reads have to be atomic as a set.
 	clientMu.RLock()

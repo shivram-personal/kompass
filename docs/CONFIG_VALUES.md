@@ -204,3 +204,31 @@ messages are redacted before storage so secrets an event might capture are not p
 | `KOMPASS_EVENT_PRUNE_SECONDS` | `3600` | How often the prune loop runs |
 | `KOMPASS_EVENT_POLL_ENABLED` | `false` | Background ingestion of the engine's current-cluster events. **Off** until the deferred multi-cluster injection seam lands (engine-context → registry-cluster-id mapping + remote ingestion). The store/retention/endpoints are complete and tested independently. |
 | `KOMPASS_EVENT_POLL_SECONDS` | `30` | Poll interval when enabled |
+
+### H.6 Kubeconfig injection seam (Phase 3.5, SPEC ADR-001)
+
+The engine's third sanctioned seam lets kompass-core hand it an already-decrypted
+kubeconfig **over loopback**; the engine holds it in **process memory only**, keyed
+per cluster, never on any filesystem path. There are no env vars for this seam — it
+is wholly internal — but the contract and lifecycle are documented here.
+
+**Loopback endpoint contract (engine `:9280`, reachable only via core's server-side
+client; browsers are blocked from `/api/engine/kompass/*` at the core proxy):**
+
+| Method + path | Caller (core) | Purpose |
+|---|---|---|
+| `POST /api/kompass/inject` `{cluster_id, kubeconfig}` | `POST /api/clusters/{id}/connect` (**admin only**) | Load/replace a decrypted kubeconfig in engine memory → `{context_key, context_name}` |
+| `POST /api/kompass/select/{cluster_id}` | `POST /api/clusters/{id}/select` (**per-cluster scope**) | Make the injected cluster the active context |
+| `DELETE /api/kompass/inject/{cluster_id}` | cluster delete (**admin**) | Evict the credential from memory |
+
+**In-memory credential lifecycle (no filesystem artifact at any point):**
+- **Injected** when an admin calls *connect*: core decrypts the registry kubeconfig in
+  memory (KMS), POSTs the plaintext bytes to the engine over loopback; the engine parses
+  them into an in-memory `clientcmdapi.Config` keyed by `cluster_id`.
+- **Replaced (rotation)** when an admin re-runs *connect*: the prior in-memory credential
+  for that `cluster_id` is overwritten.
+- **Evicted** when the cluster is deleted (explicit `DELETE`), and **lost on engine restart**
+  (memory only) — after a restart an admin must *connect* again before that cluster is selectable.
+- **Never persisted**: not to disk, not to tmpfs, not to a temp file. The encrypted registry
+  row (KMS ciphertext + wrapped DEK) remains the only at-rest representation; the engine never
+  sees the ciphertext, the wrapped DEK, or any KMS reference.
