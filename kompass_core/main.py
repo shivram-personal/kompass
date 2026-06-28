@@ -9,8 +9,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from .admin.users_router import router as admin_users_router
+from .ai.chat import ChatService
 from .ai.providers.router import router as providers_router
 from .ai.providers.service import ProviderService
+from .ai.router import router as ai_router
 from .auth.router import router as auth_router
 from .auth.service import AuthService
 from .clusters.router import router as clusters_router
@@ -58,6 +60,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.cluster_service = ClusterService(kms)
         app.state.provider_service = ProviderService(kms)
         app.state.event_service = EventService(settings)
+        app.state.chat_service = ChatService(
+            settings, app.state.provider_service, app.state.cluster_service, app.state.event_service
+        )
 
         # Bootstrap admin exactly once (empty user table). Print the one-time
         # password to the core log, clearly marked — never elsewhere.
@@ -106,6 +111,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(events_router)
     app.include_router(nodestats_router)
     app.include_router(providers_router)
+    app.include_router(ai_router)
     register_gateway(app, settings)
     return app
 

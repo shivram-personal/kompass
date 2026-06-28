@@ -168,6 +168,42 @@ class ClusterEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class AiUsage(Base):
+    """Per-call token accounting (SPEC §5). Foundation for the Phase 7 cost
+    dashboard; no cost/budget logic is applied here."""
+
+    __tablename__ = "ai_usage"
+    __table_args__ = (Index("ix_ai_usage_user_ts", "user_id", "ts"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    cluster_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    provider: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class ChatMessage(Base):
+    """Persisted chat history. `content` is REDACTED before storage so no secret
+    captured in cluster state is kept in plaintext (SPEC §4.3 redaction)."""
+
+    __tablename__ = "chat_messages"
+    __table_args__ = (Index("ix_chat_messages_user_cluster_ts", "user_id", "cluster_id", "ts"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    cluster_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    role: Mapped[str] = mapped_column(String(16))  # user | assistant
+    content: Mapped[str] = mapped_column(Text)  # redacted
+    provider: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

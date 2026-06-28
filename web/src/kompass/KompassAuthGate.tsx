@@ -2,6 +2,7 @@ import { ReactNode } from 'react'
 import { AccountChip } from './AccountChip'
 import { KompassAuthProvider, useKompassAuth } from './AuthContext'
 import { ChangePassword } from './ChangePassword'
+import { ChatDock } from './ChatDock'
 import { Login } from './Login'
 
 function Gate({ children }: { children: ReactNode }) {
@@ -20,6 +21,7 @@ function Gate({ children }: { children: ReactNode }) {
   return (
     <>
       {children}
+      <ChatDock />
       <AccountChip />
     </>
   )

@@ -198,3 +198,55 @@ export async function deleteProvider(provider: string): Promise<void> {
 export async function listProviderModels(provider: string): Promise<ProviderModels> {
   return parse<ProviderModels>(await req(`/api/admin/providers/${provider}/models`))
 }
+
+// --- AI chat (SSE streaming, recommendation-only) ----------------------------
+export interface ChatHandlers {
+  onModel?: (m: { provider: string; model: string }) => void
+  onDelta?: (text: string) => void
+  onUsage?: (u: { prompt_tokens: number; completion_tokens: number }) => void
+  onError?: (message: string) => void
+  onDone?: () => void
+}
+
+function _dispatchFrame(frame: string, h: ChatHandlers): void {
+  let event = 'message'
+  const dataLines: string[] = []
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event:')) event = line.slice(6).trim()
+    else if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''))
+  }
+  const data = dataLines.join('\n')
+  if (event === 'delta') h.onDelta?.(data)
+  else if (event === 'model') { try { h.onModel?.(JSON.parse(data)) } catch { /* ignore */ } }
+  else if (event === 'usage') { try { h.onUsage?.(JSON.parse(data)) } catch { /* ignore */ } }
+  else if (event === 'error') h.onError?.(data)
+  else if (event === 'done') h.onDone?.()
+}
+
+export async function streamChat(
+  input: { cluster_id: string; message: string; provider?: string | null },
+  handlers: ChatHandlers,
+): Promise<void> {
+  const resp = await req('/api/ai/chat', { method: 'POST', body: JSON.stringify(input) })
+  if (resp.status === 403) { handlers.onError?.('You are not allowed to query this cluster.'); return }
+  if (!resp.ok || !resp.body) {
+    let detail = 'AI request failed.'
+    try { const b = await resp.json(); if (b?.detail) detail = b.detail } catch { /* non-JSON */ }
+    handlers.onError?.(detail)
+    return
+  }
+  const reader = resp.body.getReader()
+  const decoder = new TextDecoder()
+  let buf = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buf += decoder.decode(value, { stream: true })
+    let idx: number
+    while ((idx = buf.indexOf('\n\n')) >= 0) {
+      const frame = buf.slice(0, idx)
+      buf = buf.slice(idx + 2)
+      if (frame.trim()) _dispatchFrame(frame, handlers)
+    }
+  }
+}

@@ -130,6 +130,9 @@ assert "seam route /api/engine/kompass/* is behind the auth gate (401 unauth)" \
 assert "unauthenticated /api/admin/providers is rejected with 401" \
   '[ "$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/admin/providers")" = "401" ]'
 
+assert "unauthenticated /api/ai/chat is rejected with 401" \
+  '[ "$(curl -s -o /dev/null -w "%{http_code}" -X POST "$BASE/api/ai/chat")" = "401" ]'
+
 assert "engine is NOT reachable except via core (9280 not exposed)" \
   '! curl -fsS --max-time 5 "http://kompass-engine:9280/api/health" >/dev/null 2>&1'
 

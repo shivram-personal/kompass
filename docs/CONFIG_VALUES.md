@@ -246,5 +246,22 @@ chat), never logged, and never returned (responses show only the masked `…last
   fetch fails, it falls back to an admin-editable list stored in the provider's config.
 - **Budgets / usage are NOT part of this phase.** Per SPEC §9, per-user daily token budget
   *enforcement* is Phase 6 and the token/cost dashboard is Phase 7. The `users.daily_token_budget`
-  column exists (Phase 1 scaffold) but is not yet enforced; `ai_usage`/`model_pricing` are not
-  built until the chat/usage phases.
+  column exists (Phase 1 scaffold) but is not yet enforced; `model_pricing` is not built yet.
+
+### H.8 AI chat / troubleshooting (Phase 5, recommendation-only)
+
+`POST /api/ai/chat` and `POST /api/ai/troubleshoot` stream a natural-language answer (SSE);
+`GET /api/ai/history` returns persisted, redacted history. All are behind the auth gate with
+per-cluster scope (editors limited to their clusters). No config values; behavior notes:
+
+- **Recommendation-only:** the chat flow has **no** mutation path — no apply, no exec, no engine
+  write, and it makes **no engine calls at all** this phase (it grounds on the core-owned,
+  per-cluster event store + registry metadata). The whitelisted apply path is Phase 6.
+- **Provider key** is decrypted in memory only at call time (Phase 4 KMS path), never logged or returned.
+- **Redaction:** cluster context is redacted (Phase 3 `redact.py`) before being sent to the provider,
+  and chat history is stored redacted — no captured secret is sent out or persisted in plaintext.
+- **Usage** is recorded per call in `ai_usage` (tokens/provider/model) as the Phase 7 dashboard
+  foundation; no cost or budget logic is applied here.
+- **Single-active-context (ADR-001):** because chat makes no live engine reads, the single-active
+  cluster constraint is not engaged. Grounding on *live* engine state (topology/nodes/logs) is
+  deferred to a phase that can safely serialize admin-gated select-then-read.
