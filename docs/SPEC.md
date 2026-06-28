@@ -220,7 +220,7 @@ kompass-core validates against the server-side whitelist (`ai/whitelist.py`); ea
 **Acceptance:** aggregates match `kubectl describe node` on a kind fixture; pods with no requests counted as zero; updates live via the engine's data path.
 
 ### 4.8 Metrics & event retention
-- **Events:** configure the engine timeline for **14-day** retention (sqlite storage + time-based retention). Do not build a new store.
+- **Events:** configure the engine timeline for **30-day** retention (sqlite storage + time-based retention). Do not build a new store.
 - **Metrics:** query Prometheus/GMP **on demand** via the engine, short-lived cache. No raw-sample storage, no TSDB. (Future: 1-min rollups only if required — out of scope v1.)
 
 ---
@@ -312,7 +312,7 @@ Stack: React 19 + Tailwind v4 + shadcn/ui + TanStack Query. **Read `/mnt/skills/
 - **Gate:** §4.2 incl. "no plaintext kubeconfig anywhere"; in-container.
 
 **Phase 3 — Nodes enhancements & event retention**
-- `nodestats/` aggregates; Nodes columns; 14-day event retention config.
+- `nodestats/` aggregates; Nodes columns; 30-day event retention config.
 - **Gate:** §4.7 aggregates match `kubectl describe node` on kind; retention verified.
 
 **Phase 4 — AI providers & model management (admin)**
