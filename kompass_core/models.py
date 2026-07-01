@@ -204,6 +204,53 @@ class ChatMessage(Base):
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class ProposalStatus(StrEnum):
+    proposed = "proposed"   # created, awaiting confirm/apply
+    consumed = "consumed"   # single-use: an apply was attempted (terminal)
+    expired = "expired"     # TTL elapsed before apply (terminal)
+
+
+class Proposal(Base):
+    """A whitelisted apply-action proposal (SPEC §4.3, Phase 6).
+
+    Persisted when the model emits a valid structured proposal during chat/
+    troubleshoot. It is inert data: nothing here executes. Apply is a separate,
+    authenticated call bound to ``id`` + ``content_hash``. ``content_hash`` is
+    computed over the redacted, canonical action content (see ai/whitelist.py),
+    so the hash the user confirmed equals the hash checked at apply and neither
+    exposes secrets. Single-use (``status`` flips to terminal on first apply
+    attempt) and expiring (``expires_at``) to close replay.
+    """
+
+    __tablename__ = "proposals"
+    __table_args__ = (Index("ix_proposals_creator", "created_by_user_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    # Creator identity: id for ownership checks, username kept for audit even if
+    # the user is later deleted.
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_by: Mapped[str] = mapped_column(String(255))
+    cluster_id: Mapped[str] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(64))
+    namespace: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    target: Mapped[str] = mapped_column(String(255))
+    # Canonical, REDACTED action content (JSON) — the exact bytes that were hashed.
+    params_redacted: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)  # redacted, not hashed
+    status: Mapped[str] = mapped_column(String(16), default=ProposalStatus.proposed)
+    # Drift baseline captured at preview time (resourceVersion / helm revision).
+    preview_drift_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    before_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
 class AuditEvent(Base):
     __tablename__ = "audit_events"
 

@@ -1,19 +1,44 @@
 import { FormEvent, useEffect, useRef, useState } from 'react'
-import { KompassCluster, listClusters, streamChat } from './api'
+import {
+  ApplyResult,
+  KompassApiError,
+  KompassCluster,
+  KompassUser,
+  ProposalCard,
+  ProposalPreview,
+  applyProposal,
+  fetchMe,
+  listClusters,
+  previewProposal,
+  streamChat,
+} from './api'
 
 interface Msg {
   role: 'user' | 'assistant'
   content: string
 }
 
-// Dockable, recommendation-only AI assistant. Streams the provider response and
-// shows the active-model badge. It can only read + recommend — there is no
-// apply/mutation control here (that path arrives in a later phase).
+type ProposalStatus = 'proposed' | 'previewing' | 'previewed' | 'confirming' | 'applying' | 'applied' | 'error'
+
+interface ProposalState {
+  card: ProposalCard
+  status: ProposalStatus
+  preview?: ProposalPreview
+  result?: ApplyResult
+  error?: string
+}
+
+// Dockable AI assistant. Streams the provider response and shows the active-model
+// badge. The model can RECOMMEND a whitelisted change (a "proposal"); applying it
+// is a separate, human-confirmed, server-audited step (Phase 6) — the model never
+// executes anything itself.
 export function ChatDock() {
   const [open, setOpen] = useState(false)
   const [clusters, setClusters] = useState<KompassCluster[]>([])
   const [clusterId, setClusterId] = useState('')
   const [messages, setMessages] = useState<Msg[]>([])
+  const [proposals, setProposals] = useState<ProposalState[]>([])
+  const [me, setMe] = useState<KompassUser | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [badge, setBadge] = useState<string | null>(null)
@@ -28,11 +53,48 @@ export function ChatDock() {
         setClusterId((prev) => prev || c[0]?.id || '')
       })
       .catch(() => setError('Could not load clusters.'))
+    fetchMe()
+      .then((r) => setMe(r?.user ?? null))
+      .catch(() => setMe(null))
   }, [open])
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight })
-  }, [messages])
+  }, [messages, proposals])
+
+  function patchProposal(id: string, patch: Partial<ProposalState>) {
+    setProposals((ps) => ps.map((p) => (p.card.id === id ? { ...p, ...patch } : p)))
+  }
+
+  // editor (in-scope for the proposal's cluster) or admin — mirrors server-side
+  // enforcement; the server is still the authority (this only hides the control).
+  function canApply(card: ProposalCard): boolean {
+    if (!me) return false
+    if (me.role === 'admin') return true
+    return me.role === 'editor' && me.allowed_cluster_ids.includes(card.cluster_id)
+  }
+
+  async function doPreview(id: string) {
+    patchProposal(id, { status: 'previewing', error: undefined })
+    try {
+      const preview = await previewProposal(id)
+      patchProposal(id, { status: 'previewed', preview })
+    } catch (e) {
+      const msg = e instanceof KompassApiError ? e.message : 'Preview failed.'
+      patchProposal(id, { status: 'error', error: msg })
+    }
+  }
+
+  async function doApply(card: ProposalCard) {
+    patchProposal(card.id, { status: 'applying', error: undefined })
+    try {
+      const result = await applyProposal(card.id, card.content_hash)
+      patchProposal(card.id, { status: 'applied', result })
+    } catch (e) {
+      const msg = e instanceof KompassApiError ? e.message : 'Apply failed.'
+      patchProposal(card.id, { status: 'error', error: msg })
+    }
+  }
 
   async function send(e: FormEvent) {
     e.preventDefault()
@@ -52,6 +114,7 @@ export function ChatDock() {
             copy[copy.length - 1] = { role: 'assistant', content: copy[copy.length - 1].content + text }
             return copy
           }),
+        onProposal: (card) => setProposals((ps) => [...ps, { card, status: 'proposed' }]),
         onError: (msg) => setError(msg),
         onDone: () => setBusy(false),
       },
@@ -93,7 +156,8 @@ export function ChatDock() {
             <div ref={scrollRef} className="flex-1 overflow-auto px-3 py-2 space-y-3">
               {messages.length === 0 && (
                 <p className="text-xs text-theme-text-tertiary">
-                  Ask about a cluster's health. The assistant can explain and recommend — it cannot make changes.
+                  Ask about a cluster's health. The assistant can explain and recommend a change; you review a diff
+                  and apply it yourself through an audited step.
                 </p>
               )}
               {messages.map((m, i) => (
@@ -109,6 +173,19 @@ export function ChatDock() {
                   </div>
                 </div>
               ))}
+
+              {proposals.map((p) => (
+                <ProposalCardView
+                  key={p.card.id}
+                  state={p}
+                  canApply={canApply(p.card)}
+                  onPreview={() => doPreview(p.card.id)}
+                  onConfirm={() => patchProposal(p.card.id, { status: 'confirming' })}
+                  onCancel={() => patchProposal(p.card.id, { status: 'previewed' })}
+                  onApply={() => doApply(p.card)}
+                />
+              ))}
+
               {error && <div className="text-xs text-red-500">{error}</div>}
             </div>
 
@@ -139,5 +216,95 @@ export function ChatDock() {
         </button>
       </div>
     </>
+  )
+}
+
+// A proposed whitelisted action rendered as a card: recommend → preview diff →
+// explicit confirm → apply. Apply is disabled (with a reason) unless the current
+// user is authorized; the server enforces this regardless.
+function ProposalCardView(props: {
+  state: ProposalState
+  canApply: boolean
+  onPreview: () => void
+  onConfirm: () => void
+  onCancel: () => void
+  onApply: () => void
+}) {
+  const { state, canApply, onPreview, onConfirm, onCancel, onApply } = props
+  const { card, status, preview, result, error } = state
+  const busy = status === 'previewing' || status === 'applying'
+
+  return (
+    <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-theme-text-primary">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-500 border border-amber-500/20">
+          proposed action
+        </span>
+        <span className="font-mono text-xs">{card.action}</span>
+        {!card.reversible && (
+          <span className="text-[10px] text-amber-500" title="This action may be hard to reverse">
+            ⚠ not easily reversible
+          </span>
+        )}
+      </div>
+      <div className="mt-1 text-xs text-theme-text-secondary">
+        target <span className="font-mono">{card.target}</span>
+      </div>
+
+      {preview && (
+        <div className="mt-2 rounded-lg bg-theme-bg border border-theme-border p-2 text-xs font-mono">
+          <div className="text-red-500">- {preview.before}</div>
+          <div className="text-emerald-500">+ {preview.after}</div>
+        </div>
+      )}
+
+      {status === 'applied' && result && (
+        <div className="mt-2 text-xs text-emerald-500">✓ applied — {result.after ?? 'done'}</div>
+      )}
+      {error && <div className="mt-2 text-xs text-red-500">{error}</div>}
+
+      <div className="mt-2 flex items-center gap-2">
+        {(status === 'proposed' || status === 'previewing' || status === 'error') && (
+          <button
+            onClick={onPreview}
+            disabled={busy}
+            className="rounded-md border border-theme-border bg-theme-bg px-2 py-1 text-xs hover:border-emerald-500 disabled:opacity-50"
+          >
+            {status === 'previewing' ? 'Previewing…' : 'Preview diff'}
+          </button>
+        )}
+
+        {status === 'previewed' && (
+          <button
+            onClick={onConfirm}
+            disabled={!canApply}
+            title={canApply ? 'Apply this change' : 'You are not authorized to apply changes to this cluster'}
+            className="rounded-md bg-amber-500 hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed text-white px-2 py-1 text-xs"
+          >
+            Apply…
+          </button>
+        )}
+
+        {status === 'confirming' && (
+          <>
+            <span className="text-xs text-theme-text-secondary">Apply this exact change?</span>
+            <button
+              onClick={onApply}
+              className="rounded-md bg-amber-600 hover:bg-amber-700 text-white px-2 py-1 text-xs"
+            >
+              Confirm
+            </button>
+            <button
+              onClick={onCancel}
+              className="rounded-md border border-theme-border bg-theme-bg px-2 py-1 text-xs hover:border-theme-text-tertiary"
+            >
+              Cancel
+            </button>
+          </>
+        )}
+
+        {status === 'applying' && <span className="text-xs text-theme-text-secondary">Applying…</span>}
+      </div>
+    </div>
   )
 }

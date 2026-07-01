@@ -4,6 +4,8 @@ Covers the connect/select RBAC matrix, CSRF, proxy block of /api/engine/kompass/
 credential rotation, poll_once wired to an injected cluster, and audit.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
 import respx
@@ -12,6 +14,11 @@ from kompass_core.models import AuditEvent
 
 ENGINE = "http://127.0.0.1:9280"
 PW = "correct horse battery staple"
+
+# A recent timestamp (computed at run time) so retention-window filtering never
+# ages this fixture out — a hardcoded date would silently fall outside the
+# 30-day window once the calendar advances past it.
+RECENT_TS = (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 _KUBECONFIG = """apiVersion: v1
 kind: Config
@@ -144,7 +151,7 @@ def test_poll_once_ingests_injected_cluster_events_on_select(respx_mock, client,
             "metadata": {"uid": "evt-1", "namespace": "default"},
             "type": "Warning", "reason": "BackOff", "message": "pod crashlooping",
             "involvedObject": {"kind": "Pod", "name": "foo"}, "source": {"component": "kubelet"},
-            "lastTimestamp": "2026-06-01T00:00:00Z",
+            "lastTimestamp": RECENT_TS,
         }])
     )
     make_user("pp-admin", PW, "admin")

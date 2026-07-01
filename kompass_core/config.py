@@ -88,6 +88,22 @@ class Settings(BaseSettings):
     event_poll_enabled: bool = False
     event_poll_seconds: int = 30
 
+    # --- AI apply-actions & budgets (SPEC §4.3/§4.5; Phase 6) ---------------
+    # Per-user daily token budget default (tokens/user/day). A per-user override
+    # lives on users.daily_token_budget; None there falls back to this. Enforced
+    # on the LLM/propose call (chat/troubleshoot), NOT on apply (apply spends no
+    # provider tokens). 0 or negative here means "unlimited by default".
+    default_daily_token_budget: int = 100_000
+    # A proposal is single-use and expires this many seconds after creation.
+    proposal_ttl_seconds: int = 900  # 15 minutes
+
+    # --- Single-worker invariant (load-bearing; SPEC §4.3) ------------------
+    # The select->apply serialization uses one in-process asyncio.Lock and is
+    # correct ONLY with a single worker process. More than one worker would
+    # silently break the wrong-cluster protection, so core refuses to boot.
+    # Sourced from KOMPASS_WORKERS; WEB_CONCURRENCY is also consulted at boot.
+    workers: int = 1
+
 
 def get_settings() -> Settings:
     return Settings()

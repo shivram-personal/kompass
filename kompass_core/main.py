@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -11,6 +12,7 @@ from fastapi import FastAPI
 from .admin.users_router import router as admin_users_router
 from .ai.chat import ChatService
 from .ai.providers.router import router as providers_router
+from .ai.proposals import ProposalService
 from .ai.providers.service import ProviderService
 from .ai.router import router as ai_router
 from .auth.router import router as auth_router
@@ -46,8 +48,32 @@ async def _prune_loop(app: FastAPI, settings: Settings) -> None:
         await asyncio.sleep(settings.event_prune_seconds)
 
 
+def _assert_single_worker(settings: Settings) -> None:
+    """Refuse to boot with more than one worker (SPEC §4.3, load-bearing).
+
+    The select->apply serialization relies on a single in-process asyncio.Lock; a
+    multi-worker deployment would give each worker its own lock and silently break
+    the wrong-cluster protection. This is a hard boot guard, not a warning — a
+    documented assumption would not survive a future ops change.
+    """
+    configured = settings.workers
+    env_workers = os.environ.get("WEB_CONCURRENCY") or os.environ.get("GUNICORN_WORKERS")
+    if env_workers:
+        try:
+            configured = max(configured, int(env_workers))
+        except ValueError:
+            pass
+    if configured > 1:
+        raise RuntimeError(
+            f"kompass-core must run with a single worker (got workers={configured}). "
+            "The apply-action select->apply serialization requires one process; "
+            "multi-worker deployment is unsafe. See docs/SPEC.md §4.3."
+        )
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
+    _assert_single_worker(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -60,9 +86,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.cluster_service = ClusterService(kms)
         app.state.provider_service = ProviderService(kms)
         app.state.event_service = EventService(settings)
+        app.state.proposal_service = ProposalService(settings, app.state.cluster_service)
         app.state.chat_service = ChatService(
-            settings, app.state.provider_service, app.state.cluster_service, app.state.event_service
+            settings, app.state.provider_service, app.state.cluster_service,
+            app.state.event_service, app.state.proposal_service,
         )
+        # ONE process-wide lock serializing every engine context switch (select)
+        # and the select->apply critical section (ADR-001 single-active-context).
+        app.state.engine_context_lock = asyncio.Lock()
 
         # Bootstrap admin exactly once (empty user table). Print the one-time
         # password to the core log, clearly marked — never elsewhere.

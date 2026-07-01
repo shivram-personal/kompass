@@ -138,20 +138,25 @@ async def select_cluster(
         raise HTTPException(status_code=403, detail="Cluster not in editor scope.")
 
     engine = request.app.state.engine_client
+    # Hold the process-wide engine-context lock across select + the dependent
+    # event poll: the engine serves ONE active context (ADR-001), and an apply's
+    # select->mutate critical section takes this same lock, so a user select can
+    # never flip the active context mid-apply (and vice-versa).
+    lock = request.app.state.engine_context_lock
     try:
-        injector_result = await injector.select(engine, cluster.id)
+        async with lock:
+            injector_result = await injector.select(engine, cluster.id)
+            # Ingest current events into the per-cluster store while this cluster
+            # is the active context (Phase 3 poll_once). Best-effort inside the
+            # lock so the read is against the context we just selected.
+            try:
+                await request.app.state.event_service.poll_once(db, engine, cluster.id)
+            except Exception:
+                pass
     except InjectionError as e:
         if str(e) == "cluster is not connected":
             raise HTTPException(status_code=409, detail="Cluster is not connected; an admin must connect it first.")
         raise HTTPException(status_code=502, detail="Engine could not select the cluster.")
-
-    # Now that this cluster is the active context, ingest its current events
-    # into the per-cluster store (Phase 3 poll_once wired to a real injected
-    # cluster). Best-effort: a poll failure must not fail selection.
-    try:
-        await request.app.state.event_service.poll_once(db, engine, cluster.id)
-    except Exception:
-        pass
 
     return {"status": "selected", "cluster_id": cluster.id,
             "context_name": injector_result.get("context_name") or cluster.context_name}

@@ -190,6 +190,36 @@ kompass-core validates against the server-side whitelist (`ai/whitelist.py`); ea
 
 **Apply flow:** editor/admin role → per-cluster auth → UI diff + explicit confirm → **audit row written before execution** → call engine handler → record result.
 
+#### Apply-action safety model (Phase 6 — binding requirements)
+
+The propose step and the apply step are **distinct authenticated calls**; generating a proposal never auto-executes it. Beyond the whitelist/RBAC/confirm/audit basics above, the following are mandatory:
+
+- **Proposal binding (id + content hash).** A persisted proposal carries a stable id and a content hash over its `{action, cluster_id, namespace, target, params}`. Apply is `POST /api/ai/proposals/{id}/apply` and must carry the hash the user confirmed; a proposal whose content/hash differs from what was previewed is rejected before any execution path (no swapping a confirmed proposal for a different action).
+- **Single-use + TTL.** A proposal is consumed / marked terminal on its first apply attempt (single-use) and expires after a short configurable TTL. A consumed or expired proposal is rejected before execution. This closes replay (re-posting a valid `{id, hash}` to mutate twice).
+- **Preview→apply drift binding.** The content hash binds proposal *parameters*, not the live state the diff was computed against. At preview time capture the target's observed `resourceVersion` (or per-action equivalent: rollout revision for `helm_rollback`); at apply, **prefer** rejecting on divergence (optimistic-concurrency style) over applying blind against drifted state. Actions with no meaningful `resourceVersion` (`restart_workload`, `cordon_node`/`uncordon_node` — effectively idempotent) bind on the resource's existence/state class instead; this must be stated per action.
+- **Serialized select→apply against the single active context (ADR-001).** The engine serves one active context at a time and the generic proxy forwards to whatever was last selected; a concurrent select by any other operation could otherwise flip the active context between core's select and core's mutate → wrong-cluster write. Apply must hold a **core-side lock** making `select(target) → (optional re-read/verify) → mutate` atomic against **every** engine context-switching operation (not just other applies), and must **re-assert the engine's active context is the intended `cluster_id` immediately before mutating**, aborting (no mutation, failure recorded) on mismatch.
+- **Proposal ownership (separation of duties).** Apply is restricted to the proposal's **creator or an admin** — not any in-scope editor. The confirming user is recorded in the audit row regardless. This is the stricter default and gives the cleanest separation-of-duties/audit story.
+- **Redaction of hashed/persisted content.** The action `params` are validated, schema-constrained fields (kind/name/namespace/replicas/revision/bool) — **non-secret by construction** (the v1 whitelist touches no Secret objects and forbids free-form fields) — so they are hashed and persisted verbatim, which is exactly what apply re-derives the engine call from (the executed action is the one the user confirmed). Free-text (`rationale`) is **redacted and excluded from the hash** — it is stored redacted and never part of the action identity. Any other free-text written to audit (before/after summaries) is derived from redacted reads. Net: the hash the user confirmed equals the hash checked at apply, and neither the hash nor the stored content exposes secrets.
+- **Budget placement (reconciles §6).** The per-user daily token budget meters **provider token spend** and is enforced at the point of LLM invocation (chat/troubleshoot). The apply endpoint makes **no provider call** and therefore performs **no token-budget check**; it is gated by RBAC + per-cluster scope + proposal binding + confirm + audit. (Supersedes the "+ budget check" annotation on the apply endpoint in §6.)
+
+**Known limitations & load-bearing constraints (Phase 6 apply path):**
+
+- **Drift TOCTOU residual (deliberate, documented).** Because the engine write handlers accept only their action params (e.g. `{replicas}`) and **not** a `resourceVersion`, core cannot push a true compare-and-swap down to the Kubernetes API through the existing routes without a Go seam (out of scope this phase). Drift is therefore enforced core-side: preview captures the baseline `resourceVersion`; apply, under the serialization lock, re-reads the target and rejects on divergence, then writes. A **small TOCTOU window remains** between core's re-read and the engine's write — the engine does not perform the compare-and-swap atomically. The core-side lock bounds this to serialized single-flight; it is far stronger than no check but is not a true CAS. Accepted as a known Phase 6 residual and a **candidate for a future seam decision** if it ever becomes material.
+- **Single-worker core (load-bearing).** The select→apply serialization uses one in-process `asyncio.Lock`; it is correct **only if kompass-core runs as a single worker process** (which matches the one-engine-process loopback model). This is not merely documented: **core refuses to boot (hard startup error) if configured with more than one worker.** A multi-worker deployment would silently break the wrong-cluster protection, so the guard is mandatory, not advisory.
+
+**Whitelist → existing engine write handler (verified; zero Go change — core proxies over loopback):**
+
+| Action | Engine route (via `/api/engine/…`) |
+|---|---|
+| `scale_deployment` | `POST /workloads/{kind}/{namespace}/{name}/scale` |
+| `restart_workload` | `POST /workloads/{kind}/{namespace}/{name}/restart` |
+| `helm_rollback` | `POST /helm/releases/{namespace}/{name}/rollback` |
+| `gitops_reconcile` | `POST /flux/{kind}/{namespace}/{name}/reconcile` (Flux; Argo via `/argo/applications/{namespace}/{name}` where applicable) |
+| `gitops_suspend_resume` | `POST /flux/{kind}/{namespace}/{name}/suspend`\|`/resume`, `POST /argo/applications/{namespace}/{name}/suspend`\|`/resume` |
+| `cordon_node` / `uncordon_node` | `POST /nodes/{name}/cordon` \| `/nodes/{name}/uncordon` |
+
+Excluded and never routed: `delete`, `exec`, raw `patch`, arbitrary YAML apply, secret edits, and node **drain** (`/nodes/{name}/drain` exists in the engine but is **not** whitelisted).
+
 **Active-model badge** on every AI response (all roles).
 
 **Acceptance:** non-whitelisted proposal can never apply; redaction removes seeded secrets; streaming works; every apply yields exactly one audit row written before mutation; usage recorded and budget decremented for every call.
@@ -252,7 +282,7 @@ All browser traffic hits kompass-core. Prefix `/api/`. Role-gated, CSRF-protecte
 - `GET/PATCH /api/admin/oidc` — admin
 - `GET/POST/DELETE /api/clusters` (+ `/{id}/select`) — list all; mutate admin
 - `POST /api/ai/chat` (SSE), `POST /api/ai/troubleshoot` (SSE)
-- `POST /api/ai/proposals/{id}/apply` — editor/admin + per-cluster auth + budget check
+- `POST /api/ai/proposals/{id}/apply` — editor/admin + per-cluster auth (no token-budget check: apply spends no provider tokens — budget is enforced on the LLM/propose call; see §4.3 "Apply-action safety model")
 - `GET/PATCH /api/admin/providers`, `GET /api/admin/providers/{p}/models` — admin (model picker)
 - `GET/PATCH /api/admin/pricing`, `GET/PATCH /api/admin/budget-defaults` — admin
 - `GET /api/admin/usage` — admin
@@ -403,3 +433,15 @@ Stack: React 19 + Tailwind v4 + shadcn/ui + TanStack Query. **Read `/mnt/skills/
 - `kompassSwitchInjected` (in `internal/k8s/kompass_seam_inject.go`) **intentionally mirrors** the client-construction + global-swap tail of upstream `SwitchContext` so the upstream hook stays a ~5-line append. This is a **known rebase re-sync point**: if upstream changes how `SwitchContext` builds clients or swaps the package globals, the seam must be re-checked and re-synced.
 - **Concurrency:** the engine is **single-active-context by design** — one active client at a time, swapped under `clientMu`. The seam inherits this property verbatim (same lock, same globals, same order) and introduces no new race; per-cluster credentials are isolated in the injection map, but *selecting* a cluster flips the one global active client. **Constraint for later phases:** a caller cannot issue concurrent requests to multiple clusters against a single engine and expect per-cluster routing — `select` + its dependent reads must be treated as a serialized unit against the active context (core serializes, or a future per-request client model would be required).
 - **Rebase-conflict surface** is bounded and labeled: net-new logic in `kompass_seam_*.go`; minimal `// KOMPASS SEAM 3`-marked append-only hooks in `internal/k8s/client.go` and `internal/server/server.go`; enforced by `build/check_seam_drift.sh`.
+
+### ADR-002 — AI grounding source: core-owned data only; live-engine grounding deferred to Phase 6.5
+
+**Status:** Accepted (recorded Phase 6). Records a scope decision made after Phase 5.
+
+**Context.** Phase 5 shipped AI chat/troubleshooting as recommendation-only. Its context is assembled entirely from **core-owned data**: the Phase 3 per-cluster event store (30-day retention) plus cluster-registry metadata. It makes **no live calls to the engine** to read current topology, node state, pod specs, or logs at prompt-assembly time. The question of whether the AI should read *live* cluster state (current topology/nodes/logs from a selected cluster, at query time) was raised during Phase 5 and deliberately deferred rather than improvised into that phase.
+
+**Decision.** As of Phase 5, AI chat/troubleshoot grounding uses **core-owned data only** (event store + registry metadata); no live engine reads occur in the AI context-assembly path (`ai/context.py`). **Live-engine grounding is a planned future phase (Phase 6.5)** and is deliberately deferred out of Phase 6. When built, it will be a **serialized, admin-gated select-then-read path** operating under ADR-001's single-active-context constraint — select the target cluster, then read, as one serialized unit against the one active context — **not** concurrent multi-cluster fan-out reads.
+
+**Rationale.** Live-read grounding was kept out of Phase 6 so the first cluster-**mutation** safety work (whitelist, propose≠apply binding, audit-before-execute, budgets) is not entangled with live-read design in the same phase. One safety-critical concern per phase.
+
+**Scope carve-out — the apply-action preview/diff is not the deferred grounding path.** Computing an apply-action's before/after **diff** (§4.3) inherently reads the target resource's *current* state from the engine (e.g. current replica count, current rollout revision, node `spec.unschedulable`). This live read is part of the **mutation-preview path**, not the AI chat/troubleshoot context-assembly path, and is **permitted in Phase 6**. It runs under the same single-active-context serialization as the apply itself (select target → read/preview → apply, held as one critical section — see §4.3). ADR-002's "no live engine calls" restriction scopes strictly to the AI *chat/troubleshoot grounding* pipeline (`ai/context.py`), not to apply-action preview or to the engine proxy generally.

@@ -124,12 +124,17 @@ def test_chat_makes_no_engine_or_mutation_call(respx_mock, client, admin):
     assert not engine.called, "chat flow must not call the engine at all"
 
 
-def test_no_apply_endpoint_exists_this_phase(client, admin):
-    # The whitelisted apply path is Phase 6 — it must not be reachable now.
-    cid = _setup(client, admin)
-    resp = client.post(f"/api/ai/proposals/{cid}/apply", json={}, cookies=admin.cookies,
-                       headers={"X-CSRF-Token": admin.csrf})
-    assert resp.status_code == 404
+def test_apply_endpoint_exists_but_never_blindly_executes(client, admin):
+    # Phase 6: the whitelisted apply path now EXISTS, but it is bound to a real,
+    # previewed proposal — it never executes an unknown/ill-formed request.
+    # Missing content_hash -> 422 (schema); unknown proposal id -> 404 (no blind exec).
+    missing_body = client.post("/api/ai/proposals/whatever/apply", json={},
+                               cookies=admin.cookies, headers={"X-CSRF-Token": admin.csrf})
+    assert missing_body.status_code == 422
+    unknown = client.post("/api/ai/proposals/does-not-exist/apply",
+                          json={"content_hash": "a" * 64}, cookies=admin.cookies,
+                          headers={"X-CSRF-Token": admin.csrf})
+    assert unknown.status_code == 404
 
 
 # --- provider key handling ---------------------------------------------------

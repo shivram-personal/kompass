@@ -28,3 +28,10 @@ class TroubleshootRequest(_Strict):
     namespace: str | None = Field(default=None, max_length=255)
     message: str | None = Field(default=None, max_length=16000)
     provider: str | None = None
+
+
+class ApplyRequest(_Strict):
+    """Confirm-and-apply a previously previewed proposal. The content hash binds
+    the apply to the exact previewed content — a changed proposal is rejected."""
+
+    content_hash: str = Field(min_length=64, max_length=64, pattern="^[0-9a-f]{64}$")

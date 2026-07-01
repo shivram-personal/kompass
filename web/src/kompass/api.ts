@@ -199,11 +199,55 @@ export async function listProviderModels(provider: string): Promise<ProviderMode
   return parse<ProviderModels>(await req(`/api/admin/providers/${provider}/models`))
 }
 
-// --- AI chat (SSE streaming, recommendation-only) ----------------------------
+// --- AI apply-action proposals (Phase 6) -------------------------------------
+// A proposal is a whitelisted, human-confirmed, audited change. The model only
+// *recommends* it (emitted as an SSE `proposal` event); nothing executes until a
+// privileged user previews the diff and explicitly applies.
+export interface ProposalCard {
+  id: string
+  action: string
+  cluster_id: string
+  target: string
+  content_hash: string
+  reversible: boolean
+}
+
+export interface ProposalPreview {
+  id: string
+  action: string
+  cluster_id: string
+  target: string
+  content_hash: string
+  before: string
+  after: string
+  expires_at: string
+}
+
+export interface ApplyResult {
+  id: string
+  result: string
+  target: string
+  cluster_id: string
+  before: string | null
+  after: string | null
+}
+
+export async function previewProposal(id: string): Promise<ProposalPreview> {
+  return parse<ProposalPreview>(await req(`/api/ai/proposals/${id}/preview`))
+}
+
+export async function applyProposal(id: string, content_hash: string): Promise<ApplyResult> {
+  return parse<ApplyResult>(
+    await req(`/api/ai/proposals/${id}/apply`, { method: 'POST', body: JSON.stringify({ content_hash }) }),
+  )
+}
+
+// --- AI chat (SSE streaming) --------------------------------------------------
 export interface ChatHandlers {
   onModel?: (m: { provider: string; model: string }) => void
   onDelta?: (text: string) => void
   onUsage?: (u: { prompt_tokens: number; completion_tokens: number }) => void
+  onProposal?: (p: ProposalCard) => void
   onError?: (message: string) => void
   onDone?: () => void
 }
@@ -219,6 +263,7 @@ function _dispatchFrame(frame: string, h: ChatHandlers): void {
   if (event === 'delta') h.onDelta?.(data)
   else if (event === 'model') { try { h.onModel?.(JSON.parse(data)) } catch { /* ignore */ } }
   else if (event === 'usage') { try { h.onUsage?.(JSON.parse(data)) } catch { /* ignore */ } }
+  else if (event === 'proposal') { try { h.onProposal?.(JSON.parse(data)) } catch { /* ignore */ } }
   else if (event === 'error') h.onError?.(data)
   else if (event === 'done') h.onDone?.()
 }
@@ -229,6 +274,7 @@ export async function streamChat(
 ): Promise<void> {
   const resp = await req('/api/ai/chat', { method: 'POST', body: JSON.stringify(input) })
   if (resp.status === 403) { handlers.onError?.('You are not allowed to query this cluster.'); return }
+  if (resp.status === 429) { handlers.onError?.('Daily AI token budget exhausted. Try again tomorrow or ask an admin to raise your budget.'); return }
   if (!resp.ok || !resp.body) {
     let detail = 'AI request failed.'
     try { const b = await resp.json(); if (b?.detail) detail = b.detail } catch { /* non-JSON */ }
